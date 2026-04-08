@@ -1,10 +1,10 @@
 """資料模型（Pydantic schemas）"""
 
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── 狀態枚舉 ─────────────────────────────────────────────────
@@ -39,6 +39,12 @@ class PubMedArticle(BaseModel):
     study_type: str = ""          # 動物實驗 / 人體試驗 / 系統性綜述 等
     citation_count: int = 0
     url: str = ""
+
+    @model_validator(mode="after")
+    def _set_url(self) -> "PubMedArticle":
+        if not self.url and self.pmid:
+            self.url = f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/"
+        return self
 
 
 class PubMedSearchResult(BaseModel):
@@ -79,7 +85,7 @@ class ResearchReport(BaseModel):
     suggested_keywords: list[str] = Field(default_factory=list)
     paa_questions: list[str] = Field(default_factory=list)
     competitor_headings: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── 文章相關 ──────────────────────────────────────────────────
@@ -108,7 +114,7 @@ class ArticleDraft(BaseModel):
     fact_check_items: list[FactCheckItem] = Field(default_factory=list)
     image_prompts: list[str] = Field(default_factory=list)
     status: ArticleStatus = ArticleStatus.WRITING
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── 任務 ──────────────────────────────────────────────────────
@@ -121,5 +127,5 @@ class ArticleTask(BaseModel):
     status: ArticleStatus = ArticleStatus.PENDING
     research_report: Optional[ResearchReport] = None
     draft: Optional[ArticleDraft] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
