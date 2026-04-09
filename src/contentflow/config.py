@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # SERP
     serper_api_key: str = Field(default="", alias="SERPER_API_KEY")
+    serpapi_key: str = Field(default="", alias="SERPAPI_KEY")
 
     # Google
     google_service_account_file: str = Field(
