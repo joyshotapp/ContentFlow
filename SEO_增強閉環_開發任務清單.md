@@ -8,6 +8,25 @@
 
 ---
 
+## 整體進度摘要（更新於 2026-04-12）
+
+| 階段 | 項目數 | 完成 | 狀態 |
+|------|--------|------|------|
+| 0 基礎設施 | 9 | 9 | ✅ 全部完成 |
+| 1 發布與 API | 18 | 18 | ✅ 全部完成 |
+| 2 採集與排程 | 9 | 9 | ✅ 全部完成 |
+| 3 閉環分析與決策 | 9 | 9 | ✅ 全部完成 |
+| 4 Agent 架構升級 | 7 | 7 | ✅ 全部完成 |
+| 5 學習層與 RAG | 9 | 9 | ✅ 全部完成 |
+| 6 Content Refresh | 7 | 7 | ✅ 全部完成 |
+| 7 技術 SEO | 6 | 5 | ⚠️ FB-06 待開發 |
+| 8 QA 總驗收 | 8 | 0 | ⏳ 待執行 |
+| **合計** | **82** | **73** | **89% 完成** |
+
+測試覆蓋：**260 passed，0 failed**（最後更新 2026-04-12）
+
+---
+
 ## 0. 基礎設施先決條件
 
 - [x] CF-00-01 更新 pyproject 依賴：fastapi、uvicorn、apscheduler、asyncpg、psycopg2-binary、alembic、markdown。完成定義：安裝成功且不影響既有測試啟動。
@@ -117,9 +136,8 @@
 - [x] FB-02 建立 GSC 索引覆蓋率監控。完成定義：未索引新文可被警示。
 - [x] FB-03 建立 Pillar Page 模板。完成定義：可承接 Topic Cluster 的 pillar page。
 - [x] FB-04 建立全站爬蟲掃描。完成定義：可偵測斷鏈、孤頁、redirect chain。
-- [x] FB-05 建立技術 SEO 健康儀表板。完成定義：可輸出綳合健康分數。
+- [x] FB-05 建立技術 SEO 健康儀表板。完成定義：可輸出綜合健康分數。
 - [ ] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，偵測到問題時在 Admin 產生通知與修復建議。
-- [ ] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，並在 Admin 產生通知與修復建議。
 
 ---
 
@@ -138,11 +156,11 @@
 
 ## 9. 里程碑勾選
 
-- [ ] Milestone A：基礎設施 ready
-- [ ] Milestone B：雙平台發布 ready
-- [ ] Milestone C：LISTEN 自動化 ready
-- [ ] Milestone D：ANALYSE / PLAN ready
-- [ ] Milestone E：Agent 架構 ready
+- [x] Milestone A：基礎設施 ready
+- [x] Milestone B：雙平台發布 ready
+- [x] Milestone C：LISTEN 自動化 ready
+- [x] Milestone D：ANALYSE / PLAN ready
+- [x] Milestone E：Agent 架構 ready
 - [x] Milestone F：L1 / L2 學習 ready
 - [x] Milestone G：Content Refresh ready
-- [x] Milestone H：正式進入閉環邁轉
+- [x] Milestone H：正式進入閉環運轉
