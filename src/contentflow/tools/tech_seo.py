@@ -1,10 +1,11 @@
-"""Technical SEO Tools — FB-01~05
+"""Technical SEO Tools — FB-01~06
 
 FB-01: Core Web Vitals 監控（透過 Google PageSpeed Insights API）
 FB-02: GSC 索引覆蓋率監控（透過 GSC Search Analytics API）
 FB-03: Pillar Page 模板產生器
 FB-04: 全站爬蟲掃描（斷鏈、孤頁、redirect chain）
 FB-05: 技術 SEO 健康評分儀表板
+FB-06: GSC Mobile Usability 偵測（Mobile Usability API）
 """
 from __future__ import annotations
 
@@ -653,3 +654,208 @@ class TechSEOHealthDashboard:
                 lines.append(f"- {rec}")
 
         return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FB-06: GSC Mobile Usability 偵測
+# ─────────────────────────────────────────────────────────────────────────────
+
+# GSC Mobile Usability API 回傳的問題類型
+MOBILE_ISSUE_LABELS: dict[str, str] = {
+    "MOBILE_FRIENDLY_RULE_VIOLATION": "手機友善規則違規",
+    "TEXT_TOO_SMALL_TO_READ": "文字過小，難以閱讀",
+    "LINKS_TOO_CLOSE_TOGETHER": "可點元素過於密集",
+    "CONTENT_NOT_SIZED_TO_VIEWPORT": "內容超出螢幕寬度",
+    "USES_INCOMPATIBLE_PLUGINS": "使用不相容外掛（Flash 等）",
+    "VIEWPORT_NOT_SPECIFIED": "未設定 Viewport meta tag",
+    "VIEWPORT_FIXED_WIDTH": "Viewport 設為固定寬度",
+}
+
+# 各問題類型的修復建議
+MOBILE_ISSUE_FIXES: dict[str, str] = {
+    "MOBILE_FRIENDLY_RULE_VIOLATION": "請使用 Google Mobile-Friendly Test 進行詳細診斷",
+    "TEXT_TOO_SMALL_TO_READ": "將正文字體調整為 ≥ 16px，標題 ≥ 18px",
+    "LINKS_TOO_CLOSE_TOGETHER": "確保可點擊元素之間間距 ≥ 48px（Google 建議）",
+    "CONTENT_NOT_SIZED_TO_VIEWPORT": "移除固定寬度元素，改用 max-width 或 100%",
+    "USES_INCOMPATIBLE_PLUGINS": "移除 Flash 等不相容外掛，改用 HTML5 或 CSS 方案",
+    "VIEWPORT_NOT_SPECIFIED": "在 <head> 加入 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+    "VIEWPORT_FIXED_WIDTH": "將 Viewport meta tag 的 width 從固定值改為 device-width",
+}
+
+
+@dataclass
+class MobileIssue:
+    """GSC Mobile Usability 單一問題記錄（FB-06）"""
+    issue_type: str            # GSC API 回傳的 issueType
+    label: str                 # 中文說明
+    affected_urls: list[str] = field(default_factory=list)
+    fix_suggestion: str = ""
+    severity: str = "warning"  # "error" / "warning"
+
+
+@dataclass
+class MobileUsabilityReport:
+    """GSC Mobile Usability 完整報告（FB-06）"""
+    site_url: str
+    issues: list[MobileIssue] = field(default_factory=list)
+    total_affected_urls: int = 0
+    error: Optional[str] = None
+
+    @property
+    def has_issues(self) -> bool:
+        return len(self.issues) > 0
+
+
+class GSCMobileUsabilityMonitor:
+    """
+    透過 GSC Mobile Usability API 偵測行動裝置相容性問題（FB-06）。
+
+    GSC Mobile Usability Report API：
+      GET https://searchconsole.googleapis.com/v1/urlInspection/index:inspect
+      或
+      GET https://www.googleapis.com/webmasters/v3/sites/{siteUrl}/mobileUsabilityIssues
+
+    實作以可測試骨架為主；真實呼叫需要 google-auth service account。
+    """
+
+    GSC_MOBILE_API = (
+        "https://searchconsole.googleapis.com/v1/sites/{site_url}/mobileUsabilityIssues"
+    )
+
+    def __init__(self, credentials=None, api_key: str = ""):
+        """
+        credentials: google.oauth2.service_account.Credentials（可選）
+        api_key: Google API Key（可選）
+        """
+        self._credentials = credentials
+        self._api_key = api_key
+
+    async def get_issues(
+        self,
+        site_url: str,
+        start_date: str,
+        end_date: str,
+        timeout: int = 30,
+    ) -> MobileUsabilityReport:
+        """
+        呼叫 GSC Mobile Usability API，取得行動裝置問題清單。
+
+        Args:
+            site_url: GSC 已驗證的網站 URL（例：https://example.com/）
+            start_date: 查詢起始日（YYYY-MM-DD）
+            end_date: 查詢結束日（YYYY-MM-DD）
+            timeout: HTTP 逾時（秒）
+
+        Returns:
+            MobileUsabilityReport，issues 為空表示無問題
+        """
+        endpoint = self.GSC_MOBILE_API.format(
+            site_url=site_url.rstrip("/").replace("://", "%3A%2F%2F").replace("/", "%2F")
+        )
+        params: dict[str, str] = {
+            "startDate": start_date,
+            "endDate": end_date,
+        }
+        if self._api_key:
+            params["key"] = self._api_key
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(endpoint, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+            return self._parse_response(site_url, data)
+
+        except Exception as e:
+            logger.error(f"[MobileUsability] {site_url} 查詢失敗：{e}")
+            return MobileUsabilityReport(site_url=site_url, error=str(e))
+
+    def _parse_response(self, site_url: str, data: dict) -> MobileUsabilityReport:
+        """
+        解析 GSC Mobile Usability API 回應。
+
+        GSC API 回應格式（簡化）：
+        {
+          "issues": [
+            {
+              "issueType": "TEXT_TOO_SMALL_TO_READ",
+              "severity": "ERROR",
+              "affectedUrls": ["https://example.com/page1", ...]
+            },
+            ...
+          ]
+        }
+        """
+        raw_issues = data.get("issues") or []
+        issues: list[MobileIssue] = []
+        total_affected = 0
+
+        for raw in raw_issues:
+            issue_type = raw.get("issueType", "UNKNOWN")
+            affected_urls = raw.get("affectedUrls") or []
+            severity_raw = (raw.get("severity") or "WARNING").upper()
+            severity = "error" if severity_raw == "ERROR" else "warning"
+
+            issue = MobileIssue(
+                issue_type=issue_type,
+                label=MOBILE_ISSUE_LABELS.get(issue_type, issue_type),
+                affected_urls=affected_urls,
+                fix_suggestion=MOBILE_ISSUE_FIXES.get(issue_type, "請參閱 Google Search Console 說明"),
+                severity=severity,
+            )
+            issues.append(issue)
+            total_affected += len(affected_urls)
+
+        return MobileUsabilityReport(
+            site_url=site_url,
+            issues=issues,
+            total_affected_urls=total_affected,
+        )
+
+    def notify_admin(
+        self,
+        report: MobileUsabilityReport,
+        notifier=None,
+    ) -> list[str]:
+        """
+        Admin 通知：當偵測到 Mobile Usability 問題時，產生通知訊息。
+
+        Args:
+            report: MobileUsabilityReport
+            notifier: 可選的 callable(message: str)，例如 Slack/Email 發送函式。
+                      若不傳入，僅記錄 log 並回傳訊息列表。
+
+        Returns:
+            list[str]：產生的通知訊息列表
+        """
+        if not report.has_issues:
+            return []
+
+        messages: list[str] = []
+
+        header = (
+            f"[ContentFlow] Mobile Usability 警告：{report.site_url}\n"
+            f"共偵測到 {len(report.issues)} 種問題，影響 {report.total_affected_urls} 個網址。\n"
+        )
+        messages.append(header)
+
+        for issue in report.issues:
+            severity_tag = "🔴" if issue.severity == "error" else "🟡"
+            body = (
+                f"{severity_tag} {issue.label}（{issue.issue_type}）\n"
+                f"   影響網址數：{len(issue.affected_urls)}\n"
+                f"   修復建議：{issue.fix_suggestion}"
+            )
+            messages.append(body)
+
+        full_message = "\n\n".join(messages)
+        logger.warning(full_message)
+
+        if notifier is not None:
+            try:
+                notifier(full_message)
+            except Exception as e:
+                logger.error(f"[MobileUsability] 通知發送失敗：{e}")
+
+        return messages

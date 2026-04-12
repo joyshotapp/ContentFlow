@@ -19,11 +19,11 @@
 | 4 Agent 架構升級 | 7 | 7 | ✅ 全部完成 |
 | 5 學習層與 RAG | 9 | 9 | ✅ 全部完成 |
 | 6 Content Refresh | 7 | 7 | ✅ 全部完成 |
-| 7 技術 SEO | 6 | 5 | ⚠️ FB-06 待開發 |
+| 7 技術 SEO | 6 | 6 | ✅ 全部完成 |
 | 8 QA 總驗收 | 8 | 0 | ⏳ 待執行 |
-| **合計** | **82** | **73** | **89% 完成** |
+| **合計** | **82** | **74** | **90% 完成** |
 
-測試覆蓋：**260 passed，0 failed**（最後更新 2026-04-12）
+測試覆蓋：**268 passed，0 failed**（最後更新 2026-04-12）
 
 ---
 
@@ -137,7 +137,7 @@
 - [x] FB-03 建立 Pillar Page 模板。完成定義：可承接 Topic Cluster 的 pillar page。
 - [x] FB-04 建立全站爬蟲掃描。完成定義：可偵測斷鏈、孤頁、redirect chain。
 - [x] FB-05 建立技術 SEO 健康儀表板。完成定義：可輸出綜合健康分數。
-- [ ] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，偵測到問題時在 Admin 產生通知與修復建議。
+- [x] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，偵測到問題時在 Admin 產生通知與修復建議。
 
 ---
 

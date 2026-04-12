@@ -1,4 +1,4 @@
-"""Phase Gate H — 技術 SEO 工具驗收測試（FB-01~05）
+"""Phase Gate H — 技術 SEO 工具驗收測試（FB-01~06）
 
 涵蓋：
   FB-01: CoreWebVitalsMonitor — PSI API fetch & assess_cwv & score_cwv
@@ -6,6 +6,7 @@
   FB-03: generate_pillar_page_template — 內容完整性
   FB-04: SiteCrawler — 斷鏈 / 孤頁 / redirect chain 偵測
   FB-05: TechSEOHealthDashboard — 加權計分 & 建議
+  FB-06: GSCMobileUsabilityMonitor — 問題偵測 & Admin 通知
 """
 from __future__ import annotations
 
@@ -19,8 +20,11 @@ from contentflow.tools.tech_seo import (
     CoreWebVitals,
     CoreWebVitalsMonitor,
     GSCIndexCoverageMonitor,
+    GSCMobileUsabilityMonitor,
     IndexCoverageItem,
     IndexCoverageReport,
+    MobileIssue,
+    MobileUsabilityReport,
     SiteAuditIssue,
     SiteAuditReport,
     SiteCrawler,
@@ -517,3 +521,151 @@ class TestTechSEOHealthDashboard:
             audit_report=self._good_audit(),
         )
         assert good_all.overall_score > good_with_poor_cwv.overall_score
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FB-06: GSCMobileUsabilityMonitor
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGSCMobileUsabilityMonitor:
+
+    GSC_RESPONSE_WITH_ISSUES = {
+        "issues": [
+            {
+                "issueType": "TEXT_TOO_SMALL_TO_READ",
+                "severity": "ERROR",
+                "affectedUrls": [
+                    "https://example.com/page1",
+                    "https://example.com/page2",
+                ],
+            },
+            {
+                "issueType": "LINKS_TOO_CLOSE_TOGETHER",
+                "severity": "WARNING",
+                "affectedUrls": ["https://example.com/page3"],
+            },
+        ]
+    }
+
+    GSC_RESPONSE_NO_ISSUES = {"issues": []}
+
+    def test_get_issues_returns_report(self):
+        """FB-06: API 正常回傳 → MobileUsabilityReport 有問題清單"""
+        monitor = GSCMobileUsabilityMonitor()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = self.GSC_RESPONSE_WITH_ISSUES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            report = asyncio.get_event_loop().run_until_complete(
+                monitor.get_issues("https://example.com/", "2024-01-01", "2024-01-31")
+            )
+
+        assert report.error is None
+        assert report.has_issues is True
+        assert len(report.issues) == 2
+        assert report.total_affected_urls == 3
+
+    def test_get_issues_no_issues(self):
+        """FB-06: API 回傳無問題 → has_issues 為 False"""
+        monitor = GSCMobileUsabilityMonitor()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = self.GSC_RESPONSE_NO_ISSUES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            report = asyncio.get_event_loop().run_until_complete(
+                monitor.get_issues("https://example.com/", "2024-01-01", "2024-01-31")
+            )
+
+        assert report.error is None
+        assert report.has_issues is False
+        assert report.total_affected_urls == 0
+
+    def test_get_issues_api_error(self):
+        """FB-06: API 失敗 → MobileUsabilityReport with error"""
+        monitor = GSCMobileUsabilityMonitor()
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=Exception("Auth failed"))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            report = asyncio.get_event_loop().run_until_complete(
+                monitor.get_issues("https://example.com/", "2024-01-01", "2024-01-31")
+            )
+
+        assert report.error is not None
+        assert report.has_issues is False
+
+    def test_issue_has_label_and_fix(self):
+        """FB-06: 已知問題類型 → 有中文說明與修復建議"""
+        monitor = GSCMobileUsabilityMonitor()
+        report = monitor._parse_response("https://example.com/", self.GSC_RESPONSE_WITH_ISSUES)
+
+        text_issue = next(i for i in report.issues if i.issue_type == "TEXT_TOO_SMALL_TO_READ")
+        assert "文字" in text_issue.label
+        assert len(text_issue.fix_suggestion) > 0
+        assert text_issue.severity == "error"
+
+        links_issue = next(i for i in report.issues if i.issue_type == "LINKS_TOO_CLOSE_TOGETHER")
+        assert links_issue.severity == "warning"
+
+    def test_notify_admin_no_issues(self):
+        """FB-06: 無問題 → notify_admin 回傳空列表"""
+        monitor = GSCMobileUsabilityMonitor()
+        report = MobileUsabilityReport(site_url="https://example.com/")
+        messages = monitor.notify_admin(report)
+        assert messages == []
+
+    def test_notify_admin_with_issues(self):
+        """FB-06: 有問題 → notify_admin 回傳含問題說明的訊息"""
+        monitor = GSCMobileUsabilityMonitor()
+        report = monitor._parse_response("https://example.com/", self.GSC_RESPONSE_WITH_ISSUES)
+        messages = monitor.notify_admin(report)
+
+        assert len(messages) > 0
+        full = "\n".join(messages)
+        assert "example.com" in full
+        assert "TEXT_TOO_SMALL_TO_READ" in full or "文字" in full
+
+    def test_notify_admin_calls_notifier(self):
+        """FB-06: 有問題 + notifier → notifier 被呼叫一次"""
+        monitor = GSCMobileUsabilityMonitor()
+        report = monitor._parse_response("https://example.com/", self.GSC_RESPONSE_WITH_ISSUES)
+
+        notifier = MagicMock()
+        monitor.notify_admin(report, notifier=notifier)
+
+        notifier.assert_called_once()
+
+    def test_unknown_issue_type_fallback(self):
+        """FB-06: 未知問題類型 → label 保留原始 issueType，有預設修復建議"""
+        monitor = GSCMobileUsabilityMonitor()
+        data = {
+            "issues": [{
+                "issueType": "SOME_FUTURE_ISSUE",
+                "severity": "WARNING",
+                "affectedUrls": [],
+            }]
+        }
+        report = monitor._parse_response("https://example.com/", data)
+        issue = report.issues[0]
+        assert issue.label == "SOME_FUTURE_ISSUE"   # fallback：顯示原始 type
+        assert len(issue.fix_suggestion) > 0
