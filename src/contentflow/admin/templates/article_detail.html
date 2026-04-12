@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}{{ art.title or '文章詳情' }}{% endblock %}
+{% block page_title %}{{ art.title or '（草稿中）' }}{% endblock %}
+{% block page_subtitle %}
+  ID {{ art.id }}
+  {% if art.primary_keyword %}
+  · 🔑 {{ art.primary_keyword }}
+  {% endif %}
+{% endblock %}
+
+{% block topbar_actions %}
+<a href="/admin/articles" class="btn btn-ghost btn-sm">← 返回列表</a>
+{% if art.status == 'reviewing' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="published">
+  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈</button>
+</form>
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="writing">
+  <button type="submit" class="btn btn-danger-ghost btn-sm">↩ 退回重寫</button>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
+
+  <!-- ── LEFT: Draft content ────────────────────────────────── -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
+    <!-- Draft content -->
+    <div class="cf-card cf-card-p animate-up">
+      <div class="section-header">
+        <div class="section-title">✍️ 文章草稿</div>
+        <span class="badge badge-{{ STATUS_COLORS.get(art.status, 'neutral') }}">{{ STATUS_LABELS.get(art.status, art.status) }}</span>
+      </div>
+
+      {% if art.draft_content %}
+      <!-- Tab: rendered / raw -->
+      <div x-data="{tab:'preview'}" style="margin-top:2px;">
+        <div class="tab-bar" style="margin-bottom:14px;">
+          <div class="tab-item" :class="tab=='preview'&&'active'" @click="tab='preview'">預覽</div>
+          <div class="tab-item" :class="tab=='raw'&&'active'" @click="tab='raw'">原始 Markdown</div>
+        </div>
+        <div x-show="tab=='preview'" id="md-preview"
+          style="font-size:14px;line-height:1.8;color:#1e293b;max-height:520px;overflow-y:auto;padding-right:4px;">
+          <!-- rendered by marked.js below -->
+        </div>
+        <div x-show="tab=='raw'" x-cloak>
+          <pre style="background:#f8fafc;padding:16px;border-radius:8px;font-size:12px;line-height:1.7;overflow-x:auto;max-height:500px;white-space:pre-wrap;">{{ art.draft_content }}</pre>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:32px;">
+        <p>尚無內容（AI 尚未撰寫）</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Pipeline decision log -->
+    <div class="cf-card animate-up d2">
+      <div style="padding:18px 20px 12px;">
+        <div class="section-header">
+          <div class="section-title">🤖 AI 決策日誌</div>
+          <span style="font-size:12px;color:#94a3b8;">{{ decisions|length }} 個決策步驟</span>
+        </div>
+      </div>
+      {% if decisions %}
+      <div style="padding:0 20px 16px;">
+        <div style="position:relative;padding-left:22px;">
+          <!-- Vertical line -->
+          <div style="position:absolute;left:8px;top:8px;bottom:8px;width:1.5px;background:#e2e8f0;"></div>
+          {% for d in decisions %}
+          <div style="position:relative;margin-bottom:14px;">
+            <!-- Dot -->
+            <div style="
+              position:absolute;left:-22px;top:3px;
+              width:12px;height:12px;border-radius:50%;
+              border:2px solid {% if d.confidence == 'high' %}#10b981{% elif d.confidence == 'medium' %}#f59e0b{% else %}#94a3b8{% endif %};
+              background:{% if d.confidence == 'high' %}rgba(16,185,129,0.15){% elif d.confidence == 'medium' %}rgba(245,158,11,0.15){% else %}rgba(148,163,184,0.15){% endif %};
+            "></div>
+            <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:200px;">
+                <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ d.agent_name }}</div>
+                <div style="font-size:12px;color:#475569;margin-top:3px;line-height:1.5;">{{ d.decision }}</div>
+                {% if d.reasoning %}
+                <details style="margin-top:4px;">
+                  <summary style="font-size:11px;color:#6366f1;cursor:pointer;list-style:none;">▸ 推理過程</summary>
+                  <div style="font-size:11.5px;color:#64748b;margin-top:4px;padding:8px;background:#f8fafc;border-radius:6px;line-height:1.6;">{{ d.reasoning }}</div>
+                </details>
+                {% endif %}
+              </div>
+              <div style="text-align:right;flex-shrink:0;">
+                <span class="badge badge-{{ CONFIDENCE_COLORS.get(d.confidence, 'neutral') }}" style="font-size:10px;">{{ CONFIDENCE_LABELS.get(d.confidence, d.confidence) }}</span>
+                {% if d.created_at %}
+                <div style="font-size:10.5px;color:#94a3b8;margin-top:3px;">{{ d.created_at.strftime('%H:%M:%S') }}</div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">尚無 AI 決策記錄</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Meta & SEO ────────────────────────────────── -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
+    <!-- Meta info -->
+    <div class="cf-card cf-card-p animate-up">
+      <div class="section-title" style="margin-bottom:14px;">📋 文章資訊</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        {% macro row(label, val) %}
+        <div style="display:flex;gap:8px;">
+          <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:100px;">{{ label }}</div>
+          <div style="font-size:12.5px;color:#0f172a;flex:1;word-break:break-all;">{{ val or '—' }}</div>
+        </div>
+        {% endmacro %}
+        {{ row('主要關鍵字', art.primary_keyword) }}
+        {{ row('主要關鍵字類型', art.article_type) }}
+        {{ row('Meta Title', art.meta_title) }}
+        {{ row('Slug', art.slug) }}
+        {{ row('發佈 URL', art.publish_url) }}
+        {{ row('Google Doc', art.google_doc_url) }}
+        <div style="height:1px;background:var(--cf-border);margin:2px 0;"></div>
+        {{ row('建立時間', art.created_at.strftime('%Y-%m-%d %H:%M') if art.created_at else None) }}
+        {{ row('更新時間', art.updated_at.strftime('%Y-%m-%d %H:%M') if art.updated_at else None) }}
+      </div>
+    </div>
+
+    <!-- Meta description -->
+    {% if art.meta_description %}
+    <div class="cf-card cf-card-p animate-up d1">
+      <div style="font-size:12px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Meta 描述</div>
+      <div style="font-size:13px;color:#0f172a;line-height:1.6;">{{ art.meta_description }}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">{{ art.meta_description|length }} / 160 字元</div>
+      <div class="cf-progress" style="margin-top:4px;">
+        <div class="cf-progress-bar" style="width:{{ [art.meta_description|length / 160 * 100, 100]|min }}%;background:{{ 'linear-gradient(135deg,#10b981,#059669)' if art.meta_description|length <= 160 else 'linear-gradient(135deg,#ef4444,#dc2626)' }};"></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- SEO history chart -->
+    <div class="cf-card animate-up d2">
+      <div style="padding:16px 18px 0;">
+        <div class="section-title">📊 SEO 分數歷程</div>
+      </div>
+      {% if seo_history %}
+      <div style="padding:10px 16px 14px;position:relative;height:160px;">
+        <canvas id="seoHistoryChart"></canvas>
+      </div>
+      <div style="padding:0 18px 14px;display:flex;align-items:center;gap:12px;">
+        <div>
+          <div style="font-size:24px;font-weight:800;color:{% if art.seo_score >= 85 %}#059669{% elif art.seo_score >= 70 %}#d97706{% else %}#dc2626{% endif %};">{{ art.seo_score or '—' }}</div>
+          <div style="font-size:11px;color:#94a3b8;">當前分數</div>
+        </div>
+        <div style="flex:1;text-align:right;">
+          <div style="font-size:12px;color:#64748b;">目標 ≥ 85</div>
+          {% if art.seo_score and art.seo_score >= 85 %}
+          <div style="font-size:11px;color:#059669;font-weight:600;">✓ 已達標</div>
+          {% elif art.seo_score %}
+          <div style="font-size:11px;color:#d97706;font-weight:600;">差 {{ 85 - art.seo_score }} 分</div>
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">尚無 SEO 評分記錄</div>
+      {% endif %}
+    </div>
+
+    <!-- Fact-check issues -->
+    {% if fact_issues %}
+    <div class="cf-card cf-card-p animate-up d3">
+      <div class="section-title" style="margin-bottom:12px;">⚠️ 事實查核問題</div>
+      {% for issue in fact_issues %}
+      <div style="
+        padding:10px 12px; border-radius:8px; margin-bottom:8px;
+        background:{% if issue.severity == 'high' %}rgba(239,68,68,0.05){% elif issue.severity == 'medium' %}rgba(245,158,11,0.05){% else %}rgba(100,116,139,0.05){% endif %};
+        border-left:3px solid {% if issue.severity == 'high' %}#ef4444{% elif issue.severity == 'medium' %}#f59e0b{% else %}#94a3b8{% endif %};">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+          <span class="badge badge-{% if issue.severity == 'high' %}danger{% elif issue.severity == 'medium' %}warning{% else %}neutral{% endif %}" style="font-size:10px;">{{ issue.severity }}</span>
+          <span style="font-size:12px;font-weight:600;color:#0f172a;">{{ issue.issue_type }}</span>
+        </div>
+        <div style="font-size:12px;color:#475569;line-height:1.5;">{{ issue.description }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+{% if art.content %}
+<!-- marked.js for markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  document.getElementById('md-preview').innerHTML = marked.parse({{ art.content | tojson }});
+  // Style rendered markdown
+  const preview = document.getElementById('md-preview');
+  preview.querySelectorAll('h1,h2,h3').forEach(el => {
+    el.style.fontWeight = '700';
+    el.style.color = '#0f172a';
+    el.style.marginBottom = '8px';
+    el.style.marginTop = '18px';
+  });
+  preview.querySelectorAll('h1').forEach(el => el.style.fontSize = '20px');
+  preview.querySelectorAll('h2').forEach(el => el.style.fontSize = '17px');
+  preview.querySelectorAll('h3').forEach(el => el.style.fontSize = '15px');
+  preview.querySelectorAll('p').forEach(el => { el.style.marginBottom = '10px'; el.style.color = '#1e293b'; });
+  preview.querySelectorAll('ul,ol').forEach(el => { el.style.marginBottom = '10px'; el.style.paddingLeft = '20px'; });
+  preview.querySelectorAll('strong').forEach(el => el.style.fontWeight = '600');
+  preview.querySelectorAll('code').forEach(el => {
+    el.style.background = '#f1f5f9'; el.style.padding = '1px 5px';
+    el.style.borderRadius = '4px'; el.style.fontSize = '12px'; el.style.color = '#7c3aed';
+  });
+</script>
+{% endif %}
+
+{% if seo_history %}
+<script>
+const hist = {{ seo_history | tojson }};
+new Chart(document.getElementById('seoHistoryChart'), {
+  type: 'line',
+  data: {
+    labels: hist.map(h => h.date),
+    datasets: [{
+      data: hist.map(h => h.position ? (100 - Math.min(h.position * 4, 99)) : null),
+      borderColor: '#6366f1',
+      backgroundColor: 'rgba(99,102,241,0.08)',
+      tension: 0.4,
+      fill: true,
+      pointBackgroundColor: '#6366f1',
+      pointRadius: 4,
+      pointHoverRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` SEO: ${ctx.parsed.y}` } } },
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#94a3b8' } },
+      y: { min: 0, max: 100, grid: { color: 'rgba(226,232,240,0.6)' }, ticks: { font: { size: 10 }, color: '#94a3b8', stepSize: 20 } }
+    }
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

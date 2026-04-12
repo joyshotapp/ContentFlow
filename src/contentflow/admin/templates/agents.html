@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}Agent 執行中心{% endblock %}
+{% block page_title %}Agent 執行中心{% endblock %}
+{% block page_subtitle %}Pipeline 監控 & 決策日誌{% endblock %}
+
+{% block topbar_actions %}
+<button onclick="document.getElementById('triggerModal').classList.remove('hidden')"
+  class="btn btn-primary btn-sm">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+  觸發 Pipeline
+</button>
+{% endblock %}
+
+{% block content %}
+
+<!-- ── Cost stats ────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-indigo" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_runs }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總執行次數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d1">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ success_runs }}</div>
+        <div style="font-size:11px;color:#94a3b8;">成功</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d2">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-rose" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ budget_exceeded }}</div>
+        <div style="font-size:11px;color:#94a3b8;">超出預算</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d3">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">${{ "%.2f"|format(est_total_cost) }}</div>
+        <div style="font-size:11px;color:#94a3b8;">估計總成本</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Pipeline runs list ─────────────────────────────────────── -->
+<div class="cf-card animate-up d2">
+  <div style="padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">Pipeline 執行紀錄</div>
+  </div>
+  {% if runs %}
+  {% for run in runs %}
+  <div x-data="{open: {{ 'true' if loop.first else 'false' }}}"
+    style="border-bottom:1px solid rgba(226,232,240,0.5);">
+
+    <!-- Run header (clickable to expand) -->
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;cursor:pointer;"
+      @click="open=!open">
+
+      <!-- Status icon -->
+      <div style="width:34px;height:34px;border-radius:8px;flex-shrink:0;
+        {% if run.is_complete %}background:rgba(16,185,129,0.1);{% elif run.over_budget %}background:rgba(239,68,68,0.1);{% else %}background:rgba(99,102,241,0.1);{% endif %}
+        display:flex;align-items:center;justify-content:center;">
+        {% if run.is_complete %}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
+        {% elif run.over_budget %}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+        {% else %}
+          <div style="width:8px;height:8px;border-radius:50%;background:#6366f1;"></div>
+        {% endif %}
+      </div>
+
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13.5px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          {{ run.article_title or 'Run #' ~ run.run_id[:8] }}
+        </div>
+        <div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">
+          Run {{ run.run_id[:8] }} · {{ run.step_count }} 步驟
+          {% if run.started_at %}· {{ run.started_at.strftime('%Y/%m/%d %H:%M') }}{% endif %}
+          {% if run.est_cost %}· ~${{ "%.4f"|format(run.est_cost) }}{% endif %}
+        </div>
+      </div>
+
+      <!-- Pipeline mini-steps -->
+      <div class="pipeline-steps" style="display:none;" x-bind:style="''">
+        {% for step in PIPELINE_STEPS %}
+        <span class="pipeline-step {% if step in run.completed_steps %}done{% endif %}">{{ step }}</span>
+        {% endfor %}
+      </div>
+      {% if run.article_id %}
+      <a href="/admin/articles/{{ run.article_id }}" class="btn btn-ghost btn-sm" @click.stop>文章</a>
+      {% endif %}
+
+      <svg :style="open ? 'transform:rotate(180deg)' : ''" style="transition:transform 0.2s;flex-shrink:0;"
+        width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+
+    <!-- Decision steps (expanded) -->
+    <div x-show="open" x-cloak style="background:#fafbfc;border-top:1px solid rgba(226,232,240,0.4);">
+      <div style="padding:14px 20px 16px 50px;position:relative;">
+        <div style="position:absolute;left:34px;top:18px;bottom:18px;width:1.5px;background:#e2e8f0;"></div>
+        {% for step in run.steps %}
+        <div style="position:relative;margin-bottom:12px;">
+          <div style="
+            position:absolute;left:-22px;top:4px;
+            width:11px;height:11px;border-radius:50%;
+            border:2px solid {% if step.confidence == 'high' %}#10b981{% elif step.confidence == 'medium' %}#f59e0b{% else %}#94a3b8{% endif %};
+            background:white;
+          "></div>
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:180px;">
+              <span style="font-size:12px;font-weight:700;color:#6366f1;">{{ step.agent_name }}</span>
+              <div style="font-size:12.5px;color:#1e293b;margin-top:3px;line-height:1.5;">{{ step.decision }}</div>
+              {% if step.reasoning %}
+              <div style="font-size:11.5px;color:#64748b;margin-top:3px;line-height:1.5;font-style:italic;">{{ step.reasoning[:200] }}{% if step.reasoning|length > 200 %}…{% endif %}</div>
+              {% endif %}
+            </div>
+            <div style="flex-shrink:0;text-align:right;">
+              <span class="badge badge-{{ CONFIDENCE_COLORS.get(step.confidence, 'neutral') }}" style="font-size:10px;">{{ CONFIDENCE_LABELS.get(step.confidence, step.confidence) }}</span>
+              {% if step.created_at %}
+              <div style="font-size:10.5px;color:#94a3b8;margin-top:3px;">{{ step.created_at.strftime('%H:%M:%S') }}</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% else %}
+        <div style="color:#94a3b8;font-size:12.5px;">此 Run 無決策記錄</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-state-icon">🤖</div>
+    <p>尚無 Pipeline 執行記錄<br>點擊「觸發 Pipeline」開始執行</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Trigger modal ──────────────────────────────────────────── -->
+<div id="triggerModal" class="hidden" style="
+  position:fixed;inset:0;z-index:100;
+  background:rgba(15,23,42,0.5);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;">
+  <div class="cf-card" style="width:460px;max-width:94vw;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--cf-border);">
+      <div style="font-size:15px;font-weight:700;color:#0f172a;">觸發 Pipeline 執行</div>
+      <button onclick="document.getElementById('triggerModal').classList.add('hidden')"
+        style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:18px;line-height:1;">✕</button>
+    </div>
+    <form action="/admin/agents/trigger" method="post">
+      <div style="padding:20px;display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">選擇文章（狀態：規劃中）</label>
+          <select name="article_id" style="width:100%;padding:8px 12px;border:1px solid var(--cf-border);border-radius:8px;font-size:13.5px;color:#0f172a;outline:none;">
+            <option value="">— 選擇文章 —</option>
+            {% for art in trigger_articles %}
+            <option value="{{ art.id }}">{{ art.title or '未命名 #' ~ art.id }} · {{ art.primary_keyword or '' }} ({{ STATUS_LABELS.get(art.status, art.status) }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">專案（Project ID）</label>
+          <select name="project_id" style="width:100%;padding:8px 12px;border:1px solid var(--cf-border);border-radius:8px;font-size:13.5px;color:#0f172a;outline:none;">
+            <option value="0">— 不指定 —</option>
+            {% for proj in projects %}
+            <option value="{{ proj.id }}">{{ proj.name }} ({{ proj.slug }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">起始步驟</label>
+          <select name="start_step" style="width:100%;padding:8px 12px;border:1px solid var(--cf-border);border-radius:8px;font-size:13.5px;color:#0f172a;outline:none;">
+            {% for step in PIPELINE_STEPS %}
+            <option value="{{ step }}">{{ step }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div style="padding:0 20px 18px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" onclick="document.getElementById('triggerModal').classList.add('hidden')"
+          class="btn btn-ghost">取消</button>
+        <button type="submit" class="btn btn-primary">🚀 開始執行</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Live run status (if run_id in query) ──────────────────── -->
+{% if run_id %}
+<div id="run-status-banner" style="position:fixed;bottom:24px;right:24px;z-index:200;background:#0f172a;color:#f8fafc;border-radius:12px;padding:16px 20px;min-width:320px;max-width:420px;box-shadow:0 4px 24px rgba(0,0,0,.35);">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+    <div id="run-spinner" style="width:14px;height:14px;border:2px solid #334155;border-top-color:#818cf8;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+    <span style="font-size:13px;font-weight:600;">Pipeline 執行中…</span>
+    <button onclick="document.getElementById('run-status-banner').remove()" style="margin-left:auto;background:none;border:none;color:#64748b;cursor:pointer;font-size:16px;">×</button>
+  </div>
+  <pre id="run-log" style="font-size:11.5px;line-height:1.7;margin:0;white-space:pre-wrap;color:#94a3b8;max-height:180px;overflow-y:auto;"></pre>
+</div>
+<script>
+(function() {
+  const runId = "{{ run_id }}";
+  const logEl = document.getElementById("run-log");
+  const spinner = document.getElementById("run-spinner");
+  let seen = 0;
+  function poll() {
+    fetch("/admin/agents/run-status/" + runId)
+      .then(r => r.json())
+      .then(d => {
+        const lines = d.log || [];
+        for (let i = seen; i < lines.length; i++) logEl.textContent += lines[i] + "\n";
+        seen = lines.length;
+        logEl.scrollTop = logEl.scrollHeight;
+        if (d.status === "running") {
+          setTimeout(poll, 2000);
+        } else {
+          spinner.style.animation = "none";
+          spinner.style.borderColor = d.status === "done" ? "#34d399" : "#f87171";
+          spinner.style.borderTopColor = d.status === "done" ? "#34d399" : "#f87171";
+          if (d.status === "done") setTimeout(() => location.reload(), 3000);
+        }
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  setTimeout(poll, 1500);
+})();
+</script>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}專案設定{% endblock %}
+{% block page_title %}專案設定{% endblock %}
+{% block page_subtitle %}{{ project.name if project else '尚未設定專案' }}{% endblock %}
+
+{% block content %}
+
+<!-- ── Tab bar ────────────────────────────────────────────────── -->
+<div x-data="{tab:'project'}" class="animate-up">
+  <div class="tab-bar" style="margin-bottom:18px;display:inline-flex;">
+    <div class="tab-item" :class="tab=='project'&&'active'" @click="tab='project'">📋 專案資訊</div>
+    <div class="tab-item" :class="tab=='strategy'&&'active'" @click="tab='strategy'">🎯 內容策略</div>
+    <div class="tab-item" :class="tab=='rules'&&'active'" @click="tab='rules'">✍️ 撰寫規範</div>
+    <div class="tab-item" :class="tab=='legal'&&'active'" @click="tab='legal'">⚖️ 法規合規</div>
+    <div class="tab-item" :class="tab=='integrations'&&'active'" @click="tab='integrations'">🔌 整合設定</div>
+  </div>
+
+  <!-- ── Project info ────────────────────────────────────────── -->
+  <div x-show="tab=='project'" x-cloak>
+    {% if project %}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">基本資訊</div>
+        {% macro kv(label, val) %}
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:110px;">{{ label }}</div>
+          <div style="font-size:13px;color:#0f172a;flex:1;word-break:break-all;">{{ val or '—' }}</div>
+        </div>
+        {% endmacro %}
+        {{ kv('名稱', project.name) }}
+        {{ kv('Domain', project.domain) }}
+        {{ kv('語言', project.language) }}
+        {{ kv('國家/地區', project.country) }}
+        {{ kv('目標受眾', project.target_audience) }}
+        {{ kv('產業', project.industry) }}
+        {{ kv('建立時間', project.created_at.strftime('%Y-%m-%d') if project.created_at else None) }}
+      </div>
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">品牌設定</div>
+        {% if project.brand_voice %}
+        <div style="margin-bottom:10px;">
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">品牌調性</div>
+          <div style="font-size:13px;color:#0f172a;line-height:1.6;background:#f8fafc;padding:10px;border-radius:8px;">{{ project.brand_voice }}</div>
+        </div>
+        {% endif %}
+        {% if project.content_goals %}
+        <div>
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">內容目標</div>
+          <div style="font-size:13px;color:#0f172a;line-height:1.6;background:#f8fafc;padding:10px;border-radius:8px;">{{ project.content_goals }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">📋</div><p>尚無專案設定 · 請在 Streamlit 前台建立專案</p></div></div>
+    {% endif %}
+  </div>
+
+  <!-- ── Content Strategy ─────────────────────────────────────── -->
+  <div x-show="tab=='strategy'" x-cloak>
+    {% if content_strategy %}
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      {% for cs in content_strategy %}
+      <div class="cf-card cf-card-p">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;">
+          <div>
+            <div style="font-size:14.5px;font-weight:700;color:#0f172a;">{{ cs.name or '內容策略' }}</div>
+            {% if cs.description %}<div style="font-size:12.5px;color:#64748b;margin-top:3px;">{{ cs.description }}</div>{% endif %}
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0;">
+            {% if cs.content_type %}<span class="badge badge-info" style="font-size:10.5px;">{{ cs.content_type }}</span>{% endif %}
+            {% if cs.tone %}<span class="badge badge-purple" style="font-size:10.5px;">{{ cs.tone }}</span>{% endif %}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+          {% macro cs_kv(label, val) %}
+          <div style="padding:8px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">{{ label }}</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ val or '—' }}</div>
+          </div>
+          {% endmacro %}
+          {{ cs_kv('目標字數', cs.target_word_count ~ ' 字' if cs.target_word_count else None) }}
+          {{ cs_kv('每月文章量', cs.articles_per_month ~ ' 篇' if cs.articles_per_month else None) }}
+          {{ cs_kv('SEO 目標分數', cs.seo_score_target if cs.seo_score_target else None) }}
+          {{ cs_kv('更新頻率', cs.update_frequency) }}
+          {{ cs_kv('主要目的', cs.primary_goal) }}
+          {{ cs_kv('CTA 策略', cs.cta_strategy) }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">🎯</div><p>尚無內容策略設定</p></div></div>
+    {% endif %}
+  </div>
+
+  <!-- ── Writing Rules ────────────────────────────────────────── -->
+  <div x-show="tab=='rules'" x-cloak>
+    {% if writing_rules %}
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      {% for rule in writing_rules %}
+      <div class="cf-card cf-card-p" style="display:flex;align-items:flex-start;gap:12px;">
+        <div style="width:36px;height:36px;border-radius:8px;background:rgba(99,102,241,0.1);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">✍️</div>
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <div style="font-size:13.5px;font-weight:700;color:#0f172a;">{{ rule.title or '規範' }}</div>
+            {% if rule.rule_type %}<span class="badge badge-info" style="font-size:10px;">{{ rule.rule_type }}</span>{% endif %}
+            {% if rule.is_mandatory %}<span class="badge badge-danger" style="font-size:10px;">必須遵守</span>{% endif %}
+          </div>
+          {% if rule.content %}
+          <div style="font-size:13px;color:#475569;line-height:1.6;white-space:pre-line;">{{ rule.content[:300] }}{% if rule.content|length > 300 %}…{% endif %}</div>
+          {% endif %}
+          {% if rule.examples %}
+          <details style="margin-top:6px;">
+            <summary style="font-size:11.5px;color:#6366f1;cursor:pointer;list-style:none;">▸ 範例</summary>
+            <div style="font-size:12px;color:#64748b;margin-top:4px;padding:8px;background:#f8fafc;border-radius:6px;white-space:pre-line;">{{ rule.examples }}</div>
+          </details>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">📝</div><p>尚無撰寫規範</p></div></div>
+    {% endif %}
+  </div>
+
+  <!-- ── Legal Terms ──────────────────────────────────────────── -->
+  <div x-show="tab=='legal'" x-cloak>
+    {% if legal_terms %}
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      {% for term in legal_terms %}
+      <div class="cf-card cf-card-p">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="font-size:15px;">⚖️</span>
+          <div style="font-size:13.5px;font-weight:700;color:#0f172a;">{{ term.term }}</div>
+          {% if term.category %}<span class="badge badge-warning" style="font-size:10px;">{{ term.category }}</span>{% endif %}
+          {% if term.severity == 'high' %}<span class="badge badge-danger" style="font-size:10px;">高風險</span>{% endif %}
+        </div>
+        {% if term.definition %}
+        <div style="font-size:13px;color:#475569;line-height:1.6;background:#f8fafc;padding:10px;border-radius:8px;">{{ term.definition }}</div>
+        {% endif %}
+        {% if term.usage_guidance %}
+        <div style="margin-top:8px;font-size:12px;color:#64748b;">使用指引：{{ term.usage_guidance }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">⚖️</div><p>尚無法規合規條目</p></div></div>
+    {% endif %}
+  </div>
+
+  <!-- ── Integrations ─────────────────────────────────────────── -->
+  <div x-show="tab=='integrations'" x-cloak>
+    <div class="cf-card cf-card-p">
+      <div class="section-title" style="margin-bottom:14px;">環境變數設定狀況</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+        {% for env in env_vars %}
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:{% if env.set %}rgba(16,185,129,0.05){% else %}rgba(239,68,68,0.04){% endif %};border:1px solid {% if env.set %}rgba(16,185,129,0.15){% else %}rgba(239,68,68,0.12){% endif %};border-radius:8px;">
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-family:monospace;">{{ env.name }}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:1px;">{{ env.description }}</div>
+          </div>
+          {% if env.set %}
+          <span class="badge badge-success" style="font-size:10px;flex-shrink:0;">✓ 已設定</span>
+          {% else %}
+          <span class="badge badge-danger" style="font-size:10px;flex-shrink:0;">✗ 未設定</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}排程監控{% endblock %}
+{% block page_title %}排程監控{% endblock %}
+{% block page_subtitle %}4 項定時任務{% endblock %}
+
+{% block content %}
+
+<!-- ── 4 Job status cards ──────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px;">
+  {% set job_icons = {
+    "gsc_sync"       : "📡",
+    "ga4_sync"       : "📊",
+    "competitor_serp": "🕵️",
+    "attribution"    : "🔗"
+  } %}
+  {% set job_schedule = {
+    "gsc_sync"       : "每日 03:00",
+    "ga4_sync"       : "每日 03:30",
+    "competitor_serp": "每週一 04:00",
+    "attribution"    : "每週一 05:00"
+  } %}
+  {% for job in known_jobs %}
+  <div class="cf-card cf-card-p cf-card-hover animate-up" style="animation-delay:{{ loop.index0 * 0.06 }}s;">
+    <div style="display:flex;align-items:flex-start;gap:12px;">
+      <div style="font-size:22px;flex-shrink:0;">{{ job_icons.get(job.name, '⚙️') }}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <div style="font-size:14px;font-weight:700;color:#0f172a;">{{ job.display_name }}</div>
+          {% if job.last_status == 'success' %}
+          <span class="badge badge-success" style="font-size:10px;">✓ 正常</span>
+          {% elif job.last_status == 'failed' %}
+          <span class="badge badge-danger" style="font-size:10px;">✗ 失敗</span>
+          {% else %}
+          <span class="badge badge-neutral" style="font-size:10px;">—</span>
+          {% endif %}
+        </div>
+        <div style="font-size:12px;color:#64748b;">{{ job_schedule.get(job.name, '—') }}</div>
+        {% if job.last_run %}
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+          <div>
+            <div style="font-size:11px;color:#94a3b8;">上次執行</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ job.last_run.strftime('%Y/%m/%d %H:%M') }}</div>
+          </div>
+          {% if job.duration_s %}
+          <div>
+            <div style="font-size:11px;color:#94a3b8;">耗時</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ "%.1f"|format(job.duration_s) }}s</div>
+          </div>
+          {% endif %}
+          {% if job.rows_synced is not none %}
+          <div>
+            <div style="font-size:11px;color:#94a3b8;">同步筆數</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ job.rows_synced }}</div>
+          </div>
+          {% endif %}
+        </div>
+        {% else %}
+        <div style="font-size:12px;color:#94a3b8;margin-top:6px;">尚未執行</div>
+        {% endif %}
+        {% if job.last_error %}
+        <div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,0.06);border-radius:6px;border-left:3px solid #ef4444;">
+          <div style="font-size:11.5px;color:#dc2626;">{{ job.last_error[:100] }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Recent execution log ──────────────────────────────────── -->
+<div class="cf-card animate-up d3">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">執行日誌</div>
+    <div style="display:flex;gap:8px;">
+      <span class="badge badge-success" style="font-size:10.5px;">成功 {{ success_count }}</span>
+      <span class="badge badge-danger" style="font-size:10.5px;">失敗 {{ fail_count }}</span>
+    </div>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>任務名稱</th>
+          <th>狀態</th>
+          <th>開始時間</th>
+          <th>耗時</th>
+          <th>同步筆數</th>
+          <th>錯誤訊息</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td style="font-weight:500;">{{ log.job_name }}</td>
+          <td>
+            {% if log.status == 'success' %}
+            <span class="badge badge-success" style="font-size:10.5px;">✓ 成功</span>
+            {% elif log.status == 'failed' %}
+            <span class="badge badge-danger" style="font-size:10.5px;">✗ 失敗</span>
+            {% else %}
+            <span class="badge badge-neutral" style="font-size:10.5px;">{{ log.status }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:12.5px;color:#64748b;white-space:nowrap;">
+            {{ log.started_at.strftime('%Y/%m/%d %H:%M:%S') if log.started_at else '—' }}
+          </td>
+          <td style="font-size:12.5px;color:#64748b;">
+            {% if log.duration_s %}{{ "%.1f"|format(log.duration_s) }}s{% else %}—{% endif %}
+          </td>
+          <td style="font-size:12.5px;color:#64748b;">
+            {{ log.rows_synced if log.rows_synced is not none else '—' }}
+          </td>
+          <td style="font-size:12px;color:#dc2626;max-width:200px;">
+            {% if log.error_message %}
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">{{ log.error_message[:80] }}</span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">
+          <div class="empty-state"><div class="empty-state-icon">⏰</div><p>尚無排程執行記錄</p></div>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

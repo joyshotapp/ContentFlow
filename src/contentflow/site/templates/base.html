@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
+  {% block meta %}{% endblock %}
+  {% block canonical %}{% endblock %}
+
+  <!-- Preconnect -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@400;600;700;900&family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'Noto Sans TC', 'system-ui', 'sans-serif'],
+            serif: ['Noto Serif TC', 'Georgia', 'serif'],
+          },
+          colors: {
+            brand: { 50: '#EEF2FF', 100: '#E0E7FF', 200: '#C7D2FE', 500: '#6366F1', 600: '#4F46E5', 700: '#4338CA', 800: '#3730A3', 900: '#312E81' },
+          },
+          fontSize: {
+            'display': ['3.5rem', { lineHeight: '1.1', letterSpacing: '-0.02em', fontWeight: '900' }],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- RSS autodiscovery -->
+  <link rel="alternate" type="application/rss+xml" title="{{ site_name }}" href="{{ site_url }}/feed">
+
+  {% if ga4_id %}
+  <!-- GA4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga4_id }}"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','{{ ga4_id }}');</script>
+  {% endif %}
+
+  {% block jsonld %}{% endblock %}
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="bg-white text-gray-900 antialiased font-sans">
+
+  <!-- Skip to content (accessibility) -->
+  <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 bg-brand-600 text-white px-4 py-2 rounded-lg text-sm">跳至主要內容</a>
+
+  <!-- Header -->
+  <header class="border-b border-gray-100 sticky top-0 bg-white/95 backdrop-blur-md z-50">
+    <nav class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between" aria-label="主要導航">
+      <a href="{{ site_url }}/" class="flex items-center gap-2.5 group" aria-label="{{ site_name }} 首頁">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-indigo-600 flex items-center justify-center shadow-sm">
+          <svg class="w-4.5 h-4.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+          </svg>
+        </div>
+        <span class="text-sm font-bold tracking-tight text-gray-900 group-hover:text-brand-600 transition-colors hidden sm:inline">{{ site_name }}</span>
+      </a>
+      <div class="flex items-center gap-1 sm:gap-5">
+        <a href="{{ site_url }}/blog" class="text-sm font-medium text-gray-600 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-50 transition-all">文章</a>
+        {% for key, val in article_type_map.items() %}
+        <a href="{{ site_url }}/category/{{ key }}" class="text-sm font-medium text-gray-500 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-50 transition-all hidden lg:inline-flex">{{ val.label }}</a>
+        {% endfor %}
+        <a href="{{ site_url }}/about" class="text-sm font-medium text-gray-600 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-50 transition-all">關於</a>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Main content -->
+  <main id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-gray-100 mt-20 bg-gray-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-16">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+        <!-- Brand -->
+        <div class="sm:col-span-2 lg:col-span-1">
+          <div class="flex items-center gap-2 mb-4">
+            <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-brand-500 to-indigo-600"></div>
+            <span class="text-sm font-bold text-gray-900">{{ site_name }}</span>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">{{ site_description }}</p>
+        </div>
+        <!-- Links -->
+        <div>
+          <h4 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">瀏覽</h4>
+          <ul class="space-y-2.5">
+            <li><a href="{{ site_url }}/blog" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">所有文章</a></li>
+            {% for key, val in article_type_map.items() %}
+            <li><a href="{{ site_url }}/category/{{ key }}" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">{{ val.label }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">關於</h4>
+          <ul class="space-y-2.5">
+            <li><a href="{{ site_url }}/about" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">關於我們</a></li>
+            <li><a href="{{ site_url }}/about#editorial" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">編輯政策</a></li>
+            <li><a href="{{ site_url }}/about#disclaimer" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">免責聲明</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">訂閱</h4>
+          <ul class="space-y-2.5">
+            <li><a href="{{ site_url }}/feed" class="text-sm text-gray-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1Z"/></svg>
+              RSS Feed
+            </a></li>
+            <li><a href="{{ site_url }}/sitemap.xml" target="_blank" class="text-sm text-gray-600 hover:text-brand-600 transition-colors">Sitemap</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="border-t border-gray-200 mt-12 pt-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <p class="text-xs text-gray-400">© {{ site_name }}. 本站內容僅供參考，不構成醫療建議。如有健康疑慮，請諮詢專業醫療人員。</p>
+        <p class="text-xs text-gray-400">Powered by <span class="font-medium">ContentFlow AI</span></p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

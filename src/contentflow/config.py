@@ -68,5 +68,25 @@ class Settings(BaseSettings):
     # 通知（可選）
     slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
 
+    # Reference Site（SEO 閉環驗證前端）
+    site_url: str = Field(
+        default="http://localhost:8000/site",
+        alias="SITE_URL",
+        description="Reference Site 對外根 URL（不含結尾斜線），用於 sitemap / canonical",
+    )
+    ga4_measurement_id: str = Field(
+        default="",
+        alias="GA4_MEASUREMENT_ID",
+        description="Google Analytics 4 Measurement ID（e.g. G-XXXXXXXXXX）",
+    )
+    site_name: str = Field(
+        default="GoodBone 好骨頭",
+        alias="SITE_NAME",
+    )
+    site_description: str = Field(
+        default="以醫學文獻為基礎的骨科健康知識平台——AI 驅動的 SEO 內容引擎，幫助您了解骨骼健康、關節保護與骨科治療。",
+        alias="SITE_DESCRIPTION",
+    )
+
 
 settings = Settings()

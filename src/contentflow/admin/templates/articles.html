@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}文章管理{% endblock %}
+{% block page_title %}文章管理{% endblock %}
+{% block page_subtitle %}{{ total }} 篇文章{% endblock %}
+
+{% block topbar_actions %}
+<button onclick="document.getElementById('modal-create').style.display='flex'" class="btn btn-primary btn-sm">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+  新增文章任務
+</button>
+<a href="/admin/agents" class="btn btn-ghost btn-sm" style="margin-left:6px;">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
+  觸發執行
+</a>
+{% endblock %}
+
+{% block extra_body %}
+<!-- ── Create Article Modal ──────────────────────────────── -->
+<div id="modal-create" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:900;align-items:center;justify-content:center;">
+  <div class="cf-card" style="width:460px;max-width:96vw;padding:28px 28px 24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <h3 style="font-size:15px;font-weight:700;margin:0;">新增文章任務</h3>
+      <button onclick="document.getElementById('modal-create').style.display='none'" style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:20px;line-height:1;">×</button>
+    </div>
+    <form method="post" action="/admin/articles/create">
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:5px;">主要關鍵字 *</label>
+        <input name="keyword" required placeholder="例：椎間盤突出治療" style="width:100%;padding:8px 10px;border:1px solid var(--cf-border);border-radius:7px;font-size:13.5px;box-sizing:border-box;">
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:5px;">文章標題（留空自動沿用關鍵字）</label>
+        <input name="title" placeholder="選填" style="width:100%;padding:8px 10px;border:1px solid var(--cf-border);border-radius:7px;font-size:13.5px;box-sizing:border-box;">
+      </div>
+      <div style="margin-bottom:20px;">
+        <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:5px;">文章類型</label>
+        <select name="article_type" style="width:100%;padding:8px 10px;border:1px solid var(--cf-border);border-radius:7px;font-size:13.5px;background:#fff;box-sizing:border-box;">
+          <option value="知識">知識型（Know-Why）</option>
+          <option value="操作">操作型（How-To）</option>
+          <option value="比較">比較型（Comparison）</option>
+          <option value="產品">產品介紹</option>
+          <option value="醫學">醫學研究</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" onclick="document.getElementById('modal-create').style.display='none'" class="btn btn-ghost">取消</button>
+        <button type="submit" class="btn btn-primary">建立任務 →</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- ── Filters ───────────────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;" class="animate-up">
+  <div class="tab-bar">
+    <a href="?status=" class="tab-item {% if not status_filter %}active{% endif %}">
+      全部 <span class="tab-count">{{ total }}</span>
+    </a>
+    {% for st, label in [("reviewing","審閱中"),("writing","撰寫中"),("researching","研究中"),("planned","規劃中"),("published","已發佈")] %}
+    <a href="?status={{ st }}" class="tab-item {% if status_filter == st %}active{% endif %}">
+      {{ label }}
+      {% if sc.get(st) %}<span class="tab-count">{{ sc[st] }}</span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  <div style="flex:1;"></div>
+  <!-- Search -->
+  <form action="" method="get" style="min-width:240px;">
+    {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+    <div class="cf-search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input name="q" value="{{ search_q or '' }}" placeholder="搜尋標題、關鍵字...">
+      {% if search_q %}<a href="?status={{ status_filter or '' }}" style="color:#94a3b8;font-size:13px;text-decoration:none;">✕</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+<!-- ── Table ─────────────────────────────────────────────────── -->
+<div class="cf-card animate-up d1">
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th style="width:44px;">#</th>
+          <th>標題</th>
+          <th>主要關鍵字</th>
+          <th>SEO 分數</th>
+          <th>狀態</th>
+          <th>字數</th>
+          <th>更新時間</th>
+          <th style="width:80px;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for art in articles %}
+        <tr style="cursor:pointer;" onclick="location.href='/admin/articles/{{ art.id }}'">
+          <td style="font-size:11px;color:#94a3b8;">{{ art.id }}</td>
+          <td>
+            <div style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;">{{ art.title or '（草稿中）' }}</div>
+            {% if art.meta_description %}
+            <div style="font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;margin-top:2px;">{{ art.meta_description }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if art.primary_keyword %}
+            <span style="font-size:12.5px;background:#f1f5f9;padding:2px 8px;border-radius:5px;color:#475569;">{{ art.primary_keyword }}</span>
+            {% else %}<span style="color:#cbd5e1;">—</span>{% endif %}
+          </td>
+          <td>
+            {% if art.seo_score is not none %}
+              <span class="{% if art.seo_score >= 85 %}score-high{% elif art.seo_score >= 70 %}score-mid{% else %}score-low{% endif %}">
+                {{ art.seo_score }}
+              </span>
+            {% else %}<span style="color:#cbd5e1;">—</span>{% endif %}
+          </td>
+          <td>
+            <span class="badge badge-{{ STATUS_COLORS.get(art.status, 'neutral') }}">{{ STATUS_LABELS.get(art.status, art.status) }}</span>
+          </td>
+          <td style="color:#64748b;font-size:12.5px;">
+            {% if art.word_count %}{{ "{:,}".format(art.word_count) }}{% else %}—{% endif %}
+          </td>
+          <td style="color:#94a3b8;font-size:12px;white-space:nowrap;">
+            {{ art.updated_at.strftime('%m/%d %H:%M') if art.updated_at else '—' }}
+          </td>
+          <td onclick="event.stopPropagation()">
+            <a href="/admin/articles/{{ art.id }}" class="btn btn-ghost btn-sm">查看</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8">
+            <div class="empty-state">
+              <div class="empty-state-icon">📂</div>
+              <p>尚無符合條件的文章</p>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--cf-border);">
+    <span style="font-size:12.5px;color:#94a3b8;">顯示 {{ (page-1)*page_size+1 }}–{{ [page*page_size, total]|min }} 共 {{ total }} 筆</span>
+    <div style="display:flex;gap:4px;">
+      {% if page > 1 %}
+      <a href="?page={{ page-1 }}&status={{ status_filter or '' }}&q={{ search_q or '' }}" class="btn btn-ghost btn-sm">‹</a>
+      {% endif %}
+      {% for p in range([1, page-2]|max, [total_pages+1, page+3]|min) %}
+      <a href="?page={{ p }}&status={{ status_filter or '' }}&q={{ search_q or '' }}"
+         class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-ghost{% endif %}">{{ p }}</a>
+      {% endfor %}
+      {% if page < total_pages %}
+      <a href="?page={{ page+1 }}&status={{ status_filter or '' }}&q={{ search_q or '' }}" class="btn btn-ghost btn-sm">›</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

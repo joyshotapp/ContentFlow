@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}知識庫{% endblock %}
+{% block page_title %}AI 知識庫{% endblock %}
+{% block page_subtitle %}{{ total }} 條學習規則{% endblock %}
+
+{% block content %}
+
+<!-- ── Stats ──────────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-violet" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總規則數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ active_count }}</div>
+        <div style="font-size:11px;color:#94a3b8;">啟用中</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ categories|length }}</div>
+        <div style="font-size:11px;color:#94a3b8;">類別</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-sky" style="width:38px;height:38px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg></div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ override_count }}</div>
+        <div style="font-size:11px;color:#94a3b8;">人工覆蓋</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Filter tabs + search ──────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;" class="animate-up d1">
+  <div class="tab-bar" style="overflow-x:auto;flex-shrink:0;">
+    <a href="?" class="tab-item {% if not cat_filter %}active{% endif %}">全部</a>
+    {% for cat in categories %}
+    <a href="?cat={{ cat }}" class="tab-item {% if cat_filter == cat %}active{% endif %}">{{ cat }}</a>
+    {% endfor %}
+  </div>
+  <div style="flex:1;"></div>
+  <form method="get" style="max-width:220px;">
+    {% if cat_filter %}<input type="hidden" name="cat" value="{{ cat_filter }}">{% endif %}
+    <div class="cf-search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input name="q" value="{{ q or '' }}" placeholder="搜尋規則...">
+    </div>
+  </form>
+</div>
+
+<!-- ── Entries table ──────────────────────────────────────────── -->
+<div class="cf-card animate-up d2">
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th style="width:44px;">啟用</th>
+          <th>類別</th>
+          <th>學習內容</th>
+          <th>分類</th>
+          <th>置信等級</th>
+          <th>更新時間</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+        <tr style="{% if not entry.is_active %}opacity:0.5;{% endif %}">
+          <td>
+            <form action="/admin/knowledge/{{ entry.id }}/toggle" method="post">
+              <label class="toggle-switch" title="{{ '停用' if entry.is_active else '啟用' }}">
+                <input type="checkbox" {{ 'checked' if entry.is_active else '' }} onchange="this.form.submit()">
+                <span class="toggle-slider"></span>
+              </label>
+            </form>
+          </td>
+          <td>
+            <span class="badge badge-purple" style="font-size:10.5px;">{{ entry.category or '一般' }}</span>
+          </td>
+          <td>
+            <div style="max-width:380px;font-size:13px;line-height:1.6;color:#1e293b;">{{ entry.pattern }}</div>
+            {% if entry.metadata_json and entry.metadata_json != '{}' %}
+            <div style="font-size:11px;color:#94a3b8;margin-top:3px;">証据數: {{ entry.evidence_count }}</div>
+            {% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748b;font-weight:500;">{{ entry.category or '—' }}</td>
+          <td>
+            {% set cl = entry.confidence_level or 'unverified' %}
+            <span class="badge badge-{% if cl == 'universal' %}success{% elif cl == 'verified' %}info{% else %}neutral{% endif %}" style="font-size:10px;">{{ cl }}</span>
+          </td>
+          <td style="color:#94a3b8;font-size:11.5px;white-space:nowrap;">
+            {{ entry.updated_at.strftime('%m/%d %H:%M') if entry.updated_at else '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">
+          <div class="empty-state">
+            <div class="empty-state-icon">🧠</div>
+            <p>尚無知識庫條目<br>AI 執行 Pipeline 後會自動學習</p>
+          </div>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--cf-border);">
+    <span style="font-size:12.5px;color:#94a3b8;">共 {{ total }} 筆</span>
+    <div style="display:flex;gap:4px;">
+      {% if page > 1 %}<a href="?page={{ page-1 }}&cat={{ cat_filter or '' }}&q={{ q or '' }}" class="btn btn-ghost btn-sm">‹</a>{% endif %}
+      {% for p in range([1, page-2]|max, [total_pages+1, page+3]|min) %}
+      <a href="?page={{ p }}&cat={{ cat_filter or '' }}&q={{ q or '' }}" class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-ghost{% endif %}">{{ p }}</a>
+      {% endfor %}
+      {% if page < total_pages %}<a href="?page={{ page+1 }}&cat={{ cat_filter or '' }}&q={{ q or '' }}" class="btn btn-ghost btn-sm">›</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

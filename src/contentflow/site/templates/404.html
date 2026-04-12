@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}找不到頁面 — {{ site_name }}{% endblock %}
+
+{% block meta %}
+<meta name="robots" content="noindex">
+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 sm:px-6 pt-20 pb-20 text-center">
+  <div class="mb-8">
+    <span class="text-8xl font-black text-gray-200 font-serif select-none">404</span>
+  </div>
+  <h1 class="text-2xl font-bold text-gray-900 mb-3">找不到您要的頁面</h1>
+  <p class="text-gray-500 leading-relaxed mb-8">
+    您所尋找的頁面可能已被移除、更改了網址，或暫時無法使用。
+  </p>
+  <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+    <a href="{{ site_url }}/" class="inline-flex items-center gap-2 bg-gray-900 text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-gray-700 transition-colors">
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>
+      返回首頁
+    </a>
+    <a href="{{ site_url }}/blog" class="inline-flex items-center gap-2 text-sm font-semibold text-gray-600 px-6 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all">
+      瀏覽所有文章
+    </a>
+  </div>
+
+  {% if popular_articles %}
+  <div class="mt-14 pt-10 border-t border-gray-100 text-left">
+    <h2 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-5 text-center">或許您有興趣</h2>
+    <div class="space-y-2">
+      {% for article in popular_articles %}
+      <a href="{{ site_url }}/blog/{{ article.slug }}" class="group flex items-center gap-4 rounded-xl border border-gray-100 bg-white px-5 py-4 hover:border-brand-200 hover:shadow-sm transition-all">
+        <span class="font-semibold text-gray-900 group-hover:text-brand-600 transition-colors text-sm line-clamp-1 flex-1">{{ article.meta_title or article.title }}</span>
+        <svg class="w-4 h-4 text-gray-300 group-hover:text-brand-500 flex-shrink-0 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

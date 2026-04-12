@@ -24,7 +24,7 @@ from .wordpress import markdown_to_html  # 共用 Markdown→HTML 轉換
 class ForgeBasePublisher(BasePublisher):
     """ForgeBase REST API Publisher。
 
-    認證：Service Account JWT（content_editor 角色）。
+    認證：X-API-Key service account token（content_editor 角色）。
     開發前提：settings.forgebase_api_base_url / forgebase_api_token 需已填入。
     """
 
@@ -38,7 +38,7 @@ class ForgeBasePublisher(BasePublisher):
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._token}",
+            "X-API-Key": self._token,
             "Content-Type": "application/json",
         }
 
@@ -70,8 +70,8 @@ class ForgeBasePublisher(BasePublisher):
                 "target_slug": draft.slug,
                 "title_draft": draft.title,
                 "primary_keyword": primary_keyword or draft.title,
-                "secondary_keywords": [],
-                "word_count_target": draft.word_count,
+                "secondary_keywords": "[]",
+                "word_count_target": draft.word_count or 3000,
                 "locale": "zh-tw",
             }
             try:
@@ -81,7 +81,9 @@ class ForgeBasePublisher(BasePublisher):
                     headers=self._headers(),
                 )
                 r.raise_for_status()
-                brief_id = r.json()["id"]
+                resp = r.json()
+                brief_data = resp.get("data", resp)
+                brief_id = brief_data["id"]
                 logger.info(f"[ForgeBase] Step 1 完成 brief_id={brief_id}")
             except Exception as exc:
                 return PublishResult(success=False, platform="forgebase", error=f"Step1 失敗: {exc}")
@@ -107,7 +109,8 @@ class ForgeBasePublisher(BasePublisher):
                     headers=self._headers(),
                 )
                 r.raise_for_status()
-                page_data = r.json()
+                resp = r.json()
+                page_data = resp.get("data", resp)
                 page_id = str(page_data["id"])
                 logger.info(f"[ForgeBase] Step 2 完成 page_id={page_id}（草稿，等待人工審閱）")
                 return PublishResult(
@@ -134,7 +137,8 @@ class ForgeBasePublisher(BasePublisher):
                     headers=self._headers(),
                 )
                 r.raise_for_status()
-                data = r.json()
+                resp = r.json()
+                data = resp.get("data", resp)
                 slug = data.get("slug", "")
                 full_url = f"{self._base.rstrip('/')}/{slug.lstrip('/')}" if slug else ""
                 logger.info(f"[ForgeBase] Step 3 完成 page_id={post_id} url={full_url}")
@@ -184,7 +188,9 @@ class ForgeBasePublisher(BasePublisher):
                     headers=self._headers(),
                 )
                 r.raise_for_status()
-                slug = r.json().get("slug", "")
+                resp = r.json()
+                data = resp.get("data", resp)
+                slug = data.get("slug", "")
                 if not slug:
                     return ""
                 return f"{self._base.rstrip('/')}/{slug.lstrip('/')}"

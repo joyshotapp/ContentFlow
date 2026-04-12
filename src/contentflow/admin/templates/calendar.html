@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}內容日曆{% endblock %}
+{% block page_title %}內容日曆{% endblock %}
+{% block page_subtitle %}{{ total }} 篇已計畫{% endblock %}
+
+{% block content %}
+
+<!-- ── Month stats ──────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
+  {% set statuses = [("published","已發佈","stat-icon-emerald"),("reviewing","審閱中","stat-icon-violet"),("writing","撰寫中","stat-icon-amber"),("researching","研究中","stat-icon-sky"),("planned","規劃中","stat-icon-slate")] %}
+  {% for st, label, icon_cls in statuses %}
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon {{ icon_cls }}" style="width:36px;height:36px;">
+        <span class="badge badge-{{ STATUS_COLORS.get(st, 'neutral') }}" style="font-size:10px;padding:2px 6px;">{{ sc.get(st,0) }}</span>
+      </div>
+      <div>
+        <div style="font-size:18px;font-weight:800;color:#0f172a;">{{ sc.get(st, 0) }}</div>
+        <div style="font-size:11px;color:#94a3b8;">{{ label }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Calendar months ──────────────────────────────────────── -->
+{% for month, weeks in calendar %}
+<div class="cf-card animate-up" style="margin-bottom:16px;">
+  <!-- Month header -->
+  {% set ns = namespace(cnt=0) %}{% for w in weeks %}{% set ns.cnt = ns.cnt + w.items|length %}{% endfor %}
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--cf-border);">
+    <div style="font-size:15px;font-weight:700;color:#0f172a;">{{ month }}</div>
+    <div style="font-size:12px;color:#94a3b8;">{{ ns.cnt }} 篇</div>
+  </div>
+  <!-- Weeks -->
+  {% for week in weeks %}
+  <div>
+    <div style="padding:8px 20px;background:#fafbfc;border-bottom:1px solid rgba(226,232,240,0.4);">
+      <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;">第 {{ week.week_num }} 週</span>
+      <span style="font-size:11px;color:#cbd5e1;margin-left:8px;">{{ week.date_range }}</span>
+    </div>
+    {% for item in week.items %}
+    <a href="/admin/articles/{{ item.id }}" style="text-decoration:none;">
+      <div style="
+        display:flex;align-items:center;gap:12px;padding:12px 20px;
+        border-bottom:1px solid rgba(226,232,240,0.3);transition:background 0.1s;"
+        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+        <!-- Status dot -->
+        <span class="dot dot-{{ STATUS_COLORS.get(item.status, 'neutral') }}"></span>
+
+        <!-- Date -->
+        <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:72px;">
+          {{ item.scheduled_date.strftime('%m/%d') if item.scheduled_date else '未排程' }}
+        </div>
+
+        <!-- Title -->
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:500;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{ item.title or '（尚未命名）' }}
+          </div>
+          {% if item.primary_keyword %}
+          <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">🔑 {{ item.primary_keyword }}</div>
+          {% endif %}
+        </div>
+
+        <!-- SEO score -->
+        {% if item.seo_score %}
+        <div style="font-size:12px;font-weight:700;{% if item.seo_score >= 85 %}color:#059669;{% elif item.seo_score >= 70 %}color:#d97706;{% else %}color:#dc2626;{% endif %} flex-shrink:0;">
+          SEO {{ item.seo_score }}
+        </div>
+        {% endif %}
+
+        <!-- Status badge -->
+        <span class="badge badge-{{ STATUS_COLORS.get(item.status,'neutral') }}" style="font-size:10.5px;flex-shrink:0;">
+          {{ STATUS_LABELS.get(item.status, item.status) }}
+        </span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="cf-card">
+  <div class="empty-state">
+    <div class="empty-state-icon">📅</div>
+    <p>日曆尚無文章計畫</p>
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

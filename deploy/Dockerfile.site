@@ -1,0 +1,32 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src/ ./src/
+
+# 安裝網站 + AI pipeline 所需依賴（排除 chromadb 等向量 DB）
+RUN pip install --no-cache-dir \
+    fastapi "uvicorn[standard]" \
+    jinja2 markdown \
+    sqlalchemy psycopg2-binary \
+    pydantic pydantic-settings \
+    loguru python-dotenv \
+    alembic \
+    "python-multipart>=0.0.9" itsdangerous \
+    langgraph langchain "langchain-openai>=0.2.0" "langchain-anthropic>=0.3.0" \
+    openai anthropic \
+    httpx aiohttp \
+    openpyxl beautifulsoup4 lxml \
+    apscheduler \
+    && pip install --no-cache-dir -e . --no-deps
+
+COPY data/ ./data/
+COPY migrations/ ./migrations/
+COPY alembic.ini .
+
+EXPOSE 8000

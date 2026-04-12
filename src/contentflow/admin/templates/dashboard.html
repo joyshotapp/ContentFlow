@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}儀表板{% endblock %}
+{% block page_title %}儀表板{% endblock %}
+{% block page_subtitle %}ContentFlow 系統總覽{% endblock %}
+
+{% block content %}
+
+<!-- ── 系統狀態橫幅（審閱中提醒）─── -->
+{% if reviewing > 0 %}
+<div class="animate-up" style="
+  background: linear-gradient(135deg,rgba(139,92,246,0.08) 0%,rgba(99,102,241,0.06) 100%);
+  border: 1px solid rgba(139,92,246,0.2); border-radius: 10px;
+  padding: 12px 18px; margin-bottom: 20px;
+  display: flex; align-items: center; gap: 12px;">
+  <span style="font-size:16px;">✍️</span>
+  <div style="flex:1;">
+    <span style="font-size:13.5px;font-weight:600;color:#7c3aed;">{{ reviewing }} 篇文章待人工審閱</span>
+    <span style="font-size:12px;color:#94a3b8;margin-left:8px;">AI 已完成寫作，等待你的批准。</span>
+  </div>
+  <a href="/admin/articles?status=reviewing" class="btn btn-ghost btn-sm">前往審閱 →</a>
+</div>
+{% endif %}
+
+<!-- ── KPI Row ─────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+
+  <!-- Articles -->
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="stat-label">文章總數</div>
+        <div class="stat-value" style="margin-top:6px;">{{ total_articles }}</div>
+        <div class="stat-sub">已發佈 <strong>{{ published }}</strong> 篇</div>
+      </div>
+      <div class="stat-icon stat-icon-indigo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      </div>
+    </div>
+    <div class="cf-progress" style="margin-top:14px;">
+      <div class="cf-progress-bar" style="width:{{ (published / total_articles * 100)|round|int if total_articles else 0 }}%"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:5px;">
+      <span style="font-size:11px;color:#94a3b8;">發佈進度</span>
+      <span style="font-size:11px;color:#94a3b8;font-weight:600;">{{ (published / total_articles * 100)|round|int if total_articles else 0 }}%</span>
+    </div>
+  </div>
+
+  <!-- Keywords -->
+  <div class="cf-card cf-card-p cf-card-hover animate-up d1">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="stat-label">追蹤關鍵字</div>
+        <div class="stat-value" style="margin-top:6px;">{{ total_kw }}</div>
+        <div class="stat-sub">跨所有專案</div>
+      </div>
+      <div class="stat-icon stat-icon-emerald">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+      </div>
+    </div>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:6px;">
+      <a href="/admin/keywords" style="font-size:12px;color:#6366f1;font-weight:500;text-decoration:none;">查看關鍵字庫 →</a>
+    </div>
+  </div>
+
+  <!-- GSC Clicks -->
+  <div class="cf-card cf-card-p cf-card-hover animate-up d2">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="stat-label">GSC 點擊</div>
+        <div class="stat-value" style="margin-top:6px;">{{ "{:,}".format(total_clicks) }}</div>
+        <div class="stat-sub">平均排名 <strong>{{ avg_position }}</strong></div>
+      </div>
+      <div class="stat-icon stat-icon-amber">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941"/></svg>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <span style="font-size:11px;color:#94a3b8;">{{ "{:,}".format(total_impressions) }} 次曝光</span>
+    </div>
+  </div>
+
+  <!-- AI Runs & Cost -->
+  <div class="cf-card cf-card-p cf-card-hover animate-up d3">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="stat-label">Pipeline 執行次數</div>
+        <div class="stat-value" style="margin-top:6px;">{{ total_runs }}</div>
+        <div class="stat-sub">累計 AI 成本 ~${{ "%.2f"|format(est_cost) }}</div>
+      </div>
+      <div class="stat-icon stat-icon-violet">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <a href="/admin/agents" style="font-size:12px;color:#6366f1;font-weight:500;text-decoration:none;">查看決策日誌 →</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── Row 2: Charts + top items ────────────────────────────── -->
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:20px;">
+
+  <!-- Article status donut -->
+  <div class="cf-card animate-up d2">
+    <div style="padding:18px 20px 0;">
+      <div class="section-header">
+        <div>
+          <div class="section-title">文章狀態分佈</div>
+          <div class="section-sub">各階段文章數量</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;align-items:center;">
+      <div style="padding:10px 0 18px 20px;position:relative;height:180px;">
+        <canvas id="statusChart"></canvas>
+      </div>
+      <div style="padding:0 20px 0 0;">
+        {% set status_label_map = {"planned":"規劃中","researching":"研究中","writing":"撰寫中","reviewing":"審閱中","published":"已發佈"} %}
+        {% set status_color_map = {"planned":"#94a3b8","researching":"#0ea5e9","writing":"#f59e0b","reviewing":"#8b5cf6","published":"#10b981"} %}
+        {% for st, cnt in [("planned",1),("researching",1),("writing",1),("reviewing",1),("published",1)] %}
+          {% set real_cnt = status_counts | fromjson %}
+        {% endfor %}
+        {% set sc = status_counts | fromjson %}
+        {% for st in ["planned","researching","writing","reviewing","published"] %}
+          {% if sc.get(st, 0) > 0 %}
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="width:10px;height:10px;border-radius:2px;background:{{ status_color_map[st] }};flex-shrink:0;"></div>
+            <span style="font-size:12.5px;color:#64748b;">{{ status_label_map[st] }}</span>
+            <span style="margin-left:auto;font-size:13px;font-weight:700;color:#0f172a;">{{ sc.get(st, 0) }}</span>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Calendar this month -->
+  <div class="cf-card cf-card-p animate-up d3">
+    <div class="section-header">
+      <div>
+        <div class="section-title">{{ cal_month }} 月內容日曆</div>
+        <div class="section-sub">已完成 {{ cal_done }} / {{ cal_total }} 篇</div>
+      </div>
+      <a href="/admin/calendar" class="section-action">查看 →</a>
+    </div>
+    <!-- Month progress -->
+    <div style="text-align:center;padding:10px 0;">
+      <div style="font-size:40px;font-weight:800;color:#0f172a;line-height:1;">{{ cal_done }}</div>
+      <div style="font-size:12px;color:#94a3b8;">/ {{ cal_total }} 篇計畫</div>
+      <div class="cf-progress" style="margin-top:14px;">
+        <div class="cf-progress-bar" style="width:{{ (cal_done / cal_total * 100)|round|int if cal_total else 0 }}%;background:linear-gradient(135deg,#10b981,#059669);"></div>
+      </div>
+    </div>
+    <!-- System learning -->
+    <hr class="cf-divider" style="margin:14px 0;">
+    <div class="section-header" style="margin-bottom:8px;">
+      <div class="section-title">知識庫</div>
+      <a href="/admin/knowledge" class="section-action">管理 →</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-violet" style="width:36px;height:36px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ knowledge_count }}</div>
+        <div style="font-size:11.5px;color:#94a3b8;">條 AI 學習規則</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Row 3: Pipeline runs + Recent article + Scheduler ─────── -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;">
+
+  <!-- Recent pipeline runs -->
+  <div class="cf-card animate-up d3">
+    <div style="padding:18px 20px 12px;">
+      <div class="section-header">
+        <div class="section-title">最近 Pipeline 執行</div>
+        <a href="/admin/agents" class="section-action">查看全部 →</a>
+      </div>
+    </div>
+    {% if pipeline_runs %}
+    <div style="overflow:hidden;">
+      {% for run in pipeline_runs %}
+      <a href="/admin/agents?run_id={{ run.run_id }}" style="text-decoration:none;">
+        <div style="
+          display:flex;align-items:center;gap:10px;
+          padding:10px 20px;
+          border-top:1px solid rgba(226,232,240,0.5);
+          transition:background 0.1s;
+          cursor:pointer;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+          <div style="width:30px;height:30px;border-radius:7px;flex-shrink:0;
+            {% if run.is_complete %}background:rgba(16,185,129,0.1);{% elif run.over_budget %}background:rgba(239,68,68,0.1);{% else %}background:rgba(99,102,241,0.1);{% endif %}
+            display:flex;align-items:center;justify-content:center;">
+            {% if run.is_complete %}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
+            {% elif run.over_budget %}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+            {% else %}
+              <div style="width:8px;height:8px;border-radius:50%;background:#6366f1;"></div>
+            {% endif %}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:500;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ run.article_title }}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:1px;">
+              Run #{{ run.run_id_short }} · {{ run.steps }} 步驟
+              {% if run.started %}· {{ run.started.strftime('%m/%d %H:%M') }}{% endif %}
+            </div>
+          </div>
+          {% if run.article_status %}
+          <span class="badge badge-{{ STATUS_COLORS.get(run.article_status, 'neutral') }}" style="font-size:10px;">
+            {{ STATUS_LABELS.get(run.article_status, run.article_status) }}
+          </span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state-icon">🤖</div>
+      <p>尚無 Pipeline 執行紀錄</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Pending review + scheduler -->
+  <div style="display:flex;flex-direction:column;gap:14px;">
+
+    <!-- Pending review -->
+    <div class="cf-card" style="flex:1;">
+      <div style="padding:16px 18px 10px;">
+        <div class="section-header">
+          <div class="section-title">📋 待審閱文章</div>
+          <a href="/admin/articles?status=reviewing" class="section-action">全部 →</a>
+        </div>
+      </div>
+      {% if pending_review %}
+      {% for art in pending_review %}
+      <a href="/admin/articles/{{ art.id }}" style="text-decoration:none;">
+        <div style="
+          display:flex;align-items:center;gap:10px;padding:9px 18px;
+          border-top:1px solid rgba(226,232,240,0.5);transition:background 0.1s;"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+          {% if art.seo_score %}
+          <div style="width:36px;height:36px;border-radius:8px;
+            {% if art.seo_score >= 85 %}background:rgba(16,185,129,0.1);color:#059669;{% elif art.seo_score >= 70 %}background:rgba(245,158,11,0.1);color:#d97706;{% else %}background:rgba(239,68,68,0.1);color:#dc2626;{% endif %}
+            display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">
+            {{ art.seo_score }}
+          </div>
+          {% else %}
+          <div style="width:36px;height:36px;border-radius:8px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:14px;">📄</div>
+          {% endif %}
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:500;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ art.title or '未命名' }}</div>
+            <div style="font-size:11px;color:#94a3b8;">{{ art.primary_keyword or '—' }}</div>
+          </div>
+          <span class="badge badge-purple" style="font-size:10px;">審閱中</span>
+        </div>
+      </a>
+      {% endfor %}
+      {% else %}
+      <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">✅ 沒有待審閱的文章</div>
+      {% endif %}
+    </div>
+
+    <!-- Scheduler status -->
+    <div class="cf-card cf-card-p" style="flex:none;">
+      <div class="section-header" style="margin-bottom:10px;">
+        <div class="section-title">排程狀態</div>
+        <a href="/admin/scheduler" class="section-action">詳情 →</a>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:10px;">
+        <div style="flex:1;text-align:center;padding:8px;background:#f0fdf4;border-radius:8px;">
+          <div style="font-size:20px;font-weight:800;color:#059669;">{{ sched_success }}</div>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:2px;">成功</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:8px;background:#fef2f2;border-radius:8px;">
+          <div style="font-size:20px;font-weight:800;color:#dc2626;">{{ sched_fail }}</div>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:2px;">失敗</div>
+        </div>
+      </div>
+      {% for log in recent_sched[:3] %}
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid rgba(226,232,240,0.4);">
+        <span class="dot dot-{{ 'success' if log.status == 'success' else 'danger' }}"></span>
+        <span style="font-size:12px;color:#475569;flex:1;">{{ log.job_name[:28] }}</span>
+        <span style="font-size:11px;color:#94a3b8;">{{ log.started_at.strftime('%m/%d %H:%M') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  const sc = {{ status_counts }};
+  const labels = { planned:'規劃中', researching:'研究中', writing:'撰寫中', reviewing:'審閱中', published:'已發佈' };
+  const colors = { planned:'#94a3b8', researching:'#0ea5e9', writing:'#f59e0b', reviewing:'#8b5cf6', published:'#10b981' };
+  const keys = Object.keys(sc).filter(k => sc[k] > 0);
+  if (!keys.length) return;
+
+  new Chart(document.getElementById('statusChart'), {
+    type: 'doughnut',
+    data: {
+      labels: keys.map(k => labels[k] || k),
+      datasets: [{
+        data: keys.map(k => sc[k]),
+        backgroundColor: keys.map(k => colors[k] || '#e2e8f0'),
+        borderWidth: 0,
+        hoverOffset: 4,
+      }]
+    },
+    options: {
+      cutout: '68%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} 篇` } }
+      },
+      animation: { animateScale: true, duration: 600 }
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}關於我們 — {{ site_name }}{% endblock %}
+
+{% block meta %}
+<meta name="description" content="了解{{ site_name }}的編輯標準、AI 內容生產流程、品質保證措施，以及我們如何確保每篇文章的準確性與可信度。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="關於我們 — {{ site_name }}">
+<meta property="og:url" content="{{ site_url }}/about">
+{% endblock %}
+
+{% block canonical %}
+<link rel="canonical" href="{{ site_url }}/about">
+{% endblock %}
+
+{% block jsonld %}
+<script type="application/ld+json">{{ org_schema | tojson }}</script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 pt-10 pb-16">
+  <!-- Breadcrumb -->
+  <nav aria-label="麵包屑" class="mb-8">
+    <ol class="flex items-center gap-1.5 text-sm text-gray-400">
+      <li><a href="{{ site_url }}/" class="hover:text-gray-600 transition-colors">首頁</a></li>
+      <li><span class="mx-1">›</span></li>
+      <li class="text-gray-600" aria-current="page">關於我們</li>
+    </ol>
+  </nav>
+
+  <!-- Header -->
+  <header class="mb-14">
+    <h1 class="font-serif text-3xl sm:text-4xl font-black text-gray-900 leading-tight mb-5">關於 {{ site_name }}</h1>
+    <p class="text-lg text-gray-500 leading-relaxed max-w-2xl">
+      我們是一個以 AI 技術驅動、以醫學文獻為基礎的健康知識平台。每一篇文章都經過嚴謹的研究、撰寫、事實查核與 SEO 品質審查流程。
+    </p>
+  </header>
+
+  <!-- Content -->
+  <div class="space-y-16">
+
+    <!-- Mission -->
+    <section>
+      <h2 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-brand-100 flex items-center justify-center flex-shrink-0">
+          <svg class="w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+        </div>
+        我們的使命
+      </h2>
+      <p class="text-gray-600 leading-relaxed">
+        在網路充斥著不正確健康資訊的時代，我們致力於透過 AI 技術與嚴謹的醫學文獻佐證，提供準確、易懂且具實用性的健康知識內容。
+        我們的目標是讓每個人都能方便地取得以科學為基礎的健康資訊，做出更好的健康決策。
+      </p>
+    </section>
+
+    <!-- Editorial Process -->
+    <section id="editorial">
+      <h2 class="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-brand-100 flex items-center justify-center flex-shrink-0">
+          <svg class="w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+        </div>
+        編輯標準與流程
+      </h2>
+      <p class="text-gray-600 leading-relaxed mb-6">
+        ContentFlow AI 採用多階段的內容生產閉環流程，每篇文章都經過以下嚴格步驟：
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">1</span>
+            <h3 class="font-semibold text-gray-900">策略規劃</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">根據關鍵字研究、搜尋意圖分析與競品缺口識別，制定內容策略與主題叢集架構。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">2</span>
+            <h3 class="font-semibold text-gray-900">深度研究</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">透過 PubMed 醫學文獻搜尋、SERP 競爭分析與領域知識庫查詢，收集權威資料來源。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">3</span>
+            <h3 class="font-semibold text-gray-900">AI 撰寫</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">基於研究報告、大綱與撰寫規範，由 AI 生成初稿，嵌入 SEO 最佳實踐與結構化資料。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">4</span>
+            <h3 class="font-semibold text-gray-900">事實查核</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">自動化事實查核系統驗證每項健康聲明的科學依據與準確性，標記需要修正的內容。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">5</span>
+            <h3 class="font-semibold text-gray-900">SEO 品質審查</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">檢查 meta 標籤、結構化資料、內部連結、標題層級、關鍵字密度等 20+ 項 SEO 指標。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-100 p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center flex-shrink-0">6</span>
+            <h3 class="font-semibold text-gray-900">發佈與監控</h3>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">文章發佈後，持續追蹤 GA4 與 GSC 表現數據，依據實際排名與流量回饋進行內容優化。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Technology -->
+    <section>
+      <h2 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-brand-100 flex items-center justify-center flex-shrink-0">
+          <svg class="w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+        </div>
+        技術架構
+      </h2>
+      <p class="text-gray-600 leading-relaxed mb-4">
+        ContentFlow AI 是一個全自動化的 SEO 內容引擎，整合了以下核心技術：
+      </p>
+      <ul class="space-y-2 text-gray-600">
+        <li class="flex items-start gap-2">
+          <svg class="w-4 h-4 text-brand-500 flex-shrink-0 mt-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+          <span><strong>多 Agent 協作</strong>——策略、研究、撰寫、查核、SEO 審查等專責 Agent 分工協作</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <svg class="w-4 h-4 text-brand-500 flex-shrink-0 mt-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+          <span><strong>PubMed 醫學文獻整合</strong>——直接查詢 PubMed 數據庫以獲取最新研究證據</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <svg class="w-4 h-4 text-brand-500 flex-shrink-0 mt-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+          <span><strong>自動化事實查核</strong>——驗證健康聲明的科學依據與嚴重性分級</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <svg class="w-4 h-4 text-brand-500 flex-shrink-0 mt-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+          <span><strong>閉環 SEO 優化</strong>——GA4/GSC 數據回饋驅動的持續內容優化循環</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <svg class="w-4 h-4 text-brand-500 flex-shrink-0 mt-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+          <span><strong>主題叢集策略</strong>——自動建構支柱╱衛星文章的內部連結網絡</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- Disclaimer -->
+    <section id="disclaimer" class="rounded-2xl bg-amber-50 border border-amber-100 p-8">
+      <h2 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+        <svg class="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+        醫療免責聲明
+      </h2>
+      <div class="text-gray-700 leading-relaxed space-y-3">
+        <p>
+          本網站所提供的所有內容僅供一般健康知識參考用途，<strong>不構成</strong>任何形式的醫療建議、診斷或治療方案。
+        </p>
+        <p>
+          本站內容不應被用作專業醫療諮詢的替代品。如果您對自身的健康狀況有任何疑問或擔憂，
+          請務必諮詢合格的醫療保健專業人員。切勿因本網站上的任何內容而忽略或延遲尋求專業醫療建議。
+        </p>
+        <p>
+          雖然我們的內容基於 PubMed 醫學文獻並經過事實查核流程，但醫學知識持續更新，
+          本站內容可能無法即時反映最新的醫學研究成果。如需最新的治療指引，請參考您的醫師或相關醫療機構的建議。
+        </p>
+      </div>
+    </section>
+
+    <!-- Contact -->
+    <section>
+      <h2 class="text-xl font-bold text-gray-900 mb-4">聯繫我們</h2>
+      <p class="text-gray-600 leading-relaxed">
+        如果您在瀏覽本站內容時發現任何錯誤或需要改進的地方，歡迎透過以下方式與我們聯繫。
+        我們致力於持續改善內容品質。
+      </p>
+      <p class="text-sm text-gray-400 mt-3">ContentFlow AI — 讓知識觸手可及。</p>
+    </section>
+  </div>
+</div>
+{% endblock %}

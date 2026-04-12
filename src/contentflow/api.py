@@ -41,6 +41,14 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# ── Admin Dashboard ──────────────────────────────────────────
+from contentflow.admin.app import admin_app  # noqa: E402
+app.mount("/admin", admin_app)
+
+# ── Reference Site（SEO 閉環驗證前端） ─────────────────────────
+from contentflow.site.app import site_app  # noqa: E402
+app.mount("/site", site_app)
+
 
 @app.on_event("startup")
 async def _startup():

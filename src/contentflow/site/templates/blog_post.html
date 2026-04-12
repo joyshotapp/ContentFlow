@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}{{ article.meta_title or article.title }} — {{ site_name }}{% endblock %}
+
+{% block meta %}
+<meta name="description" content="{{ article.meta_description or '' }}">
+<meta name="keywords" content="{{ article.primary_keyword or '' }}{% if article.secondary_keywords %}, {{ article.secondary_keywords if article.secondary_keywords is string else article.secondary_keywords | join(', ') }}{% endif %}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{ article.meta_title or article.title }}">
+<meta property="og:description" content="{{ article.meta_description or '' }}">
+<meta property="og:url" content="{{ site_url }}/blog/{{ article.slug }}">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:site_name" content="{{ site_name }}">
+{% if article.updated_at %}
+<meta property="article:modified_time" content="{{ article.updated_at.isoformat() }}">
+{% endif %}
+{% if article.created_at %}
+<meta property="article:published_time" content="{{ article.created_at.isoformat() }}">
+{% endif %}
+{% endblock %}
+
+{% block canonical %}
+<link rel="canonical" href="{{ site_url }}/blog/{{ article.slug }}">
+{% endblock %}
+
+{% block jsonld %}
+<script type="application/ld+json">{{ breadcrumb_schema | tojson }}</script>
+<script type="application/ld+json">{{ article_schema | tojson }}</script>
+{% if faq_schema %}
+<script type="application/ld+json">{{ faq_schema | tojson }}</script>
+{% endif %}
+{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* TOC highlight */
+  .toc-link { transition: all .15s ease; }
+  .toc-link:hover, .toc-link.active { color: #4F46E5; background-color: #EEF2FF; border-left-color: #4F46E5; }
+  /* Prose */
+  .prose { font-family: 'Noto Serif TC', Georgia, serif; }
+  .prose h2 { font-family: 'Noto Sans TC', system-ui, sans-serif; font-weight: 700; font-size: 1.5rem; margin-top: 2.5em; margin-bottom: 0.75em; color: #111827; line-height: 1.3; padding-bottom: 0.5em; border-bottom: 1px solid #f3f4f6; }
+  .prose h3 { font-family: 'Noto Sans TC', system-ui, sans-serif; font-weight: 600; font-size: 1.25rem; margin-top: 2em; margin-bottom: 0.5em; color: #1f2937; line-height: 1.4; }
+  .prose p { margin-bottom: 1.25em; line-height: 1.9; color: #374151; font-size: 1.05rem; }
+  .prose ul, .prose ol { margin-bottom: 1.25em; padding-left: 1.5em; }
+  .prose li { margin-bottom: 0.35em; line-height: 1.8; color: #374151; }
+  .prose strong { font-weight: 700; color: #111827; }
+  .prose a { color: #4F46E5; text-decoration: underline; text-underline-offset: 2px; }
+  .prose a:hover { color: #312E81; }
+  .prose blockquote { border-left: 3px solid #C7D2FE; padding: 0.75em 1em; margin: 1.5em 0; background: #F5F3FF; border-radius: 0 0.5rem 0.5rem 0; }
+  .prose blockquote p { color: #4338CA; margin: 0; }
+  .prose table { width: 100%; border-collapse: collapse; margin: 1.5em 0; font-family: 'Noto Sans TC', sans-serif; font-size: 0.925rem; }
+  .prose table th { text-align: left; font-weight: 600; padding: 0.75em 1em; background: #F9FAFB; border-bottom: 2px solid #E5E7EB; color: #374151; }
+  .prose table td { padding: 0.75em 1em; border-bottom: 1px solid #F3F4F6; }
+  .prose table tr:hover td { background: #FAFAFA; }
+  .prose code { font-size: 0.875em; background: #F3F4F6; padding: 0.15em 0.4em; border-radius: 0.25em; color: #1F2937; }
+  .prose pre { background: #1F2937; color: #E5E7EB; padding: 1.25em; border-radius: 0.75em; overflow-x: auto; margin: 1.5em 0; }
+  .prose pre code { background: none; padding: 0; color: inherit; font-size: 0.875rem; }
+  .prose img { border-radius: 0.75em; margin: 1.5em 0; max-width: 100%; }
+  /* FAQ accordion */
+  .faq-toggle:checked + .faq-label .faq-icon { transform: rotate(180deg); }
+  .faq-toggle:checked ~ .faq-answer { max-height: 600px; padding-top: 0.75rem; padding-bottom: 1rem; opacity: 1; }
+  .faq-answer { max-height: 0; overflow: hidden; opacity: 0; transition: all 0.3s ease; }
+  .faq-icon { transition: transform 0.2s ease; }
+  /* Scroll offset for anchor links */
+  [id] { scroll-margin-top: 80px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<article class="max-w-6xl mx-auto px-4 sm:px-6 pt-8 pb-16">
+  <!-- Breadcrumb -->
+  <nav aria-label="麵包屑" class="mb-8">
+    <ol class="flex items-center gap-1.5 text-sm text-gray-400 flex-wrap">
+      <li><a href="{{ site_url }}/" class="hover:text-gray-600 transition-colors">首頁</a></li>
+      <li><span class="mx-1">›</span></li>
+      <li><a href="{{ site_url }}/blog" class="hover:text-gray-600 transition-colors">文章</a></li>
+      {% if article.article_type and article.article_type in article_type_map %}
+      <li><span class="mx-1">›</span></li>
+      <li><a href="{{ site_url }}/category/{{ article.article_type }}" class="hover:text-gray-600 transition-colors">{{ article_type_map[article.article_type].label }}</a></li>
+      {% endif %}
+      <li><span class="mx-1">›</span></li>
+      <li class="text-gray-600 truncate max-w-xs" aria-current="page">{{ article.meta_title or article.title }}</li>
+    </ol>
+  </nav>
+
+  <div class="lg:grid lg:grid-cols-[1fr_280px] lg:gap-10">
+    <!-- Main content column -->
+    <div class="min-w-0">
+      <!-- Header -->
+      <header class="mb-10">
+        {% if article.article_type and article.article_type in article_type_map %}
+        <a href="{{ site_url }}/category/{{ article.article_type }}" class="inline-block rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors mb-4">{{ article_type_map[article.article_type].label }}</a>
+        {% endif %}
+        <h1 class="font-serif text-3xl sm:text-4xl font-black text-gray-900 leading-tight mb-5">{{ article.meta_title or article.title }}</h1>
+        {% if article.meta_description %}
+        <p class="text-lg text-gray-500 leading-relaxed mb-6">{{ article.meta_description }}</p>
+        {% endif %}
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400">
+          {% if article.updated_at %}
+          <div class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+            <time datetime="{{ article.updated_at.isoformat() }}">{{ article.updated_at.strftime('%Y 年 %m 月 %d 日') }}</time>
+          </div>
+          {% endif %}
+          {% if reading_time %}
+          <div class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>閱讀時間約 {{ reading_time }} 分鐘</span>
+          </div>
+          {% endif %}
+          {% if word_count %}
+          <div class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
+            <span>{{ "{:,}".format(word_count) }} 字</span>
+          </div>
+          {% endif %}
+          {% if article.seo_score %}
+          <div class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+            <span>SEO {{ article.seo_score }}分</span>
+          </div>
+          {% endif %}
+        </div>
+        {% if article.primary_keyword %}
+        <div class="flex flex-wrap items-center gap-2 mt-5">
+          <span class="rounded-lg bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">{{ article.primary_keyword }}</span>
+          {% if secondary_kws %}
+            {% for kw in secondary_kws[:5] %}
+            <span class="rounded-lg bg-gray-50 px-2.5 py-0.5 text-xs text-gray-400">{{ kw }}</span>
+            {% endfor %}
+          {% endif %}
+        </div>
+        {% endif %}
+      </header>
+
+      <!-- Article body -->
+      <div class="prose max-w-none">
+        {{ html_content | safe }}
+      </div>
+
+      <!-- FAQ Section -->
+      {% if faq_items %}
+      <section class="mt-16 pt-10 border-t border-gray-100" id="faq" aria-label="常見問題">
+        <h2 class="text-xl font-bold text-gray-900 mb-6 font-sans flex items-center gap-2">
+          <svg class="w-5 h-5 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
+          常見問題
+        </h2>
+        <div class="space-y-2">
+          {% for faq in faq_items %}
+          <div class="rounded-xl border border-gray-100 overflow-hidden">
+            <input type="checkbox" id="faq-{{ loop.index }}" class="hidden faq-toggle" {% if loop.first %}checked{% endif %}>
+            <label for="faq-{{ loop.index }}" class="faq-label flex items-center justify-between w-full px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors">
+              <span class="font-semibold text-gray-900 text-sm pr-4">{{ faq.question }}</span>
+              <svg class="w-5 h-5 text-gray-400 flex-shrink-0 faq-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+            </label>
+            <div class="faq-answer px-5 text-sm text-gray-600 leading-relaxed">
+              {{ faq.answer }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      <!-- Research sources -->
+      {% if research_sources %}
+      <section class="mt-12 pt-8 border-t border-gray-100" id="sources" aria-label="參考資料">
+        <h2 class="text-lg font-bold text-gray-900 mb-4 font-sans flex items-center gap-2">
+          <svg class="w-5 h-5 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+          參考資料與來源
+        </h2>
+        <ul class="space-y-2">
+          {% for src in research_sources %}
+          <li class="flex items-start gap-2 text-sm">
+            <span class="text-brand-500 font-medium flex-shrink-0">[{{ loop.index }}]</span>
+            <span class="text-gray-600">
+              {% if src.authors %}{{ src.authors }}. {% endif %}{{ src.title }}{% if src.journal %} <em>{{ src.journal }}</em>{% endif %}{% if src.year %} ({{ src.year }}){% endif %}{% if src.url %} <a href="{{ src.url }}" target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:text-brand-700">↗</a>{% endif %}
+            </span>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      <!-- E-E-A-T disclosure -->
+      <aside class="mt-12 rounded-2xl bg-gray-50 border border-gray-100 p-6" aria-label="內容聲明">
+        <div class="flex items-start gap-3">
+          <div class="w-8 h-8 rounded-lg bg-brand-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <svg class="w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+          </div>
+          <div>
+            <p class="text-sm font-semibold text-gray-900 mb-1">內容品質聲明</p>
+            <p class="text-sm text-gray-500 leading-relaxed">本文由 ContentFlow AI 系統輔助撰寫，並參考 PubMed 醫學文獻與權威來源。所有內容經過事實查核與 SEO 品質審查。本文僅供健康知識參考，不構成醫療建議、診斷或治療方案。如有健康問題，請諮詢合格的醫療專業人員。</p>
+            <a href="{{ site_url }}/about#editorial" class="text-sm font-medium text-brand-600 hover:text-brand-700 transition-colors mt-2 inline-flex items-center gap-1">
+              了解我們的編輯標準
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>
+            </a>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Previous / Next -->
+      {% if prev_article or next_article %}
+      <nav class="mt-12 grid grid-cols-1 sm:grid-cols-2 gap-4" aria-label="前後文章導航">
+        {% if prev_article %}
+        <a href="{{ site_url }}/blog/{{ prev_article.slug }}" class="group rounded-2xl border border-gray-100 p-5 hover:border-brand-200 hover:shadow-md transition-all">
+          <span class="text-xs font-medium text-gray-400 mb-1 block">← 上一篇</span>
+          <span class="text-sm font-semibold text-gray-900 group-hover:text-brand-600 transition-colors line-clamp-2">{{ prev_article.meta_title or prev_article.title }}</span>
+        </a>
+        {% else %}<div></div>{% endif %}
+        {% if next_article %}
+        <a href="{{ site_url }}/blog/{{ next_article.slug }}" class="group rounded-2xl border border-gray-100 p-5 hover:border-brand-200 hover:shadow-md transition-all text-right">
+          <span class="text-xs font-medium text-gray-400 mb-1 block">下一篇 →</span>
+          <span class="text-sm font-semibold text-gray-900 group-hover:text-brand-600 transition-colors line-clamp-2">{{ next_article.meta_title or next_article.title }}</span>
+        </a>
+        {% endif %}
+      </nav>
+      {% endif %}
+    </div>
+
+    <!-- Sidebar (sticky) -->
+    <aside class="hidden lg:block">
+      <div class="sticky top-24 space-y-6">
+        <!-- TOC -->
+        {% if toc %}
+        <nav class="rounded-2xl border border-gray-100 bg-white p-5" aria-label="目錄">
+          <h3 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">目錄</h3>
+          <ul class="space-y-0.5">
+            {% for item in toc %}
+            <li>
+              <a href="#{{ item.id }}" class="toc-link block text-sm text-gray-500 hover:text-brand-600 py-1.5 px-3 rounded-lg border-l-2 border-transparent {% if item.level == 3 %}ml-3 text-xs{% endif %}">{{ item.text }}</a>
+            </li>
+            {% endfor %}
+          </ul>
+        </nav>
+        {% endif %}
+
+        <!-- Related articles -->
+        {% if related %}
+        <div class="rounded-2xl border border-gray-100 bg-white p-5">
+          <h3 class="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">相關文章</h3>
+          <ul class="space-y-3">
+            {% for rel in related %}
+            <li>
+              <a href="{{ site_url }}/blog/{{ rel.slug }}" class="group block">
+                <p class="text-sm font-medium text-gray-700 group-hover:text-brand-600 transition-colors leading-snug line-clamp-2">{{ rel.meta_title or rel.title }}</p>
+                {% if rel.primary_keyword %}
+                <p class="text-xs text-gray-400 mt-0.5">{{ rel.primary_keyword }}</p>
+                {% endif %}
+              </a>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+    </aside>
+  </div>
+</article>
+{% endblock %}
