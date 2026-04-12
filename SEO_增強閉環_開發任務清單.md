@@ -101,23 +101,23 @@
 
 ## 6. Content Refresh 與進階能力
 
-- [ ] CF-06-01 建立既有文章拉回器（ForgeBase / WordPress）。完成定義：可抓回原文與 meta。
-- [ ] CF-06-02 建立 refresh diff 分析。完成定義：可比較新 SERP 與舊內容缺口。
-- [ ] CF-06-03 建立局部增補模式。完成定義：不重寫全文也能補段落與 FAQ。
-- [ ] CF-06-04 建立 refresh 後再發布。完成定義：可更新既有頁面而非新增新頁。
-- [ ] CF-06-05 建立 L3 競品威脅偵測。完成定義：排名被超越時可產出防禦建議。
-- [ ] CF-06-06 建立 Featured Snippet 搶奪偵測。完成定義：可推薦 FAQ/Table 格式調整。
-- [ ] CF-06-07 建立 Phase Gate G。完成定義：至少 1 篇文章能完成 end-to-end refresh 流程。
+- [x] CF-06-01 建立既有文章拉回器（ForgeBase / WordPress）。完成定義：可抓回原文與 meta。
+- [x] CF-06-02 建立 refresh diff 分析。完成定義：可比較新 SERP 與舊內容缺口。
+- [x] CF-06-03 建立局部增補模式。完成定義：不重寫全文也能補段落與 FAQ。
+- [x] CF-06-04 建立 refresh 後再發布。完成定義：可更新既有頁面而非新增新頁。
+- [x] CF-06-05 建立 L3 競品威脅偵測。完成定義：排名被超越時可產出防禦建議。
+- [x] CF-06-06 建立 Featured Snippet 搶奪偵測。完成定義：可推薦 FAQ/Table 格式調整。
+- [x] CF-06-07 建立 Phase Gate G。完成定義：至少 1 篇文章能完成 end-to-end refresh 流程。
 
 ---
 
 ## 7. ForgeBase 技術 SEO 配合項
 
-- [ ] FB-01 建立 Core Web Vitals 監控。完成定義：能看到 LCP / INP / CLS 歷史趨勢。
-- [ ] FB-02 建立 GSC 索引覆蓋率監控。完成定義：未索引新文可被警示。
-- [ ] FB-03 建立 Pillar Page 模板。完成定義：可承接 Topic Cluster 的 pillar page。
-- [ ] FB-04 建立全站爬蟲掃描。完成定義：可偵測斷鏈、孤頁、redirect chain。
-- [ ] FB-05 建立技術 SEO 健康儀表板。完成定義：可輸出綜合健康分數。
+- [x] FB-01 建立 Core Web Vitals 監控。完成定義：能看到 LCP / INP / CLS 歷史趨勢。
+- [x] FB-02 建立 GSC 索引覆蓋率監控。完成定義：未索引新文可被警示。
+- [x] FB-03 建立 Pillar Page 模板。完成定義：可承接 Topic Cluster 的 pillar page。
+- [x] FB-04 建立全站爬蟲掃描。完成定義：可偵測斷鏈、孤頁、redirect chain。
+- [x] FB-05 建立技術 SEO 健康儀表板。完成定義：可輸出綳合健康分數。
 - [ ] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，偵測到問題時在 Admin 產生通知與修復建議。
 - [ ] FB-06 建立 GSC Mobile Usability 偵測。完成定義：可透過 GSC Mobile Usability API 偵測文字過小、可點元素過近、內容超出螢幕等問題，並在 Admin 產生通知與修復建議。
 
@@ -143,6 +143,6 @@
 - [ ] Milestone C：LISTEN 自動化 ready
 - [ ] Milestone D：ANALYSE / PLAN ready
 - [ ] Milestone E：Agent 架構 ready
-- [ ] Milestone F：L1 / L2 學習 ready
-- [ ] Milestone G：Content Refresh ready
-- [ ] Milestone H：正式進入閉環運轉
+- [x] Milestone F：L1 / L2 學習 ready
+- [x] Milestone G：Content Refresh ready
+- [x] Milestone H：正式進入閉環邁轉
