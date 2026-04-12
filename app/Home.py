@@ -18,7 +18,6 @@ from contentflow.models.database import (
     Article,
     ContentCalendar,
     Keyword,
-    Project,
 )
 
 st.set_page_config(
@@ -68,10 +67,6 @@ def main():
 
         with col_left:
             st.subheader("📊 文章狀態分佈")
-            statuses = (
-                session.query(Article.status, st.cache_data)
-            ) if False else None  # noqa: placeholder
-
             # 直接統計
             status_data = {}
             _art_q = session.query(Article)

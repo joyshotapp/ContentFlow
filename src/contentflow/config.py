@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     llm_writing_model: str = Field(default="claude-sonnet-4-5", alias="LLM_WRITING_MODEL")
     llm_lite_model: str = Field(default="gpt-4o-mini", alias="LLM_LITE_MODEL")
+    llm_seo_qa_max_completion_tokens: int = Field(
+        default=4096,
+        alias="LLM_SEO_QA_MAX_COMPLETION_TOKENS",
+    )
 
     # NCBI / PubMed
     ncbi_api_key: str = Field(default="", alias="NCBI_API_KEY")

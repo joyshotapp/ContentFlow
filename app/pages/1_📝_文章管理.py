@@ -93,7 +93,7 @@ try:
     if article_options:
         selected_label = st.selectbox("選擇文章", list(article_options.keys()))
         selected_id = article_options[selected_label]
-        article = session.query(Article).get(selected_id)
+        article = session.get(Article, selected_id)
 
         if article:
             col1, col2 = st.columns(2)

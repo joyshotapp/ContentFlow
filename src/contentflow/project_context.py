@@ -137,7 +137,7 @@ def load_project_context(
         session = get_db()
         try:
             if project_id:
-                project = session.query(Project).get(project_id)
+                project = session.get(Project, project_id)
             elif project_slug:
                 project = session.query(Project).filter(Project.slug == project_slug).first()
             else:
@@ -207,7 +207,21 @@ def load_project_context(
 
 def project_uses_pubmed(ctx: ProjectContext) -> bool:
     """僅健康/醫療相關專案預設啟用 PubMed。"""
-    industry = (ctx.industry or "").lower()
+    haystack = "\n".join(
+        filter(
+            None,
+            [
+                ctx.industry,
+                ctx.name,
+                ctx.brand_name,
+                ctx.brand_description,
+                ctx.writing_principles,
+                *ctx.writing_rules,
+                *ctx.strategies,
+                *ctx.legal_terms,
+            ],
+        )
+    ).lower()
     health_markers = (
         "保健",
         "健康",
@@ -221,4 +235,4 @@ def project_uses_pubmed(ctx: ProjectContext) -> bool:
         "nutrition",
         "biotech",
     )
-    return any(marker in industry for marker in health_markers)
+    return any(marker in haystack for marker in health_markers)

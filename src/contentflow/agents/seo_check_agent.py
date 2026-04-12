@@ -58,23 +58,32 @@ def _keyword_density(keyword: str, content_markdown: str) -> float:
     return count * len(keyword) / total_chars
 
 
+def _is_cjk_char(char: str) -> bool:
+    return bool(char) and bool(re.match(r"[\u3400-\u4dbf\u4e00-\u9fff]", char))
+
+
 def _kw_in_context(kw: str, text: str) -> bool:
-    """完整詞比對：中文關鍵字至少 2 字才比對；2 字關鍵字透過 jieba 分詞判斷是否為獨立詞。"""
+    """完整詞比對：2 字中文詞避免誤配到更長詞組中間的碎片。"""
     if len(kw) < 2:
         return False
     if len(kw) >= 3:
         return kw in text
-    # 2 字關鍵字：先快速判斷字面是否存在
-    if kw not in text:
-        return False
-    # 透過 jieba 分詞確認是否為獨立詞（避免「骨盆」被「髖骨盆腔」誤配）
-    try:
-        import jieba
-        tokens = jieba.lcut(text)
-        return kw in tokens
-    except ImportError:
-        # 無 jieba 時退回簡單比對
-        return True
+
+    start = 0
+    while True:
+        idx = text.find(kw, start)
+        if idx == -1:
+            return False
+
+        prev_char = text[idx - 1] if idx > 0 else ""
+        next_index = idx + len(kw)
+        next_char = text[next_index] if next_index < len(text) else ""
+
+        # 兩側都被中文包住時，視為嵌在更長詞中的碎片，例如「髖骨盆腔」。
+        if not (_is_cjk_char(prev_char) and _is_cjk_char(next_char)):
+            return True
+
+        start = idx + 1
 
 
 def suggest_internal_links(

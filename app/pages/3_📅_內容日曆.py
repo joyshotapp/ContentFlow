@@ -104,7 +104,7 @@ try:
             for e in entries
         }
         selected = st.selectbox("選擇文章", list(options.keys()))
-        entry = session.query(ContentCalendar).get(options[selected])
+        entry = session.get(ContentCalendar, options[selected])
 
         if entry:
             col_l, col_r = st.columns(2)

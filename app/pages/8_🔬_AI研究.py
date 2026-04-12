@@ -88,7 +88,7 @@ try:
                 for a in articles
             }
             selected = st.selectbox("選擇待研究的文章", list(options.keys()))
-            article = session.query(Article).get(options[selected])
+            article = session.get(Article, options[selected])
 
             if article:
                 col1, col2 = st.columns(2)
@@ -142,7 +142,7 @@ try:
                 for c in calendars
             }
             cal_selected = st.selectbox("選擇排程文章", list(cal_options.keys()))
-            cal_entry = session.query(ContentCalendar).get(cal_options[cal_selected])
+            cal_entry = session.get(ContentCalendar, cal_options[cal_selected])
 
             if cal_entry:
                 st.markdown(f"**標題：** {cal_entry.title}")
@@ -238,7 +238,7 @@ try:
                 for a in researched
             }
             write_selected = st.selectbox("選擇有研究報告的文章", list(write_options.keys()), key="write_select")
-            write_article = session.query(Article).get(write_options[write_selected])
+            write_article = session.get(Article, write_options[write_selected])
 
             if write_article:
                 st.markdown(f"**主關鍵字：** {write_article.primary_keyword}")
@@ -505,7 +505,7 @@ meta_description: {draft.meta_description}
                 for a in drafted
             }
             fc_selected = st.selectbox("選擇待查核的文章", list(fc_options.keys()), key="fc_select")
-            fc_article = session.query(Article).get(fc_options[fc_selected])
+            fc_article = session.get(Article, fc_options[fc_selected])
 
             if fc_article:
                 st.markdown(f"**標題：** {fc_article.title}")
@@ -703,7 +703,7 @@ meta_description: {draft.meta_description}
                     for a in strat_articles
                 }
                 strat_selected = st.selectbox("選擇文章", list(strat_options.keys()), key="strat_article_select")
-                _strat_article = session.query(Article).get(strat_options[strat_selected])
+                _strat_article = session.get(Article, strat_options[strat_selected])
                 if _strat_article:
                     _strat_keyword = _strat_article.primary_keyword or ""
                     _strat_secondary = [

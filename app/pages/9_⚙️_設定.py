@@ -1,6 +1,7 @@
 """⚙️ 設定 — Excel 匯入、API 狀態、系統設定"""
 
 import sys
+import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -55,7 +56,9 @@ if uploaded_file:
 
     if st.button("🚀 開始匯入", type="primary"):
         # 暫存上傳檔案
-        tmp_path = Path("/tmp") / uploaded_file.name
+        suffix = Path(uploaded_file.name).suffix or ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_path = Path(tmp_file.name)
         tmp_path.write_bytes(uploaded_file.getvalue())
 
         with st.spinner("正在匯入 Excel 資料至資料庫..."):

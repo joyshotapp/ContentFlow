@@ -27,6 +27,7 @@ def _chat(client: OpenAI, system: str, user: str, temperature: float = 0.7) -> s
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        temperature=temperature,
         max_completion_tokens=4096,
     )
     return resp.choices[0].message.content or ""
