@@ -28,6 +28,7 @@ data/*.db
 data/*.sqlite
 
 # 輸出檔案（自動生成）
+output/
 outputs/
 
 # IDE

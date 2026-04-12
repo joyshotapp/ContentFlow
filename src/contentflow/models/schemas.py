@@ -111,6 +111,10 @@ class ArticleDraft(BaseModel):
     meta_description: str = ""
     content_markdown: str = ""
     word_count: int = 0
+    slug: str = ""                       # SEO URL slug（英文連字號，如 bone-spur-causes）
+    faq_schema_json: str = ""            # FAQPage JSON-LD structured data（貼入 <head>）
+    article_schema_json: str = ""        # Article/BlogPosting JSON-LD structured data
+    internal_link_suggestions: list[dict] = Field(default_factory=list)  # 內部連結建議
     fact_check_items: list[FactCheckItem] = Field(default_factory=list)
     image_prompts: list[str] = Field(default_factory=list)
     status: ArticleStatus = ArticleStatus.WRITING
