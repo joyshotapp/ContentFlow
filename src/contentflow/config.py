@@ -54,5 +54,19 @@ class Settings(BaseSettings):
     output_dir: str = Field(default="./outputs", alias="OUTPUT_DIR")
     max_articles_per_run: int = Field(default=5, alias="MAX_ARTICLES_PER_RUN")
 
+    # API 認證
+    api_secret_key: str = Field(default="", alias="API_SECRET_KEY")
+
+    # ForgeBase
+    forgebase_api_base_url: str = Field(default="", alias="FORGEBASE_API_BASE_URL")
+    forgebase_api_token: str = Field(default="", alias="FORGEBASE_API_TOKEN")
+
+    # 排程
+    scheduler_enabled: bool = Field(default=False, alias="SCHEDULER_ENABLED")
+    scheduler_timezone: str = Field(default="Asia/Taipei", alias="SCHEDULER_TIMEZONE")
+
+    # 通知（可選）
+    slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
+
 
 settings = Settings()

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -274,15 +275,18 @@ class SEORanking(Base):
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
     keyword = Column(String, default="")
-    rank = Column(Integer, nullable=True)
+    position = Column(Float, nullable=True)          # GSC average position（取代舊 rank）
     landing_page = Column(String, default="")
     search_engine = Column(String, default="Google")
-    tracked_date = Column(String, default="")
+    tracked_date = Column(Date, nullable=True)        # 原先為 String，改為 Date
+    impressions = Column(Integer, nullable=True)     # GSC 曝光次數
+    clicks = Column(Integer, nullable=True)          # GSC 點斓次數
+    ctr = Column(Float, nullable=True)               # GSC 點斓率
 
     project = relationship("Project", back_populates="seo_rankings")
 
     def __repr__(self):
-        return f"<SEORanking '{self.keyword}' #{self.rank}>"
+        return f"<SEORanking '{self.keyword}' pos={self.position}>"
 
 
 # ── 分類規劃、關鍵字配置 ─────────────────────────────────────
@@ -323,3 +327,100 @@ class Changelog(Base):
 
     def __repr__(self):
         return f"<Changelog '{self.filename}'>"
+
+
+# ── Agent 決策日誌 ──────────────────────────────────────────────────
+
+class AgentDecisionLog(Base):
+    __tablename__ = "agent_decision_logs"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True, index=True)
+    run_id = Column(String, nullable=False, index=True)  # UUID
+    step = Column(String, nullable=False)         # research / strategy / seo_check / ...
+    decision = Column(Text, default="")           # 決策描述
+    reason = Column(Text, default="")             # 理由
+    confidence = Column(String, default="")       # data / heuristic / rule / verified
+    metadata_json = Column(Text, default="{}")   # 額外資訊（JSON）
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<AgentDecisionLog run={self.run_id[:8]} step={self.step}>"
+
+
+# ── 知識庫條目 ────────────────────────────────────────────────────
+
+class KnowledgeEntry(Base):
+    __tablename__ = "knowledge_entries"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    category = Column(String, nullable=False)     # format_pattern / keyword_strategy / ...
+    pattern = Column(Text, nullable=False)         # 學到的模式描述
+    evidence_count = Column(Integer, default=0)   # 支持數據筆數
+    confidence_level = Column(String, default="unverified")  # unverified / verified / universal
+    metadata_json = Column(Text, default="{}")   # 統計數據（JSON）
+    is_active = Column(Boolean, default=True)     # 人工可停用
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<KnowledgeEntry [{self.category}] {self.confidence_level}>"
+
+
+# ── 排程执行日誌 ────────────────────────────────────────────────────
+
+class SchedulerLog(Base):
+    __tablename__ = "scheduler_logs"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String, nullable=False, index=True)  # APScheduler job ID
+    job_name = Column(String, nullable=False)
+    status = Column(String, nullable=False)       # success / failed / retrying
+    retry_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<SchedulerLog job={self.job_name} status={self.status}>"
+
+
+# ── Topic Cluster 主題叢集 ──────────────────────────────────────────────
+
+class TopicCluster(Base):
+    __tablename__ = "topic_clusters"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    pillar_keyword = Column(String, nullable=False)         # 支柱關鍵字
+    pillar_title = Column(String, default="")               # 支柱頁建議標題
+    pillar_article_id = Column(Integer, ForeignKey("articles.id"), nullable=True)
+    status = Column(String, default="building")             # planned / building / complete
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    members = relationship("ClusterMember", back_populates="cluster")
+
+    def __repr__(self):
+        return f"<TopicCluster pillar='{self.pillar_keyword}' status={self.status}>"
+
+
+class ClusterMember(Base):
+    """叢集成員（衛星文章）"""
+    __tablename__ = "cluster_members"
+
+    id = Column(Integer, primary_key=True)
+    cluster_id = Column(Integer, ForeignKey("topic_clusters.id"), nullable=False, index=True)
+    keyword = Column(String, nullable=False)                # 衛星關鍵字
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True)  # null = 尚未撰寫
+    link_to_pillar = Column(Boolean, default=False)         # 是否已含連回 Pillar 的連結
+
+    cluster = relationship("TopicCluster", back_populates="members")
+
+    def __repr__(self):
+        return f"<ClusterMember cluster={self.cluster_id} kw='{self.keyword}'>"

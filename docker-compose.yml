@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: contentflow
+      POSTGRES_USER: contentflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contentflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: uvicorn contentflow.api:app --host 0.0.0.0 --port 8000 --reload
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+
+  ui:
+    build: .
+    restart: unless-stopped
+    command: streamlit run app/Home.py --server.port 8501 --server.address 0.0.0.0
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src:/app/src
+      - ./app:/app/app
+      - ./data:/app/data
+
+volumes:
+  pgdata:

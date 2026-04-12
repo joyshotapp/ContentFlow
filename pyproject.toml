@@ -23,9 +23,25 @@ dependencies = [
     "aiohttp>=3.10.0",
     "requests>=2.32.0",
 
+    # API 層
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+
+    # 排程
+    "apscheduler>=3.10.0",
+
     # 資料儲存
     "sqlalchemy>=2.0.0",
     "aiosqlite>=0.20.0",
+    "asyncpg>=0.30.0",
+    "psycopg2-binary>=2.9.0",
+    "alembic>=1.13.0",
+
+    # 向量資料庫（RAG / 學習層 Phase 3）
+    "chromadb>=0.5.0",
+
+    # Markdown 轉換
+    "markdown>=3.7",
 
     # 環境設定
     "python-dotenv>=1.0.0",
@@ -42,6 +58,7 @@ dependencies = [
     "google-api-python-client>=2.140.0",
     "google-auth-httplib2>=0.2.0",
     "google-auth-oauthlib>=1.2.0",
+    "google-analytics-data>=0.18.0",
 
     # 審核介面
     "streamlit>=1.38.0",

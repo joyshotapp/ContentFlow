@@ -118,6 +118,7 @@ class ArticleDraft(BaseModel):
     fact_check_items: list[FactCheckItem] = Field(default_factory=list)
     image_prompts: list[str] = Field(default_factory=list)
     status: ArticleStatus = ArticleStatus.WRITING
+    seo_score: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

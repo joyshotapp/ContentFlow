@@ -62,8 +62,19 @@ async def test_orchestrator_uses_current_agent_signatures(monkeypatch):
         captured["seo_qa"] = kwargs
         return kwargs["draft"]
 
+    # 新的 SEO 閘門行為：第一次 72（觸發 seo_qa），第二次 90（通過）
+    seo_call_count = {"n": 0}
+
     def fake_seo_check_agent(**kwargs):
+        seo_call_count["n"] += 1
         captured["seo_check"] = kwargs
+        if seo_call_count["n"] == 1:
+            return {
+                "score": 72,
+                "passed_count": 7,
+                "total_count": 10,
+                "checks": [{"id": "h1_kw", "passed": False, "message": "H1 缺主關鍵字"}],
+            }
         return {"score": 90, "passed_count": 9, "total_count": 10, "checks": []}
 
     async def fake_factcheck_agent(**kwargs):
@@ -90,6 +101,9 @@ async def test_orchestrator_uses_current_agent_signatures(monkeypatch):
     assert captured["strategy"]["project_id"] == 7
     assert captured["writing"]["report"].article_title == "Python asyncio"
     assert captured["writing"]["project_id"] == 7
+    # seo_qa 應被觸發（首次 seo_check 分數 72 < 85）
     assert captured["seo_qa"]["report"].article_title == "Python asyncio"
     assert captured["seo_check"]["draft"].title == "測試文章"
     assert captured["factcheck"]["article_type"] == "educational"
+    # seo_check 應被呼叫兩次（初檢 72 + 修正後 90）
+    assert seo_call_count["n"] == 2
