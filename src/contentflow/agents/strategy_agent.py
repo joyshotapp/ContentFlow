@@ -137,6 +137,20 @@ async def run_strategy_agent(
             if q not in all_paa:
                 all_paa.append(q)
 
+    # ── Step 1.5: 查詢知識庫（KB）注入學習成果 ──────────────
+    kb_context = ""
+    if project_id is not None:
+        try:
+            from ..tools.knowledge_base import query_kb, format_kb_context
+            from ..db import SessionLocal
+            with SessionLocal() as _kb_sess:
+                kb_results = query_kb(project_id, keyword, top_k=5, session=_kb_sess)
+            kb_context = format_kb_context(kb_results, keyword)
+            if kb_context:
+                logger.info(f"[Strategy Agent] 注入 {len(kb_results)} 條 KB 知識")
+        except Exception as _kb_err:
+            logger.debug(f"[Strategy Agent] KB 查詢略過：{_kb_err}")
+
     # ── Step 2: GPT 策略分析 ──────────────────────────────────
     logger.info("[Strategy Agent] Step 1/1 — GPT 策略分析...")
 
@@ -203,7 +217,7 @@ async def run_strategy_agent(
 以下是 Google SERP 實際搜尋結果：
 
 {serp_summary}{paa_info}{brand_info}
-
+{kb_context}
 請根據以上資料，產出完整的 SEO 策略分析報告（JSON 格式）。"""
 
     raw = _chat(client, system, user)

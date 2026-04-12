@@ -366,8 +366,30 @@ class KnowledgeEntry(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
+    audit_logs = relationship("KnowledgeAuditLog", back_populates="entry",
+                              cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<KnowledgeEntry [{self.category}] {self.confidence_level}>"
+
+
+class KnowledgeAuditLog(Base):
+    """CF-05-08: 人工覆核軌跡 — 記錄知識條目被人工修改 / 停用 / 推翻的歷史"""
+    __tablename__ = "knowledge_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    entry_id = Column(Integer, ForeignKey("knowledge_entries.id"), nullable=False, index=True)
+    action = Column(String, nullable=False)         # deactivate / reactivate / override / note
+    reason = Column(Text, nullable=True)            # 人工填寫的理由
+    old_value = Column(Text, nullable=True)         # 修改前的值（JSON）
+    new_value = Column(Text, nullable=True)         # 修改後的值（JSON）
+    operator = Column(String, default="human")      # 操作者（human / system）
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    entry = relationship("KnowledgeEntry", back_populates="audit_logs")
+
+    def __repr__(self):
+        return f"<KnowledgeAuditLog entry={self.entry_id} action={self.action}>"
 
 
 # ── 排程执行日誌 ────────────────────────────────────────────────────

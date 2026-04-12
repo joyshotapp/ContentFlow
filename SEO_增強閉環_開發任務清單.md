@@ -87,15 +87,15 @@
 
 ## 5. 學習層與 RAG
 
-- [ ] CF-05-01 建立 L1 成功模式分析器。完成定義：可產出 pattern + evidence_count。
-- [ ] CF-05-02 建立 KnowledgeEntry 寫入邏輯。完成定義：可寫入 unverified / verified / universal。
-- [ ] CF-05-03 建立 ChromaDB collection 與 embedding pipeline。完成定義：新知識寫入後可被查回。
-- [ ] CF-05-04 建立 KB query adapter。完成定義：Strategy Agent 可按 project_id + universal 規則查詢。
-- [ ] CF-05-05 實作 L1 學習成果注入 prompt。完成定義：Agent prompt 含 top-k 知識摘要。
-- [ ] CF-05-06 建立 L2 ROI 分析。完成定義：可輸出高 ROI keyword / 低 ROI keyword 建議。
-- [ ] CF-05-07 建立 Streamlit 知識庫管理頁。完成定義：可查看、停用、人工推翻知識條目。
-- [ ] CF-05-08 建立人工覆核軌跡。完成定義：知識被人工推翻時有 audit log。
-- [ ] CF-05-09 建立 Phase Gate F。完成定義：同類 keyword 新文會實際讀取 KB 並影響策略選擇。
+- [x] CF-05-01 建立 L1 成功模式分析器。完成定義：可產出 pattern + evidence_count。
+- [x] CF-05-02 建立 KnowledgeEntry 寫入邏輯。完成定義：可寫入 unverified / verified / universal。
+- [x] CF-05-03 建立 ChromaDB collection 與 embedding pipeline。完成定義：新知識寫入後可被查回。
+- [x] CF-05-04 建立 KB query adapter。完成定義：Strategy Agent 可按 project_id + universal 規則查詢。
+- [x] CF-05-05 實作 L1 學習成果注入 prompt。完成定義：Agent prompt 含 top-k 知識摘要。
+- [x] CF-05-06 建立 L2 ROI 分析。完成定義：可輸出高 ROI keyword / 低 ROI keyword 建議。
+- [x] CF-05-07 建立 Streamlit 知識庫管理頁。完成定義：可查看、停用、人工推翻知識條目。
+- [x] CF-05-08 建立人工覆核軌跡。完成定義：知識被人工推翻時有 audit log。
+- [x] CF-05-09 建立 Phase Gate F。完成定義：同類 keyword 新文會實際讀取 KB 並影響策略選擇。
 
 ---
 
