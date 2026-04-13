@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from loguru import logger
 from pathlib import Path
 from sqlalchemy import func, desc
 
@@ -41,8 +42,11 @@ from contentflow.db import SessionLocal
 from contentflow.models.database import (
     Article,
     AgentDecisionLog,
+    Author,
     ContentCalendar,
     Competitor,
+    CompetitorSnapshot,
+    GAPageMetric,
     KnowledgeEntry,
     KnowledgeAuditLog,
     Keyword,
@@ -77,6 +81,24 @@ def _db():
 
 def _check_login(request: Request) -> bool:
     return bool(request.session.get("admin_logged_in"))
+
+
+def _get_env_var_status() -> list:
+    """回傳各整合功能的環境變數設定狀況。"""
+    from types import SimpleNamespace as _SN
+    checks = [
+        ("OPENAI_API_KEY",       "OpenAI LLM（寫作 / 研究）",            bool(settings.openai_api_key if hasattr(settings, 'openai_api_key') else None)),
+        ("GOOGLE_API_KEY",       "Google Gemini LLM",                    bool(settings.google_api_key if hasattr(settings, 'google_api_key') else None)),
+        ("SERPER_API_KEY",       "Serper.dev SERP 搜尋",                  bool(settings.serper_api_key if hasattr(settings, 'serper_api_key') else None)),
+        ("SERPAPI_KEY",          "SerpAPI 搜尋（備用）",                   bool(settings.serpapi_key if hasattr(settings, 'serpapi_key') else None)),
+        ("GSC_SITE_URL",         "Google Search Console",                 bool(settings.gsc_site_url if hasattr(settings, 'gsc_site_url') else None)),
+        ("GA4_PROPERTY_ID",      "Google Analytics 4",                    bool(settings.ga4_property_id if hasattr(settings, 'ga4_property_id') else None)),
+        ("WP_API_URL",           "WordPress 自動發佈",                     bool(settings.wp_api_url if hasattr(settings, 'wp_api_url') else None)),
+        ("FORGEBASE_URL",        "ForgeBase 發佈",                        bool(settings.forgebase_url if hasattr(settings, 'forgebase_url') else None)),
+        ("SLACK_WEBHOOK_URL",    "Slack 告警通知",                        bool(settings.slack_webhook_url if hasattr(settings, 'slack_webhook_url') else None)),
+        ("DATABASE_URL",         "PostgreSQL 資料庫",                    True),  # if app is running, DB is connected
+    ]
+    return [_SN(name=name, description=desc, set=status) for name, desc, status in checks]
 
 
 # ── Label / color maps ────────────────────────────────────────
@@ -397,6 +419,14 @@ async def article_detail(request: Request, article_id: int):
             "PIPELINE_STEPS": PIPELINE_STEPS,
             "STATUS_LABELS": STATUS_LABELS, "STATUS_COLORS": STATUS_COLORS,
             "CONFIDENCE_LABELS": CONFIDENCE_LABELS, "CONFIDENCE_COLORS": CONFIDENCE_COLORS,
+            # Internal link suggestions from AI
+            "internal_links": json.loads(article.suggested_internal_links or "[]"),
+            # Authors for E-E-A-T assignment
+            "authors": db.query(Author).filter(Author.project_id == article.project_id).order_by(Author.name).all(),
+            # Fact-check issues parsed from JSON
+            "fact_issues": json.loads(article.factcheck_flags_json) if article.factcheck_flags_json and article.factcheck_flags_json.strip() else [],
+            # PAA questions for FAQ content ideas
+            "paa_questions": json.loads(article.paa_questions_json or "[]"),
             "now": datetime.now(timezone.utc),
         })
     finally:
@@ -412,6 +442,131 @@ async def update_article_status(request: Request, article_id: int, status: str =
         art = db.query(Article).filter(Article.id == article_id).first()
         if art:
             art.status = status
+            art.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        return RedirectResponse(f"/admin/articles/{article_id}", status_code=303)
+    finally:
+        db.close()
+
+
+@admin_app.post("/articles/{article_id}/save")
+async def save_article(request: Request, article_id: int):
+    """儲存文章內容（Markdown + meta 欄位）。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    data = await request.json()
+    db = _db()
+    try:
+        art = db.query(Article).filter(Article.id == article_id).first()
+        if not art:
+            raise HTTPException(status_code=404)
+        if "draft_content" in data:
+            art.draft_content = data["draft_content"]
+        if "meta_title" in data:
+            art.meta_title = data["meta_title"]
+        if "meta_description" in data:
+            art.meta_description = data["meta_description"]
+        if "slug" in data:
+            art.slug = data["slug"]
+        if "title" in data:
+            art.title = data["title"]
+        art.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return JSONResponse({"ok": True, "message": "已儲存"})
+    finally:
+        db.close()
+
+
+@admin_app.post("/articles/{article_id}/publish-wp")
+async def publish_to_wordpress(request: Request, article_id: int):
+    """發布文章到 WordPress（建立草稿或更新既有文章）。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        art = db.query(Article).filter(Article.id == article_id).first()
+        if not art:
+            raise HTTPException(status_code=404)
+        if not art.draft_content:
+            return JSONResponse({"ok": False, "error": "文章尚無內容，無法發布"}, status_code=400)
+
+        from contentflow.publishers.wordpress import WordPressPublisher
+        from contentflow.models.schemas import ArticleDraft
+
+        draft = ArticleDraft(
+            title=art.title,
+            meta_title=art.meta_title or art.title,
+            meta_description=art.meta_description or "",
+            content_markdown=art.draft_content,
+            slug=art.slug or "",
+            faq_schema_json=art.faq_schema_json or "",
+            article_schema_json=art.article_schema_json or "",
+        )
+
+        wp = WordPressPublisher()
+        result = await wp.publish_draft(draft)
+
+        if result.success:
+            art.publish_url = result.publish_url or ""
+            art.status = "published"
+            art.publish_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            art.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            # Async: trigger Google Indexing API for faster crawl
+            if art.publish_url:
+                asyncio.create_task(_submit_to_google_indexing(art.publish_url))
+            return JSONResponse({"ok": True, "post_id": result.post_id, "url": result.publish_url})
+        else:
+            return JSONResponse({"ok": False, "error": result.error}, status_code=502)
+    finally:
+        db.close()
+
+
+async def _submit_to_google_indexing(url: str) -> None:
+    """Submit a URL to Google Indexing API for faster crawling (Phase 5 §7.3)."""
+    try:
+        import httpx
+        from contentflow.config import settings
+        service_account_path = getattr(settings, "google_service_account_json", None)
+        if not service_account_path:
+            return
+        try:
+            import google.oauth2.service_account as _sa
+            import google.auth.transport.requests as _gtr
+            creds = _sa.Credentials.from_service_account_file(
+                service_account_path,
+                scopes=["https://www.googleapis.com/auth/indexing"],
+            )
+            auth_req = _gtr.Request()
+            creds.refresh(auth_req)
+            token = creds.token
+        except Exception as e:
+            logger.warning(f"[Indexing API] 憑證讀取失敗: {e}")
+            return
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://indexing.googleapis.com/v3/urlNotifications:publish",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"url": url, "type": "URL_UPDATED"},
+            )
+            if resp.status_code == 200:
+                logger.info(f"[Indexing API] 已提交: {url}")
+            else:
+                logger.warning(f"[Indexing API] 失敗 {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[Indexing API] 例外: {e}")
+
+
+@admin_app.post("/articles/{article_id}/set-author")
+async def set_article_author(request: Request, article_id: int, author_id: int = Form(0)):
+    """設定文章作者（E-E-A-T）。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        art = db.query(Article).filter(Article.id == article_id).first()
+        if art:
+            art.author_id = author_id if author_id else None
             art.updated_at = datetime.now(timezone.utc)
             db.commit()
         return RedirectResponse(f"/admin/articles/{article_id}", status_code=303)
@@ -500,12 +655,76 @@ async def calendar_page(request: Request, month: int = 0):
         db.close()
 
 
+@admin_app.post("/calendar/new")
+async def create_calendar_entry(
+    request: Request,
+    project_id: int = Form(0),
+    title: str = Form(...),
+    month: str = Form(""),
+    week: int = Form(1),
+    article_type: str = Form("知識"),
+    keywords: str = Form(""),
+    search_intent: str = Form(""),
+    target_audience: str = Form(""),
+    writing_architecture: str = Form("倒三角"),
+    faq_questions: str = Form(""),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    # Parse month: accept "YYYY-MM" (from <input type="month">) or plain int string "4"
+    now = datetime.now(timezone.utc)
+    try:
+        if "-" in month:
+            month_int = int(month.split("-")[1])
+        else:
+            month_int = int(month) if month else now.month
+        month_int = max(1, min(12, month_int))
+    except (ValueError, IndexError):
+        month_int = now.month
+    db = _db()
+    try:
+        entry = ContentCalendar(
+            project_id=project_id or None,
+            title=title.strip(),
+            month=month_int,
+            week=week,
+            article_type=article_type,
+            keywords=keywords.strip(),
+            search_intent=search_intent.strip(),
+            target_audience=target_audience.strip(),
+            writing_architecture=writing_architecture,
+            faq_questions=faq_questions.strip(),
+            status="planned",
+        )
+        db.add(entry)
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(f"/admin/calendar?month={month_int}", status_code=303)
+
+
+@admin_app.post("/calendar/{entry_id}/delete")
+async def delete_calendar_entry(request: Request, entry_id: int, month: int = Form(0)):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        entry = db.query(ContentCalendar).filter(ContentCalendar.id == entry_id).first()
+        if entry:
+            month = month or entry.month or 0
+            db.delete(entry)
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(f"/admin/calendar?month={month}", status_code=303)
+
+
 # ═══════════════════════════════════════════════════════════════
 # KEYWORDS  /keywords
 # ═══════════════════════════════════════════════════════════════
 
 @admin_app.get("/keywords", response_class=HTMLResponse)
-async def keywords_page(request: Request, q: str = "", sort: str = "volume"):
+async def keywords_page(request: Request, q: str = "", sort: str = "volume", intent_filter: str = "", funnel_filter: str = ""):
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
     db = _db()
@@ -513,6 +732,10 @@ async def keywords_page(request: Request, q: str = "", sort: str = "volume"):
         query = db.query(Keyword)
         if q:
             query = query.filter(Keyword.keyword.ilike(f"%{q}%"))
+        if intent_filter:
+            query = query.filter(Keyword.intent == intent_filter)
+        if funnel_filter:
+            query = query.filter(Keyword.funnel_stage == funnel_filter)
         if sort == "difficulty":
             query = query.order_by(desc(Keyword.seo_difficulty))
         elif sort == "cpc":
@@ -543,6 +766,7 @@ async def keywords_page(request: Request, q: str = "", sort: str = "volume"):
         return templates.TemplateResponse(request, "keywords.html", {
             "request": request, "page": "keywords",
             "keywords": kws, "q": q, "search_q": q, "sort": sort,
+            "intent_filter": intent_filter, "funnel_filter": funnel_filter,
             "total": total, "total_kw": total,
             "avg_volume": avg_vol, "avg_difficulty": avg_diff,
             "high_value_count": high_vol,
@@ -552,6 +776,221 @@ async def keywords_page(request: Request, q: str = "", sort: str = "volume"):
         })
     finally:
         db.close()
+
+
+@admin_app.post("/keywords/new")
+async def create_keyword(
+    request: Request,
+    project_id: int = Form(0),
+    keyword: str = Form(...),
+    search_volume: float = Form(0),
+    seo_difficulty: float = Form(0),
+    intent: str = Form(""),
+    funnel_stage: str = Form(""),
+    steve_note: str = Form(""),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        db.add(Keyword(
+            project_id=project_id or None,
+            keyword=keyword.strip(),
+            search_volume=search_volume or 0,
+            seo_difficulty=seo_difficulty or 0,
+            intent=intent or None,
+            funnel_stage=funnel_stage or None,
+            steve_note=steve_note.strip(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/keywords", status_code=303)
+
+
+@admin_app.post("/keywords/{kw_id}/delete")
+async def delete_keyword(request: Request, kw_id: int):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        kw = db.get(Keyword, kw_id)
+        if kw:
+            db.delete(kw)
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/keywords", status_code=303)
+
+
+@admin_app.post("/keywords/{kw_id}/intent")
+async def update_keyword_intent(request: Request, kw_id: int, intent: str = Form("")):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        kw = db.get(Keyword, kw_id)
+        if kw:
+            kw.intent = intent or None
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/keywords", status_code=303)
+
+
+@admin_app.post("/keywords/{kw_id}/funnel")
+async def update_keyword_funnel(request: Request, kw_id: int, funnel_stage: str = Form("")):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        kw = db.get(Keyword, kw_id)
+        if kw:
+            kw.funnel_stage = funnel_stage or None
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/keywords", status_code=303)
+
+
+@admin_app.post("/keywords/suggest", response_class=JSONResponse)
+async def suggest_keywords(
+    request: Request,
+    topic: str = Form(...),
+    project_id: int = Form(0),
+):
+    """
+    根據種子主題呼叫 Serper.dev，整合 PAA + 相關搜尋 + 競品標題，
+    用 LLM 標記搜尋意圖，回傳批次候選關鍵字供用戶勾選匯入。
+    """
+    if not _check_login(request):
+        return JSONResponse({"error": "未登入"}, status_code=403)
+
+    candidates: list[dict] = []
+    error_msg: str = ""
+
+    try:
+        from contentflow.tools.serp import search_serp
+        serp = await search_serp(topic, num_results=10)
+
+        seen: set[str] = set()
+
+        # 1) PAA 問題（最高品質：真實用戶搜尋意圖）
+        for paa in serp.people_also_ask:
+            q = paa.question.strip()
+            if q and q not in seen:
+                seen.add(q)
+                candidates.append({"keyword": q, "source": "PAA", "intent": ""})
+
+        # 2) 相關搜尋（Google 演算法認定的語意相關詞）
+        for rel in serp.related_searches:
+            kw = rel.strip() if isinstance(rel, str) else rel.get("query", "").strip()
+            if kw and kw not in seen and len(kw) >= 2:
+                seen.add(kw)
+                candidates.append({"keyword": kw, "source": "關聯搜尋", "intent": ""})
+
+        # 3) 競品前10名的標題（拆解為可能的關鍵字角度）
+        for result in serp.top_results[:5]:
+            title = result.title.strip()
+            if title and title not in seen:
+                seen.add(title)
+                candidates.append({"keyword": title, "source": "競品標題", "intent": ""})
+
+    except Exception as e:
+        error_msg = f"SERP 查詢失敗：{e}（請確認已設定 SERPER_API_KEY）"
+
+    # LLM 意圖標記（批次，若有 API key 則執行）
+    if candidates:
+        try:
+            from contentflow.tools.serp import search_serp  # noqa (already imported above if no error)
+            import openai
+            client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+            kw_list_text = "\n".join(
+                f"{i+1}. {c['keyword']}" for i, c in enumerate(candidates[:30])
+            )
+            resp = await client.chat.completions.create(
+                model=settings.llm_lite_model,
+                max_tokens=600,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "以下是一批中文 SEO 關鍵字候選，請為每個標記搜尋意圖。\n"
+                        "意圖只能選：informational / commercial / transactional / navigational\n"
+                        "回傳 JSON 陣列，格式：[{\"i\": 1, \"intent\": \"...\"}]\n"
+                        "不要說明，只輸出 JSON。\n\n"
+                        f"{kw_list_text}"
+                    )
+                }],
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Extract JSON array
+            import re as _re
+            m = _re.search(r'\[.*\]', raw, _re.DOTALL)
+            if m:
+                intent_data = json.loads(m.group())
+                intent_map = {d["i"]: d.get("intent", "") for d in intent_data if isinstance(d, dict)}
+                for i, c in enumerate(candidates[:30]):
+                    c["intent"] = intent_map.get(i + 1, "")
+        except Exception:
+            pass  # Intent tagging is best-effort; silently skip if LLM unavailable
+
+    # Check which keywords already exist in DB for this project
+    db = _db()
+    try:
+        existing = db.query(Keyword.keyword).filter(
+            Keyword.project_id == (project_id or None)
+        ).all()
+        existing_set = {row.keyword.strip().lower() for row in existing}
+        for c in candidates:
+            c["exists"] = c["keyword"].strip().lower() in existing_set
+    finally:
+        db.close()
+
+    return JSONResponse({
+        "topic": topic,
+        "candidates": candidates[:30],
+        "error": error_msg,
+        "total": len(candidates),
+    })
+
+
+@admin_app.post("/keywords/bulk-import")
+async def bulk_import_keywords(request: Request):
+    """批次匯入使用者勾選的關鍵字候選。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    body = await request.json()
+    keywords_data = body.get("keywords", [])
+    project_id = body.get("project_id", 0) or None
+
+    db = _db()
+    imported = 0
+    try:
+        for kw_item in keywords_data:
+            text = (kw_item.get("keyword") or "").strip()
+            if not text:
+                continue
+            # Skip duplicates
+            existing = db.query(Keyword).filter(
+                Keyword.project_id == project_id,
+                Keyword.keyword == text
+            ).first()
+            if existing:
+                continue
+            db.add(Keyword(
+                project_id=project_id,
+                keyword=text,
+                intent=kw_item.get("intent") or "",
+                funnel_stage="",
+                search_volume=0,
+                seo_difficulty=0,
+                steve_note=f"來源：{kw_item.get('source', 'AI 挖掘')}",
+            ))
+            imported += 1
+        db.commit()
+    finally:
+        db.close()
+    return JSONResponse({"imported": imported})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -610,6 +1049,52 @@ async def clusters_page(request: Request):
         })
     finally:
         db.close()
+
+
+@admin_app.post("/clusters/new")
+async def create_cluster(
+    request: Request,
+    project_id: int = Form(0),
+    pillar_keyword: str = Form(...),
+    pillar_title: str = Form(""),
+    satellite_keywords: str = Form(""),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        cluster = TopicCluster(
+            project_id=project_id or None,
+            pillar_keyword=pillar_keyword.strip(),
+            pillar_title=pillar_title.strip(),
+            status="building",
+        )
+        db.add(cluster)
+        db.flush()
+        # Add satellite keywords as ClusterMembers
+        for kw in [k.strip() for k in satellite_keywords.split("\n") if k.strip()]:
+            db.add(ClusterMember(cluster_id=cluster.id, keyword=kw))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/clusters", status_code=303)
+
+
+@admin_app.post("/clusters/{cluster_id}/delete")
+async def delete_cluster(request: Request, cluster_id: int):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        # Delete members first
+        db.query(ClusterMember).filter(ClusterMember.cluster_id == cluster_id).delete()
+        cluster = db.query(TopicCluster).filter(TopicCluster.id == cluster_id).first()
+        if cluster:
+            db.delete(cluster)
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse("/admin/clusters", status_code=303)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -685,9 +1170,83 @@ async def seo_page(request: Request, days: int = 30):
         avg_pos_overall = db.query(func.avg(SEORanking.position)).scalar() or 0
         avg_ctr_overall = db.query(func.avg(SEORanking.ctr)).scalar() or 0
 
+        # ── A-F 等級分布 ───────────────────────────────────────────
+        # 取最近一筆各 keyword 的 position + ctr
+        latest_subq = (
+            db.query(
+                SEORanking.keyword,
+                func.max(SEORanking.tracked_date).label("max_date"),
+            )
+            .group_by(SEORanking.keyword)
+            .subquery()
+        )
+        latest_rows = (
+            db.query(SEORanking.keyword, SEORanking.position, SEORanking.ctr)
+            .join(latest_subq, (SEORanking.keyword == latest_subq.c.keyword) & (SEORanking.tracked_date == latest_subq.c.max_date))
+            .all()
+        )
+        grade_counts = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
+        for row in latest_rows:
+            pos = row.position or 99
+            ctr = (row.ctr or 0)
+            if pos <= 3 and ctr > 0.08:
+                grade_counts["A"] += 1
+            elif pos <= 10:
+                grade_counts["B"] += 1
+            elif pos <= 20:
+                grade_counts["C"] += 1
+            elif pos <= 50:
+                grade_counts["D"] += 1
+            else:
+                grade_counts["F"] += 1
+
+        # ── 7 日排名變化（top keywords）──────────────────────────
+        cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).date()
+        enhanced_keywords = []
+        for kw in top_keywords:
+            # 7 天前的排名
+            prev_row = (
+                db.query(SEORanking.position)
+                .filter(SEORanking.keyword == kw.keyword, SEORanking.tracked_date <= cutoff_7d)
+                .order_by(desc(SEORanking.tracked_date))
+                .first()
+            )
+            prev_pos = float(prev_row[0]) if prev_row and prev_row[0] else None
+            curr_pos = float(kw.avg_position) if kw.avg_position else None
+            rank_delta = None
+            if prev_pos and curr_pos:
+                rank_delta = prev_pos - curr_pos  # 正 = 進步（排名數字變小）
+            enhanced_keywords.append(SimpleNamespace(
+                keyword=kw.keyword,
+                total_clicks=kw.total_clicks,
+                total_impressions=kw.total_impressions,
+                avg_position=curr_pos,
+                avg_ctr=kw.avg_ctr,
+                rank_delta=rank_delta,
+            ))
+
+        # ── 自蝕警告 ──────────────────────────────────────────────
+        from contentflow.models.database import KnowledgeEntry
+        cannibal_alerts = (
+            db.query(KnowledgeEntry)
+            .filter(KnowledgeEntry.category == "cannibalization")
+            .order_by(desc(KnowledgeEntry.created_at))
+            .limit(5)
+            .all()
+        )
+
+        # ── Refresh 待辦 ──────────────────────────────────────────
+        refresh_queue = (
+            db.query(KnowledgeEntry)
+            .filter(KnowledgeEntry.category == "refresh_priority")
+            .order_by(desc(KnowledgeEntry.evidence_count))
+            .limit(8)
+            .all()
+        )
+
         return templates.TemplateResponse(request, "seo.html", {
             "request": request, "page": "seo", "now": datetime.now(timezone.utc), "days": days,
-            "top_keywords": top_keywords, "opportunity_kws": opportunity_kws,
+            "top_keywords": enhanced_keywords, "opportunity_kws": opportunity_kws,
             "gsc_data": gsc_data, "gsc_trend": gsc_trend,
             "chart_labels":      json.dumps([str(d.tracked_date) if d.tracked_date else "" for d in daily]),
             "chart_clicks":      json.dumps([int(d.clicks or 0) for d in daily]),
@@ -698,6 +1257,10 @@ async def seo_page(request: Request, days: int = 30):
             "total_impressions": total_impressions_sum,
             "avg_position":      round(float(avg_pos_overall), 1) if avg_pos_overall else 0,
             "avg_ctr":           round(float(avg_ctr_overall), 4),
+            "grade_counts":      grade_counts,
+            "grade_json":        json.dumps(grade_counts),
+            "cannibal_alerts":   cannibal_alerts,
+            "refresh_queue":     refresh_queue,
         })
     finally:
         db.close()
@@ -708,21 +1271,105 @@ async def seo_page(request: Request, days: int = 30):
 # ═══════════════════════════════════════════════════════════════
 
 @admin_app.get("/competitors", response_class=HTMLResponse)
-async def competitors_page(request: Request):
+async def competitors_page(request: Request, project_id: int = 0):
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
     db = _db()
     try:
+        projects    = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
         competitors = db.query(Competitor).order_by(Competitor.brand_name).all()
         products    = db.query(Product).all()
+
+        # CompetitorSnapshot history – last 30 days, grouped per competitor
+        from datetime import date, timedelta
+        snapshot_cutoff = date.today() - timedelta(days=30)
+        snapshots_raw = (
+            db.query(CompetitorSnapshot)
+            .filter(
+                CompetitorSnapshot.project_id == project_id,
+                CompetitorSnapshot.tracked_date >= snapshot_cutoff,
+            )
+            .order_by(CompetitorSnapshot.competitor_id, CompetitorSnapshot.tracked_date)
+            .all()
+        )
+
+        # Build per-competitor snapshot summary: {competitor_id: {keyword: [(date, pos), ...]}}
+        from collections import defaultdict
+        snap_by_comp: dict[int, dict] = defaultdict(lambda: defaultdict(list))
+        for s in snapshots_raw:
+            if s.competitor_id and s.keyword:
+                snap_by_comp[s.competitor_id][s.keyword].append({
+                    "date": s.tracked_date.isoformat() if s.tracked_date else None,
+                    "pos": round(s.position, 1) if s.position else None,
+                    "our": round(s.our_position, 1) if s.our_position else None,
+                })
+
+        # Flatten for template: per competitor, pick top-3 most-tracked keywords
+        import json as _json
+        snap_chart_data = {}
+        for comp_id, kw_dict in snap_by_comp.items():
+            top_kws = sorted(kw_dict.items(), key=lambda x: -len(x[1]))[:3]
+            snap_chart_data[comp_id] = _json.dumps([
+                {"kw": kw, "points": pts} for kw, pts in top_kws
+            ])
+
         return templates.TemplateResponse(request, "competitors.html", {
             "request": request, "page": "competitors",
+            "projects": projects, "project_id": project_id,
             "competitors": competitors, "products": products,
             "total": len(competitors),
+            "snap_chart_data": snap_chart_data,
             "now": datetime.now(timezone.utc),
         })
     finally:
         db.close()
+
+
+@admin_app.post("/competitors/new")
+async def create_competitor(
+    request: Request,
+    project_id: int = Form(0),
+    brand_name: str = Form(...),
+    website: str = Form(""),
+    features: str = Form(""),
+    sells_products: str = Form(""),
+    recommendation: str = Form(""),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        db.add(Competitor(
+            project_id=project_id or None,
+            brand_name=brand_name.strip(),
+            website=website.strip(),
+            features=features.strip(),
+            sells_products=sells_products.strip(),
+            recommendation=recommendation.strip(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(f"/admin/competitors?project_id={project_id}", status_code=303)
+
+
+@admin_app.post("/competitors/{comp_id}/delete")
+async def delete_competitor(request: Request, comp_id: int, project_id: int = Form(0)):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        comp = db.query(Competitor).filter(Competitor.id == comp_id).first()
+        if comp:
+            project_id = project_id or comp.project_id or 0
+            db.delete(comp)
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(f"/admin/competitors?project_id={project_id}", status_code=303)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -888,7 +1535,9 @@ async def _background_pipeline(run_id: str, article_id: int, project_id: int | N
                     article2.meta_description = draft.meta_description
                     article2.slug = draft.slug
                     article2.faq_schema_json = draft.faq_schema_json
+                    article2.howto_schema_json = draft.howto_schema_json
                     article2.article_schema_json = draft.article_schema_json
+                    article2.paa_questions_json = draft.paa_questions_json
                     article2.seo_score = draft.seo_score or None
                 article2.status = result.status or "reviewing"
                 article2.updated_at = datetime.now(timezone.utc)
@@ -1013,6 +1662,42 @@ async def toggle_knowledge(request: Request, entry_id: int):
         db.close()
 
 
+@admin_app.post("/knowledge/{entry_id}/adopt")
+async def adopt_knowledge_as_writing_rule(request: Request, entry_id: int):
+    """L1 學習閉環：將 KnowledgeEntry (pattern) 採納為 WritingRule。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        entry = db.query(KnowledgeEntry).filter(KnowledgeEntry.id == entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404)
+        # Check if a rule with identical content already exists
+        existing = db.query(WritingRule).filter(
+            WritingRule.project_id == entry.project_id,
+            WritingRule.rule_content == entry.pattern,
+        ).first()
+        if not existing:
+            rule = WritingRule(
+                project_id=entry.project_id,
+                rule_type="style",
+                rule_content=entry.pattern,
+                source="knowledge_adoption",
+                is_active=True,
+            )
+            db.add(rule)
+            db.add(KnowledgeAuditLog(
+                entry_id=entry_id,
+                action="adopted_as_rule",
+                reason="Admin 採納為 WritingRule",
+                operator="human",
+            ))
+            db.commit()
+        return RedirectResponse("/admin/knowledge", status_code=303)
+    finally:
+        db.close()
+
+
 # ═══════════════════════════════════════════════════════════════
 # SCHEDULER  /scheduler
 # ═══════════════════════════════════════════════════════════════
@@ -1031,10 +1716,14 @@ async def scheduler_page(request: Request):
                 job_latest[log.job_id] = log
 
         known_jobs = [
-            {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00", "icon": "📊"},
-            {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30", "icon": "📈"},
-            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:00","icon": "🔍"},
-            {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00","icon": "🧮"},
+            {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00",    "icon": "📊"},
+            {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30",    "icon": "📈"},
+            {"id": "auto_pipeline",             "name": "自動 AI Pipeline", "schedule": "每日 08:00",    "icon": "🤖"},
+            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:00",  "icon": "🔍"},
+            {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00",  "icon": "🧮"},
+            {"id": "check_refresh_triggers",    "name": "內容更新檢查",    "schedule": "每週二 04:00",  "icon": "🔄"},
+            {"id": "l1_learn",                  "name": "L1 模式學習",      "schedule": "每月 1 號 06:00","icon": "🧠"},
+            {"id": "l2_learn",                  "name": "L2 ROI 分析",      "schedule": "每月 1 號 07:00","icon": "💰"},
         ]
         for j in known_jobs:
             j["latest"] = job_latest.get(j["id"])
@@ -1145,6 +1834,420 @@ async def health_page(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════
+# AUTHORS  /authors
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/authors", response_class=HTMLResponse)
+async def authors_page(request: Request, project_id: int = 0):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        projects = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
+        authors = (
+            db.query(Author)
+            .filter(Author.project_id == project_id)
+            .order_by(Author.name)
+            .all()
+        ) if project_id else []
+
+        # Article count per author
+        from sqlalchemy import func as _func
+        art_counts = {}
+        if project_id:
+            rows = (
+                db.query(Article.author_id, _func.count(Article.id).label("cnt"))
+                .filter(Article.project_id == project_id, Article.author_id.isnot(None))
+                .group_by(Article.author_id)
+                .all()
+            )
+            art_counts = {r.author_id: r.cnt for r in rows}
+
+        return templates.TemplateResponse(request, "authors.html", {
+            "request": request, "page": "authors",
+            "projects": projects, "project_id": project_id,
+            "authors": authors, "art_counts": art_counts,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+@admin_app.post("/authors/new", response_class=HTMLResponse)
+async def create_author(
+    request: Request,
+    project_id: int = Form(...),
+    name: str = Form(...),
+    title: str = Form(""),
+    bio: str = Form(""),
+    credentials: str = Form(""),
+    profile_url: str = Form(""),
+    is_medical_reviewer: bool = Form(False),
+):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        author = Author(
+            project_id=project_id,
+            name=name.strip(),
+            title=title.strip(),
+            bio=bio.strip(),
+            credentials=credentials.strip(),
+            profile_url=profile_url.strip(),
+            is_medical_reviewer=is_medical_reviewer,
+        )
+        db.add(author)
+        db.commit()
+        return RedirectResponse(f"/admin/authors?project_id={project_id}", status_code=303)
+    finally:
+        db.close()
+
+
+@admin_app.post("/authors/{author_id}/delete")
+async def delete_author(request: Request, author_id: int):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        author = db.query(Author).filter(Author.id == author_id).first()
+        project_id = author.project_id if author else 0
+        if author:
+            db.delete(author)
+            db.commit()
+        return RedirectResponse(f"/admin/authors?project_id={project_id}", status_code=303)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# CONTENT HEALTH  /content-health
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/content-health", response_class=HTMLResponse)
+async def content_health_page(request: Request, project_id: int = 0):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        from contentflow.agents.analytics_agent import CannibalizationDetector, RefreshTriggerChecker
+
+        projects = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
+        cannibal_pairs = []
+        refresh_recs = []
+        refresh_queue_items = []
+        stale_articles = []
+
+        if project_id:
+            try:
+                cannibal = CannibalizationDetector(db)
+                cannibal_pairs = cannibal.detect(project_id)
+            except Exception as e:
+                logger.warning(f"[ContentHealth] Cannibalization detect error: {e}")
+
+            try:
+                checker = RefreshTriggerChecker(db)
+                refresh_recs = checker.check_project(project_id)
+            except Exception as e:
+                logger.warning(f"[ContentHealth] RefreshTrigger error: {e}")
+
+            # 知識庫中的 refresh_priority 待辦
+            refresh_queue_items = (
+                db.query(KnowledgeEntry)
+                .filter(KnowledgeEntry.project_id == project_id, KnowledgeEntry.category == "refresh_priority")
+                .order_by(desc(KnowledgeEntry.evidence_count))
+                .limit(20)
+                .all()
+            )
+
+            # 超過 6 個月未更新的已發布文章
+            from datetime import date, timedelta
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(days=180)
+            stale_articles = (
+                db.query(Article)
+                .filter(
+                    Article.project_id == project_id,
+                    Article.status == "published",
+                    Article.updated_at < stale_cutoff,
+                )
+                .order_by(Article.updated_at)
+                .limit(20)
+                .all()
+            )
+
+        return templates.TemplateResponse(request, "content_health.html", {
+            "request": request, "page": "content-health",
+            "projects": projects, "project_id": project_id,
+            "cannibal_pairs": cannibal_pairs,
+            "refresh_recs": refresh_recs,
+            "refresh_queue_items": refresh_queue_items,
+            "stale_articles": stale_articles,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# TECH SEO  /tech-seo
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/tech-seo", response_class=HTMLResponse)
+async def tech_seo_page(request: Request, project_id: int = 0):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        projects = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
+        tech_issues = []
+        cwv_summary = {}
+        ga_metrics = []
+
+        if project_id:
+            project = db.get(Project, project_id)
+            # GA4 最新指標
+            from datetime import date
+            ga_metrics = (
+                db.query(GAPageMetric)
+                .filter(GAPageMetric.project_id == project_id)
+                .order_by(desc(GAPageMetric.tracked_date), desc(GAPageMetric.sessions))
+                .limit(20)
+                .all()
+            )
+
+            # 嘗試呼叫 TechSEO checker
+            if project and project.brand_url:
+                try:
+                    from contentflow.tools.tech_seo import TechSEOHealthDashboard
+                    dashboard = TechSEOHealthDashboard(project.brand_url)
+                    tech_report = await asyncio.get_event_loop().run_in_executor(None, dashboard.run_full_check)
+                    tech_issues = tech_report.get("issues", []) if isinstance(tech_report, dict) else []
+                    cwv_summary = tech_report.get("cwv", {}) if isinstance(tech_report, dict) else {}
+                except Exception as e:
+                    logger.warning(f"[TechSEO] check error: {e}")
+
+        # GSC 索引狀況
+        from datetime import date
+        cutoff_28 = (datetime.now(timezone.utc) - timedelta(days=28)).date()
+        pages_indexed = (
+            db.query(func.count(func.distinct(SEORanking.landing_page)))
+            .filter(SEORanking.project_id == project_id, SEORanking.tracked_date >= cutoff_28)
+            .scalar() or 0
+        ) if project_id else 0
+
+        return templates.TemplateResponse(request, "tech_seo.html", {
+            "request": request, "page": "tech-seo",
+            "projects": projects, "project_id": project_id,
+            "tech_issues": tech_issues,
+            "cwv_summary": cwv_summary,
+            "ga_metrics": ga_metrics,
+            "pages_indexed": pages_indexed,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# REPORTS CENTER  /reports
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/reports", response_class=HTMLResponse)
+async def reports_page(request: Request, project_id: int = 0, period: str = "weekly"):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        projects = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
+        report_data = {}
+
+        if project_id:
+            from datetime import date, timedelta
+            today = date.today()
+
+            if period == "weekly":
+                cutoff = today - timedelta(days=7)
+            elif period == "monthly":
+                cutoff = today - timedelta(days=30)
+            else:  # quarterly
+                cutoff = today - timedelta(days=90)
+
+            # 文章統計
+            articles_published = (
+                db.query(Article)
+                .filter(Article.project_id == project_id, Article.status == "published")
+                .count()
+            )
+            articles_new_period = (
+                db.query(Article)
+                .filter(Article.project_id == project_id, Article.status == "published",
+                        Article.updated_at >= datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=timezone.utc))
+                .count()
+            )
+
+            # SEO 指標
+            seo_metrics = db.query(
+                func.sum(SEORanking.clicks).label("total_clicks"),
+                func.sum(SEORanking.impressions).label("total_impressions"),
+                func.avg(SEORanking.position).label("avg_position"),
+                func.avg(SEORanking.ctr).label("avg_ctr"),
+            ).filter(
+                SEORanking.project_id == project_id,
+                SEORanking.tracked_date >= cutoff,
+            ).first()
+
+            # 熱門文章（by clicks）
+            top_articles = (
+                db.query(
+                    SEORanking.landing_page,
+                    func.sum(SEORanking.clicks).label("total_clicks"),
+                    func.sum(SEORanking.impressions).label("total_impressions"),
+                    func.avg(SEORanking.position).label("avg_position"),
+                )
+                .filter(SEORanking.project_id == project_id, SEORanking.tracked_date >= cutoff)
+                .group_by(SEORanking.landing_page)
+                .order_by(desc("total_clicks"))
+                .limit(10)
+                .all()
+            )
+
+            # 知識庫摘要
+            knowledge_count = db.query(KnowledgeEntry).filter(
+                KnowledgeEntry.project_id == project_id, KnowledgeEntry.is_active == True
+            ).count()
+
+            refresh_alerts = db.query(KnowledgeEntry).filter(
+                KnowledgeEntry.project_id == project_id, KnowledgeEntry.category == "refresh_priority"
+            ).count()
+
+            cannibal_alerts = db.query(KnowledgeEntry).filter(
+                KnowledgeEntry.project_id == project_id, KnowledgeEntry.category == "cannibalization"
+            ).count()
+
+            # ── CRO：GA4 轉換分析 ─────────────────────────────────
+            ga_metrics = db.query(
+                func.sum(GAPageMetric.sessions).label("total_sessions"),
+                func.sum(GAPageMetric.active_users).label("total_users"),
+                func.sum(GAPageMetric.conversions).label("total_conversions"),
+                func.avg(GAPageMetric.bounce_rate).label("avg_bounce_rate"),
+                func.avg(GAPageMetric.avg_engagement_time_sec).label("avg_engagement"),
+            ).filter(
+                GAPageMetric.project_id == project_id,
+                GAPageMetric.tracked_date >= cutoff,
+            ).first()
+
+            # Top 轉換頁面
+            top_conversion_pages = (
+                db.query(
+                    GAPageMetric.page_path,
+                    func.sum(GAPageMetric.sessions).label("sessions"),
+                    func.sum(GAPageMetric.conversions).label("conversions"),
+                    func.avg(GAPageMetric.bounce_rate).label("bounce_rate"),
+                )
+                .filter(GAPageMetric.project_id == project_id, GAPageMetric.tracked_date >= cutoff)
+                .group_by(GAPageMetric.page_path)
+                .order_by(desc("conversions"))
+                .limit(8)
+                .all()
+            )
+
+            # ── 核心演算法更新：排名掉落偵測 ──────────────────────
+            # 比對「本期」vs「前期」平均排名，找出掉落 >3 名的關鍵字
+            from datetime import date as _date
+            period_days = {"weekly": 7, "monthly": 30, "quarterly": 90}.get(period, 7)
+            prior_cutoff = cutoff - timedelta(days=period_days)
+
+            # 本期關鍵字平均排名
+            curr_ranks = {
+                row.keyword: row.avg_pos
+                for row in db.query(
+                    SEORanking.keyword,
+                    func.avg(SEORanking.position).label("avg_pos"),
+                ).filter(
+                    SEORanking.project_id == project_id,
+                    SEORanking.tracked_date >= cutoff,
+                ).group_by(SEORanking.keyword).all()
+            }
+
+            # 前期關鍵字平均排名
+            prev_ranks = {
+                row.keyword: row.avg_pos
+                for row in db.query(
+                    SEORanking.keyword,
+                    func.avg(SEORanking.position).label("avg_pos"),
+                ).filter(
+                    SEORanking.project_id == project_id,
+                    SEORanking.tracked_date >= prior_cutoff,
+                    SEORanking.tracked_date < cutoff,
+                ).group_by(SEORanking.keyword).all()
+            }
+
+            ranking_drops = []
+            for kw, curr_pos in curr_ranks.items():
+                if kw in prev_ranks and curr_pos and prev_ranks[kw]:
+                    delta = float(curr_pos) - float(prev_ranks[kw])  # 正數 = 排名退步
+                    if delta >= 3:
+                        ranking_drops.append({
+                            "keyword": kw,
+                            "prev_pos": round(float(prev_ranks[kw]), 1),
+                            "curr_pos": round(float(curr_pos), 1),
+                            "delta": round(delta, 1),
+                        })
+            ranking_drops.sort(key=lambda x: x["delta"], reverse=True)
+            ranking_drops = ranking_drops[:10]  # top 10 drops
+
+            report_data = {
+                "period": period,
+                "cutoff": cutoff,
+                "articles_published": articles_published,
+                "articles_new_period": articles_new_period,
+                "total_clicks": int(seo_metrics.total_clicks or 0),
+                "total_impressions": int(seo_metrics.total_impressions or 0),
+                "avg_position": round(float(seo_metrics.avg_position or 0), 1),
+                "avg_ctr": round(float(seo_metrics.avg_ctr or 0) * 100, 2),
+                "top_articles": top_articles,
+                "knowledge_count": knowledge_count,
+                "refresh_alerts": refresh_alerts,
+                "cannibal_alerts": cannibal_alerts,
+                # CRO
+                "total_sessions": int(ga_metrics.total_sessions or 0),
+                "total_users": int(ga_metrics.total_users or 0),
+                "total_conversions": int(ga_metrics.total_conversions or 0),
+                "avg_bounce_rate": round(float(ga_metrics.avg_bounce_rate or 0) * 100, 1),
+                "avg_engagement_sec": round(float(ga_metrics.avg_engagement or 0), 0),
+                "top_conversion_pages": top_conversion_pages,
+                "conversion_rate": round(
+                    int(ga_metrics.total_conversions or 0) /
+                    max(int(ga_metrics.total_sessions or 0), 1) * 100, 2
+                ),
+                # 排名掉落
+                "ranking_drops": ranking_drops,
+            }
+
+        return templates.TemplateResponse(request, "reports.html", {
+            "request": request, "page": "reports",
+            "projects": projects, "project_id": project_id,
+            "period": period,
+            "report_data": report_data,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
 # SETTINGS  /settings
 # ═══════════════════════════════════════════════════════════════
 
@@ -1161,12 +2264,22 @@ async def save_project(
     writing_principles: str = Form(""),
     serp_gl: str = Form("tw"),
     serp_hl: str = Form("zh-tw"),
+    business_goals: str = Form(""),
+    target_audience: str = Form(""),
+    ga4_property_id: str = Form(""),
 ):
     if not _check_login(request):
         raise HTTPException(status_code=403)
     db = _db()
     try:
+        import json as _json
         now = datetime.now(timezone.utc)
+        # Parse target_audience as JSON if it's a valid JSON string, otherwise store as plain text
+        try:
+            ta_json = _json.loads(target_audience) if target_audience.strip().startswith("{") else {"description": target_audience}
+        except Exception:
+            ta_json = {"description": target_audience}
+
         if project_id:
             proj = db.query(Project).filter(Project.id == project_id).first()
             if proj:
@@ -1175,6 +2288,9 @@ async def save_project(
                 proj.brand_description = brand_description; proj.industry = industry
                 proj.writing_principles = writing_principles
                 proj.serp_gl = serp_gl; proj.serp_hl = serp_hl
+                proj.business_goals = business_goals or None
+                proj.target_audience_json = _json.dumps(ta_json, ensure_ascii=False) if target_audience else None
+                proj.ga4_property_id = ga4_property_id or None
                 proj.updated_at = now
                 db.commit()
                 return RedirectResponse(f"/admin/settings?project_id={proj.id}&saved=1", status_code=303)
@@ -1186,6 +2302,9 @@ async def save_project(
                 writing_principles=writing_principles,
                 serp_gl=serp_gl, serp_hl=serp_hl,
                 locale="zh-tw",
+                business_goals=business_goals or None,
+                target_audience_json=_json.dumps(ta_json, ensure_ascii=False) if target_audience else None,
+                ga4_property_id=ga4_property_id or None,
                 created_at=now, updated_at=now,
             )
             db.add(proj); db.commit(); db.refresh(proj)
@@ -1225,9 +2344,16 @@ async def settings_page(request: Request, project_id: int = 0):
 
         return templates.TemplateResponse(request, "settings.html", {
             "request": request, "page": "settings",
-            "projects": projects, "current_project": current_project, "project_id": project_id,
+            "projects": projects,
+            "project": current_project,          # template expects 'project'
+            "current_project": current_project,
+            "project_id": project_id,
             "rules_by_type": rules_by_type, "strategy_by_section": strategy_by_section,
             "products": products, "legal_by_type": legal_by_type,
+            "content_strategy": list(strategy_by_section.values()),
+            "writing_rules": [r for rules in rules_by_type.values() for r in rules],
+            "legal_terms": [lt for lts in legal_by_type.values() for lt in lts],
+            "env_vars": _get_env_var_status(),
             "llm_writing_model": settings.llm_writing_model,
             "llm_lite_model": settings.llm_lite_model,
             "scheduler_enabled": settings.scheduler_enabled,

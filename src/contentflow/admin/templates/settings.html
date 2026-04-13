@@ -3,7 +3,80 @@
 {% block page_title %}專案設定{% endblock %}
 {% block page_subtitle %}{{ project.name if project else '尚未設定專案' }}{% endblock %}
 
+{% block topbar_actions %}
+<button onclick="document.getElementById('new-project-panel').classList.toggle('hidden')"
+  class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+  新增專案
+</button>
+{% endblock %}
+
 {% block content %}
+
+<!-- ── New Project Panel ──────────────────────────────────────── -->
+<div id="new-project-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
+  <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;">📁 新增專案</div>
+  <form method="post" action="/admin/settings/project/save">
+    <input type="hidden" name="project_id" value="0">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="form-group">
+        <label class="form-label">專案名稱 *</label>
+        <input class="form-input" type="text" name="name" placeholder="例：漢本骨科" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Slug *（英文小寫、連字號）</label>
+        <input class="form-input" type="text" name="slug" placeholder="例：hanben-clinic" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">品牌網址</label>
+        <input class="form-input" type="url" name="brand_url" placeholder="https://...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">品牌名稱</label>
+        <input class="form-input" type="text" name="brand_name" placeholder="例：漢本骨科診所">
+      </div>
+      <div class="form-group">
+        <label class="form-label">產業</label>
+        <input class="form-input" type="text" name="industry" placeholder="例：骨科醫療">
+      </div>
+      <div class="form-group">
+        <label class="form-label">搜尋地區</label>
+        <select class="form-input" name="serp_gl">
+          <option value="tw" selected>台灣 (tw)</option>
+          <option value="hk">香港 (hk)</option>
+          <option value="us">美國 (us)</option>
+          <option value="sg">新加坡 (sg)</option>
+        </select>
+      </div>
+    </div>
+    <input type="hidden" name="brand_description" value="">
+    <input type="hidden" name="writing_principles" value="">
+    <input type="hidden" name="business_goals" value="">
+    <input type="hidden" name="target_audience" value="">
+    <input type="hidden" name="ga4_property_id" value="">
+    <input type="hidden" name="serp_hl" value="zh-tw">
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button type="submit" class="btn btn-primary btn-sm">建立專案</button>
+      <button type="button" onclick="document.getElementById('new-project-panel').classList.add('hidden')" class="btn btn-ghost btn-sm">取消</button>
+    </div>
+  </form>
+</div>
+
+{% if projects | length > 1 %}
+<!-- ── Project switcher ──────────────────────────────────────── -->
+<div class="cf-card cf-card-p animate-up" style="margin-bottom:18px;">
+  <div style="font-size:11.5px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">切換專案</div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;">
+    {% for proj in projects %}
+    <a href="/admin/settings?project_id={{ proj.id }}"
+      style="padding:6px 14px;border-radius:99px;font-size:13px;font-weight:600;text-decoration:none;
+      {% if proj.id == project_id %}background:#6366f1;color:#fff;{% else %}background:#f1f5f9;color:#475569;{% endif %}">
+      {{ proj.name }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <!-- ── Tab bar ────────────────────────────────────────────────── -->
 <div x-data="{tab:'project'}" class="animate-up">

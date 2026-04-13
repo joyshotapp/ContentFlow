@@ -42,6 +42,11 @@ class Project(Base):
     serp_gl = Column(String, default="tw")
     serp_hl = Column(String, default="zh-tw")
 
+    # Phase 0 — 商業目標 & 受眾（SEO SOP §2）
+    business_goals = Column(Text, default="")          # 品牌知名度 / 導購 / 收集名單
+    target_audience_json = Column(Text, default="{}")  # JSON: persona_name, age_range, pain_points...
+    ga4_property_id = Column(String, default="")       # GA4 Property ID for this project
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -59,6 +64,9 @@ class Project(Base):
     seo_rankings = relationship("SEORanking", back_populates="project")
     category_seos = relationship("CategorySEO", back_populates="project")
     changelogs = relationship("Changelog", back_populates="project")
+    ga_page_metrics = relationship("GAPageMetric", back_populates="project")
+    competitor_snapshots = relationship("CompetitorSnapshot", back_populates="project")
+    authors = relationship("Author", back_populates="project")
 
     def __repr__(self):
         return f"<Project '{self.slug}' ({self.name})>"
@@ -79,6 +87,9 @@ class Keyword(Base):
     priority = Column(String, default="")        # "X" (低), "green_x" (中), "" (高)
     usage = Column(String, default="")
     steve_note = Column(Text, default="")
+    # Phase 2 — 搜尋意圖 & 漏斗階段（SEO SOP §4）
+    intent = Column(String, default="")          # informational / investigational / transactional / navigational
+    funnel_stage = Column(String, default="")    # awareness / consideration / decision
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -162,14 +173,26 @@ class Article(Base):
     meta_title = Column(String, default="")         # Meta Title
     meta_description = Column(Text, default="")     # Meta Description
     faq_schema_json = Column(Text, default="")      # FAQPage JSON-LD
+    howto_schema_json = Column(Text, default="")    # HowTo JSON-LD（步驟型文章）
     article_schema_json = Column(Text, default="")  # Article/BlogPosting JSON-LD
+    paa_questions_json = Column(Text, default="[]")  # People Also Ask 問題列表（持久化）
     seo_score = Column(Integer, nullable=True)      # 最近一次 SEO 檢查分數
+    # Phase 5/21 — E-E-A-T & 優化迭代
+    author_id = Column(Integer, ForeignKey("authors.id"), nullable=True)
+    eeat_score = Column(Integer, nullable=True)     # E-E-A-T 綜合評分 0-100
+    last_refresh_date = Column(DateTime, nullable=True)  # 最近一次 Content Refresh
+    factcheck_flags_json = Column(Text, default="[]")    # FactCheck 高風險標記
+    suggested_internal_links = Column(Text, default="[]")  # AI 建議的內部連結
+    scheduled_publish_at = Column(DateTime, nullable=True)  # 排程發布時間
+    wp_post_id = Column(String, default="")         # WordPress post ID
+    forgebase_id = Column(String, default="")       # ForgeBase page ID
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
     calendar_entry = relationship("ContentCalendar", back_populates="article", uselist=False)
     project = relationship("Project", back_populates="articles")
+    author = relationship("Author", back_populates="articles")
 
     def __repr__(self):
         return f"<Article #{self.seqno} '{self.title[:30]}'>"
@@ -226,6 +249,7 @@ class Competitor(Base):
     recommendation = Column(Text, default="")
 
     project = relationship("Project", back_populates="competitors")
+    snapshots = relationship("CompetitorSnapshot", back_populates="competitor")
 
     def __repr__(self):
         return f"<Competitor '{self.brand_name}'>"
@@ -412,6 +436,74 @@ class SchedulerLog(Base):
 
 
 # ── Topic Cluster 主題叢集 ──────────────────────────────────────────────
+
+# ── Author（E-E-A-T 作者管理，SEO SOP §21）───────────────────────────────────
+
+class Author(Base):
+    __tablename__ = "authors"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    title = Column(String, default="")            # 職稱，例：骨科物理治療師
+    bio = Column(Text, default="")
+    credentials = Column(Text, default="")        # 資格認證，例：台灣物理治療師執照
+    profile_url = Column(String, default="")      # 個人頁面 URL
+    photo_url = Column(String, default="")        # 大頭照
+    is_medical_reviewer = Column(Boolean, default=False)  # 是否為醫療審閱者
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="authors")
+    articles = relationship("Article", back_populates="author")
+
+    def __repr__(self):
+        return f"<Author '{self.name}' ({self.title})>"
+
+
+# ── GA4 頁面指標持久化（SEO SOP §16）──────────────────────────────────────────
+
+class GAPageMetric(Base):
+    __tablename__ = "ga_page_metrics"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    page_path = Column(String, nullable=False, index=True)
+    active_users = Column(Integer, default=0)
+    sessions = Column(Integer, default=0)
+    avg_engagement_time_sec = Column(Float, default=0.0)
+    bounce_rate = Column(Float, default=0.0)      # 0.0 ~ 1.0
+    conversions = Column(Integer, default=0)
+    tracked_date = Column(Date, nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="ga_page_metrics")
+
+    def __repr__(self):
+        return f"<GAPageMetric {self.page_path} {self.tracked_date}>"
+
+
+# ── 競品排名快照（SEO SOP §19）──────────────────────────────────────────────
+
+class CompetitorSnapshot(Base):
+    __tablename__ = "competitor_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    competitor_id = Column(Integer, ForeignKey("competitors.id"), nullable=True, index=True)
+    keyword = Column(String, nullable=False, index=True)
+    position = Column(Float, nullable=True)         # 競品在此關鍵字的排名
+    url = Column(String, default="")                # 競品的排名 URL
+    is_new_content = Column(Boolean, default=False) # 是否為本週新增文章
+    our_position = Column(Float, nullable=True)     # 我方在同關鍵字的排名（可 NULL）
+    tracked_date = Column(Date, nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="competitor_snapshots")
+    competitor = relationship("Competitor", back_populates="snapshots")
+
+    def __repr__(self):
+        return f"<CompetitorSnapshot kw='{self.keyword}' pos={self.position} {self.tracked_date}>"
+
 
 class TopicCluster(Base):
     __tablename__ = "topic_clusters"

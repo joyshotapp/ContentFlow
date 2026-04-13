@@ -298,7 +298,7 @@
 {% block scripts %}
 <script>
 (function() {
-  const sc = {{ status_counts }};
+  const sc = {{ status_counts | tojson }};
   const labels = { planned:'規劃中', researching:'研究中', writing:'撰寫中', reviewing:'審閱中', published:'已發佈' };
   const colors = { planned:'#94a3b8', researching:'#0ea5e9', writing:'#f59e0b', reviewing:'#8b5cf6', published:'#10b981' };
   const keys = Object.keys(sc).filter(k => sc[k] > 0);

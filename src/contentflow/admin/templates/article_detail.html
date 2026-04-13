@@ -10,7 +10,24 @@
 
 {% block topbar_actions %}
 <a href="/admin/articles" class="btn btn-ghost btn-sm">← 返回列表</a>
-{% if art.status == 'reviewing' %}
+
+<!-- Status transition buttons — visible based on current status -->
+{% if art.status == 'planned' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="researching">
+  <button type="submit" class="btn btn-primary btn-sm">🔬 開始研究</button>
+</form>
+{% elif art.status == 'researching' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="writing">
+  <button type="submit" class="btn btn-primary btn-sm">✍️ 進入撰寫</button>
+</form>
+{% elif art.status == 'writing' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="reviewing">
+  <button type="submit" class="btn btn-primary btn-sm">📋 送審</button>
+</form>
+{% elif art.status == 'reviewing' %}
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="published">
   <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈</button>
@@ -19,6 +36,10 @@
   <input type="hidden" name="status" value="writing">
   <button type="submit" class="btn btn-danger-ghost btn-sm">↩ 退回重寫</button>
 </form>
+{% endif %}
+
+{% if art.draft_content and art.status in ['reviewing', 'published'] %}
+<button onclick="publishToWP()" class="btn btn-sm" style="background:linear-gradient(135deg,#21759b,#0073aa);color:#fff;border:none;" id="btn-publish-wp">🌐 發布到 WordPress</button>
 {% endif %}
 {% endblock %}
 
@@ -30,30 +51,115 @@
   <div style="display:flex;flex-direction:column;gap:16px;">
 
     <!-- Draft content -->
-    <div class="cf-card cf-card-p animate-up">
+    <div class="cf-card cf-card-p animate-up" x-data="{mode:'preview', saving:false}">
       <div class="section-header">
         <div class="section-title">✍️ 文章草稿</div>
-        <span class="badge badge-{{ STATUS_COLORS.get(art.status, 'neutral') }}">{{ STATUS_LABELS.get(art.status, art.status) }}</span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="badge badge-{{ STATUS_COLORS.get(art.status, 'neutral') }}">{{ STATUS_LABELS.get(art.status, art.status) }}</span>
+          {% if art.draft_content %}
+          <button class="btn btn-ghost btn-sm" @click="mode = mode === 'edit' ? 'preview' : 'edit'"
+            x-text="mode === 'edit' ? '👁 預覽' : '✏️ 編輯'" style="font-size:12px;"></button>
+          {% endif %}
+          <button class="btn btn-primary btn-sm" x-show="mode==='edit'" x-cloak
+            @click="saveArticle($refs)" :disabled="saving"
+            x-text="saving ? '儲存中…' : '💾 儲存'" style="font-size:12px;"></button>
+        </div>
       </div>
 
       {% if art.draft_content %}
-      <!-- Tab: rendered / raw -->
-      <div x-data="{tab:'preview'}" style="margin-top:2px;">
-        <div class="tab-bar" style="margin-bottom:14px;">
-          <div class="tab-item" :class="tab=='preview'&&'active'" @click="tab='preview'">預覽</div>
-          <div class="tab-item" :class="tab=='raw'&&'active'" @click="tab='raw'">原始 Markdown</div>
-        </div>
-        <div x-show="tab=='preview'" id="md-preview"
-          style="font-size:14px;line-height:1.8;color:#1e293b;max-height:520px;overflow-y:auto;padding-right:4px;">
-          <!-- rendered by marked.js below -->
-        </div>
-        <div x-show="tab=='raw'" x-cloak>
-          <pre style="background:#f8fafc;padding:16px;border-radius:8px;font-size:12px;line-height:1.7;overflow-x:auto;max-height:500px;white-space:pre-wrap;">{{ art.draft_content }}</pre>
+      <!-- Preview mode -->
+      <div x-show="mode==='preview'" style="margin-top:2px;">
+        <div x-data="{tab:'preview'}" >
+          <div class="tab-bar" style="margin-bottom:14px;">
+            <div class="tab-item" :class="tab=='preview'&&'active'" @click="tab='preview'">預覽</div>
+            <div class="tab-item" :class="tab=='raw'&&'active'" @click="tab='raw'">原始 Markdown</div>
+          </div>
+          <div x-show="tab=='preview'" id="md-preview"
+            style="font-size:14px;line-height:1.8;color:#1e293b;max-height:520px;overflow-y:auto;padding-right:4px;">
+          </div>
+          <div x-show="tab=='raw'" x-cloak>
+            <pre style="background:#f8fafc;padding:16px;border-radius:8px;font-size:12px;line-height:1.7;overflow-x:auto;max-height:500px;white-space:pre-wrap;">{{ art.draft_content }}</pre>
+          </div>
         </div>
       </div>
+
+      <!-- Edit mode -->
+      <div x-show="mode==='edit'" x-cloak style="margin-top:10px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">標題</label>
+            <input x-ref="editTitle" type="text" value="{{ art.title or '' }}"
+              style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:600;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Markdown 內容</label>
+            <textarea x-ref="editContent" rows="22"
+              style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:'JetBrains Mono',monospace;line-height:1.7;resize:vertical;margin-top:4px;"
+            >{{ art.draft_content }}</textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Meta Title</label>
+              <input x-ref="editMetaTitle" type="text" value="{{ art.meta_title or '' }}"
+                style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Slug</label>
+              <input x-ref="editSlug" type="text" value="{{ art.slug or '' }}"
+                style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+            </div>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Meta Description</label>
+            <textarea x-ref="editMetaDesc" rows="2"
+              style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;line-height:1.5;resize:vertical;margin-top:4px;"
+            >{{ art.meta_description or '' }}</textarea>
+          </div>
+        </div>
+      </div>
+
       {% else %}
       <div class="empty-state" style="padding:32px;">
-        <p>尚無內容（AI 尚未撰寫）</p>
+        <p x-show="mode!=='edit'">尚無內容（AI 尚未撰寫）</p>
+        <!-- Allow manual content creation -->
+        <button class="btn btn-primary btn-sm" style="margin-top:12px;"
+          @click="mode='edit'"
+          x-show="mode!=='edit'">✏️ 手動撰寫</button>
+        <div x-show="mode==='edit'" x-cloak style="margin-top:14px;text-align:left;">
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">標題</label>
+              <input x-ref="editTitle" type="text" value="{{ art.title or '' }}"
+                style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:600;margin-top:4px;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Markdown 內容</label>
+              <textarea x-ref="editContent" rows="16"
+                style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:'JetBrains Mono',monospace;line-height:1.7;resize:vertical;margin-top:4px;"
+              ></textarea>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Meta Title</label>
+                <input x-ref="editMetaTitle" type="text" value="{{ art.meta_title or '' }}"
+                  style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+              </div>
+              <div>
+                <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Slug</label>
+                <input x-ref="editSlug" type="text" value="{{ art.slug or '' }}"
+                  style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+              </div>
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Meta Description</label>
+              <textarea x-ref="editMetaDesc" rows="2"
+                style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;line-height:1.5;resize:vertical;margin-top:4px;"
+              ></textarea>
+            </div>
+            <button class="btn btn-primary btn-sm" @click="saveArticle($refs)" :disabled="saving"
+              x-text="saving ? '儲存中…' : '💾 儲存'"></button>
+          </div>
+        </div>
       </div>
       {% endif %}
     </div>
@@ -192,37 +298,175 @@
     </div>
     {% endif %}
 
+    <!-- ── E-E-A-T 作者指派 ─────────────────────────────── -->
+    <div class="cf-card cf-card-p animate-up d4">
+      <div class="section-title" style="margin-bottom:12px;">🏅 E-E-A-T 作者指派</div>
+      {% if art.author %}
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">
+        <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;flex-shrink:0;">{{ art.author.name[0] }}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#065f46;">{{ art.author.name }}</div>
+          <div style="font-size:11px;color:#6ee7b7;">{{ art.author.title or '' }}{% if art.author.is_medical_reviewer %} · 🩺 醫療審稿{% endif %}</div>
+        </div>
+        {% if art.eeat_score %}<span class="badge badge-success" style="font-size:11px;">E-E-A-T {{ art.eeat_score }}</span>{% endif %}
+      </div>
+      {% endif %}
+      <form action="/admin/articles/{{ art.id }}/set-author" method="post">
+        <select name="author_id" style="width:100%;padding:7px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-bottom:8px;">
+          <option value="0">（未指派作者）</option>
+          {% for a in authors %}
+          <option value="{{ a.id }}" {% if art.author_id == a.id %}selected{% endif %}>{{ a.name }}{% if a.title %} — {{ a.title }}{% endif %}{% if a.is_medical_reviewer %} 🩺{% endif %}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-ghost btn-sm" style="width:100%;">💾 指派作者</button>
+      </form>
+      {% if not authors %}
+      <div style="font-size:12px;color:#94a3b8;text-align:center;padding:6px 0;">
+        尚無作者，請先至 <a href="/admin/authors" style="color:#6366f1;">作者管理</a> 新增
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- ── 內部連結建議 ──────────────────────────────────── -->
+    {% if internal_links %}
+    <div class="cf-card cf-card-p animate-up d5">
+      <div class="section-header" style="margin-bottom:12px;">
+        <div class="section-title">🔗 內部連結建議</div>
+        <span style="font-size:11px;color:#94a3b8;">AI 建議 {{ internal_links|length }} 條</span>
+      </div>
+      {% for link in internal_links %}
+      <div style="padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;margin-bottom:8px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;color:#1e293b;margin-bottom:2px;">「{{ link.anchor_text }}」→ {{ link.target_title }}</div>
+            <div style="font-size:11px;color:#64748b;line-height:1.4;">{{ link.reason }}</div>
+          </div>
+          {% if link.target_url %}
+          <a href="{{ link.target_url }}" target="_blank" style="flex-shrink:0;font-size:10px;color:#6366f1;text-decoration:none;white-space:nowrap;">查看 ↗</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ── PAA 問題建議（FAQ 內容靈感）──────────────────── -->
+    {% if paa_questions %}
+    <div class="cf-card cf-card-p animate-up d6">
+      <div class="section-header" style="margin-bottom:12px;">
+        <div class="section-title">💬 PAA 問題建議</div>
+        <span style="font-size:11px;color:#94a3b8;">{{ paa_questions|length }} 條 Google 精選問題</span>
+      </div>
+      <p style="font-size:11px;color:#64748b;margin-bottom:10px;">以下問題來自 Google「People Also Ask」，可作為 FAQ 或文章延伸內容靈感：</p>
+      {% for q in paa_questions %}
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:6px;background:#f8fafc;border:1px solid #e2e8f0;margin-bottom:6px;">
+        <span style="color:#6366f1;font-size:12px;font-weight:700;flex-shrink:0;">Q</span>
+        <span style="font-size:12px;color:#1e293b;line-height:1.5;">{{ q }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ── Schema Markup 狀態 ──────────────────────────────── -->
+    <div class="cf-card cf-card-p animate-up d7">
+      <div class="section-title" style="margin-bottom:12px;">⚙️ Schema Markup</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="font-size:12px;color:#64748b;">Article / BlogPosting</span>
+          {% if art.article_schema_json %}<span style="font-size:11px;color:#059669;font-weight:600;">✓ 已產出</span>{% else %}<span style="font-size:11px;color:#94a3b8;">未產出</span>{% endif %}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="font-size:12px;color:#64748b;">FAQPage</span>
+          {% if art.faq_schema_json %}<span style="font-size:11px;color:#059669;font-weight:600;">✓ 已產出</span>{% else %}<span style="font-size:11px;color:#94a3b8;">未產出</span>{% endif %}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="font-size:12px;color:#64748b;">HowTo</span>
+          {% if art.howto_schema_json %}<span style="font-size:11px;color:#059669;font-weight:600;">✓ 已產出</span>{% else %}<span style="font-size:11px;color:#94a3b8;">未偵測到步驟型段落</span>{% endif %}
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
-{% if art.content %}
 <!-- marked.js for markdown rendering -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
-  document.getElementById('md-preview').innerHTML = marked.parse({{ art.content | tojson }});
-  // Style rendered markdown
-  const preview = document.getElementById('md-preview');
-  preview.querySelectorAll('h1,h2,h3').forEach(el => {
-    el.style.fontWeight = '700';
-    el.style.color = '#0f172a';
-    el.style.marginBottom = '8px';
-    el.style.marginTop = '18px';
-  });
-  preview.querySelectorAll('h1').forEach(el => el.style.fontSize = '20px');
-  preview.querySelectorAll('h2').forEach(el => el.style.fontSize = '17px');
-  preview.querySelectorAll('h3').forEach(el => el.style.fontSize = '15px');
-  preview.querySelectorAll('p').forEach(el => { el.style.marginBottom = '10px'; el.style.color = '#1e293b'; });
-  preview.querySelectorAll('ul,ol').forEach(el => { el.style.marginBottom = '10px'; el.style.paddingLeft = '20px'; });
-  preview.querySelectorAll('strong').forEach(el => el.style.fontWeight = '600');
-  preview.querySelectorAll('code').forEach(el => {
-    el.style.background = '#f1f5f9'; el.style.padding = '1px 5px';
-    el.style.borderRadius = '4px'; el.style.fontSize = '12px'; el.style.color = '#7c3aed';
-  });
-</script>
+// ── Markdown preview rendering ──────────────────────────────
+{% if art.draft_content %}
+(function() {
+  const raw = {{ art.draft_content | tojson }};
+  const el = document.getElementById('md-preview');
+  if (el && raw) {
+    el.innerHTML = marked.parse(raw);
+    el.querySelectorAll('h1,h2,h3').forEach(h => { h.style.fontWeight='700'; h.style.color='#0f172a'; h.style.marginBottom='8px'; h.style.marginTop='18px'; });
+    el.querySelectorAll('h1').forEach(h => h.style.fontSize='20px');
+    el.querySelectorAll('h2').forEach(h => h.style.fontSize='17px');
+    el.querySelectorAll('h3').forEach(h => h.style.fontSize='15px');
+    el.querySelectorAll('p').forEach(p => { p.style.marginBottom='10px'; p.style.color='#1e293b'; });
+    el.querySelectorAll('ul,ol').forEach(l => { l.style.marginBottom='10px'; l.style.paddingLeft='20px'; });
+    el.querySelectorAll('strong').forEach(s => s.style.fontWeight='600');
+    el.querySelectorAll('code').forEach(c => { c.style.background='#f1f5f9'; c.style.padding='1px 5px'; c.style.borderRadius='4px'; c.style.fontSize='12px'; c.style.color='#7c3aed'; });
+  }
+})();
 {% endif %}
+
+// ── Save article via AJAX ───────────────────────────────────
+async function saveArticle(refs) {
+  const body = {
+    title: refs.editTitle ? refs.editTitle.value : '',
+    draft_content: refs.editContent ? refs.editContent.value : '',
+    meta_title: refs.editMetaTitle ? refs.editMetaTitle.value : '',
+    meta_description: refs.editMetaDesc ? refs.editMetaDesc.value : '',
+    slug: refs.editSlug ? refs.editSlug.value : '',
+  };
+  try {
+    const resp = await fetch('/admin/articles/{{ art.id }}/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      window.location.reload();
+    } else {
+      alert('儲存失敗：' + (data.error || '未知錯誤'));
+    }
+  } catch (e) {
+    alert('儲存錯誤：' + e.message);
+  }
+}
+
+// ── Publish to WordPress ────────────────────────────────────
+async function publishToWP() {
+  const btn = document.getElementById('btn-publish-wp');
+  if (!confirm('確認要發布到 WordPress？')) return;
+  btn.disabled = true;
+  btn.textContent = '發布中…';
+  try {
+    const resp = await fetch('/admin/articles/{{ art.id }}/publish-wp', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      alert('✅ 發布成功！\nURL: ' + (data.url || '(草稿)'));
+      window.location.reload();
+    } else {
+      alert('❌ 發布失敗：' + (data.error || '未知錯誤'));
+      btn.disabled = false;
+      btn.textContent = '🌐 發布到 WordPress';
+    }
+  } catch (e) {
+    alert('發布錯誤：' + e.message);
+    btn.disabled = false;
+    btn.textContent = '🌐 發布到 WordPress';
+  }
+}
+</script>
 
 {% if seo_history %}
 <script>

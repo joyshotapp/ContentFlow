@@ -113,7 +113,9 @@ class ArticleDraft(BaseModel):
     word_count: int = 0
     slug: str = ""                       # SEO URL slug（英文連字號，如 bone-spur-causes）
     faq_schema_json: str = ""            # FAQPage JSON-LD structured data（貼入 <head>）
+    howto_schema_json: str = ""          # HowTo JSON-LD（步驟型文章）
     article_schema_json: str = ""        # Article/BlogPosting JSON-LD structured data
+    paa_questions_json: str = "[]"       # People Also Ask 問題（JSON 陣列）
     internal_link_suggestions: list[dict] = Field(default_factory=list)  # 內部連結建議
     fact_check_items: list[FactCheckItem] = Field(default_factory=list)
     image_prompts: list[str] = Field(default_factory=list)

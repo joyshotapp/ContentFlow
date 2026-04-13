@@ -3,7 +3,51 @@
 {% block page_title %}競品追蹤{% endblock %}
 {% block page_subtitle %}{{ competitors|length }} 個競品 · {{ products|length }} 個自有產品{% endblock %}
 
+{% block topbar_actions %}
+<button onclick="document.getElementById('add-competitor-panel').classList.toggle('hidden')"
+  class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+  新增競品
+</button>
+{% endblock %}
+
 {% block content %}
+
+<!-- ── Add Competitor Panel ─────────────────────────────────────── -->
+<div id="add-competitor-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
+  <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+    <span>🏢 新增競品資料</span>
+  </div>
+  <form method="post" action="/admin/competitors/new">
+    <input type="hidden" name="project_id" value="{{ project_id }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="form-group">
+        <label class="form-label">品牌名稱 *</label>
+        <input class="form-input" type="text" name="brand_name" placeholder="例：OO骨科診所" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">網站 URL</label>
+        <input class="form-input" type="url" name="website" placeholder="https://...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">銷售品項</label>
+        <input class="form-input" type="text" name="sells_products" placeholder="例：手術、復健療程">
+      </div>
+      <div class="form-group">
+        <label class="form-label">主要特色</label>
+        <input class="form-input" type="text" name="features" placeholder="例：主打微創手術">
+      </div>
+      <div class="form-group" style="grid-column:span 2;">
+        <label class="form-label">模仿建議</label>
+        <input class="form-input" type="text" name="recommendation" placeholder="例：可模仿其案例故事內容格式">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button type="submit" class="btn btn-primary btn-sm">儲存競品</button>
+      <button type="button" onclick="document.getElementById('add-competitor-panel').classList.add('hidden')" class="btn btn-ghost btn-sm">取消</button>
+    </div>
+  </form>
+</div>
 
 <!-- ── Products section ────────────────────────────────────────── -->
 {% if products %}
@@ -65,6 +109,10 @@
         <div style="font-size:11px;color:#94a3b8;">销售品項</div>
         <div style="font-size:12px;color:#0f172a;margin-top:2px;word-break:break-word;">{{ comp.sells_products[:60] }}</div>
         {% endif %}
+        <form method="post" action="/admin/competitors/{{ comp.id }}/delete" style="margin-top:8px;" onsubmit="return confirm('確定刪除競品「{{ comp.brand_name }}」？')">
+          <input type="hidden" name="project_id" value="{{ project_id }}">
+          <button type="submit" class="btn btn-ghost btn-sm" style="color:#ef4444;font-size:11px;padding:3px 8px;">🗑 刪除</button>
+        </form>
       </div>
     </div>
     {% if comp.recommendation %}
@@ -82,7 +130,7 @@
 <div class="cf-card">
   <div class="empty-state">
     <div class="empty-state-icon">🏢</div>
-    <p>尚無競品資料 · 請在 Streamlit 前台新增競品</p>
+    <p>尚無競品資料 · 請點擊「新增競品」，或由程任務自動追蹤匯入</p>
   </div>
 </div>
 {% endif %}

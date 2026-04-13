@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}報告中心{% endblock %}
+{% block page_title %}報告中心{% endblock %}
+{% block page_subtitle %}週報 · 月報 · 季報 · KPI 追蹤{% endblock %}
+
+{% block content %}
+
+<!-- ── Project switcher + period select ────────────────────── -->
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+  {% if projects | length > 1 %}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    {% for proj in projects %}
+    <a href="/admin/reports?project_id={{ proj.id }}&period={{ period }}"
+       style="padding:6px 14px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid var(--cf-border);text-decoration:none;
+              {% if proj.id == project_id %}background:#6366f1;color:#fff;border-color:#6366f1;{% else %}background:#fff;color:#475569;{% endif %}">
+      {{ proj.name }}
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div style="display:flex;gap:6px;margin-left:auto;">
+    {% for p, label in [('weekly','週報'),('monthly','月報'),('quarterly','季報')] %}
+    <a href="/admin/reports?project_id={{ project_id }}&period={{ p }}"
+       style="padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid var(--cf-border);
+              {% if period==p %}background:#0f172a;color:#fff;border-color:#0f172a;{% else %}background:#fff;color:#475569;{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if report_data %}
+{% set rd = report_data %}
+
+<!-- ── KPI Summary ─────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-indigo" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ "{:,}".format(rd.total_clicks) }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總點擊數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d1">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-sky" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ "{:,}".format(rd.total_impressions) }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總曝光數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d2">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ rd.avg_position }}</div>
+        <div style="font-size:11px;color:#94a3b8;">平均排名</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d3">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12H9m1.5-12H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ rd.articles_new_period }}</div>
+        <div style="font-size:11px;color:#94a3b8;">本期發布文章</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Content Health KPIs ──────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p animate-up d1">
+    <div class="section-header" style="margin-bottom:10px;">
+      <div class="section-title">平均 CTR</div>
+    </div>
+    <div style="font-size:32px;font-weight:900;color:{% if rd.avg_ctr > 5 %}#059669{% elif rd.avg_ctr > 2 %}#d97706{% else %}#ef4444{% endif %};">{{ rd.avg_ctr }}%</div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:4px;">{% if rd.avg_ctr > 5 %}表現優良{% elif rd.avg_ctr > 2 %}可提升{% else %}需要優化{% endif %}</div>
+  </div>
+  <div class="cf-card cf-card-p animate-up d2">
+    <div class="section-header" style="margin-bottom:10px;">
+      <div class="section-title">知識庫條目</div>
+    </div>
+    <div style="font-size:32px;font-weight:900;color:#6366f1;">{{ rd.knowledge_count }}</div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:4px;">累計學習知識</div>
+  </div>
+  <div class="cf-card cf-card-p animate-up d3">
+    <div class="section-header" style="margin-bottom:10px;">
+      <div class="section-title">待處理警告</div>
+    </div>
+    <div style="font-size:20px;font-weight:700;margin-top:4px;">
+      <span style="color:#ef4444;">{{ rd.cannibal_alerts }}</span>
+      <span style="color:#94a3b8;font-size:13px;"> 自蝕</span>
+      &nbsp;
+      <span style="color:#f59e0b;">{{ rd.refresh_alerts }}</span>
+      <span style="color:#94a3b8;font-size:13px;"> Refresh</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Top Articles ─────────────────────────────────────────── -->
+<div class="cf-card animate-up d4">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">
+      本期
+      {% if period == 'weekly' %}7 天{% elif period == 'monthly' %}30 天{% else %}90 天{% endif %}
+      高績效頁面
+    </div>
+  </div>
+  {% if rd.top_articles %}
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>排名</th>
+          <th>頁面</th>
+          <th>點擊</th>
+          <th>曝光</th>
+          <th>平均排名</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for art in rd.top_articles %}
+        <tr>
+          <td>
+            <div style="width:24px;height:24px;border-radius:50%;background:{% if loop.index <= 3 %}#6366f1{% else %}#e2e8f0{% endif %};color:{% if loop.index <= 3 %}#fff{% else %}#64748b{% endif %};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">{{ loop.index }}</div>
+          </td>
+          <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {% if art.landing_page %}
+            <a href="{{ art.landing_page }}" target="_blank" style="color:#6366f1;text-decoration:none;">{{ art.landing_page[-60:] if art.landing_page|length > 60 else art.landing_page }}</a>
+            {% else %}—{% endif %}
+          </td>
+          <td style="font-weight:700;">{{ "{:,}".format(art.total_clicks|int) if art.total_clicks else 0 }}</td>
+          <td style="color:#64748b;">{{ "{:,}".format(art.total_impressions|int) if art.total_impressions else 0 }}</td>
+          <td><span style="font-weight:600;">{{ "%.1f"|format(art.avg_position or 0) }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><div class="empty-state-icon">📊</div><p>本期尚無 GSC 資料</p></div>
+  {% endif %}
+</div>
+
+<!-- ── CRO 轉換漏斗分析 ──────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+
+  <!-- GA4 轉換 KPI -->
+  <div class="cf-card cf-card-p animate-up d5">
+    <div class="section-header" style="margin-bottom:14px;">
+      <div class="section-title">轉換漏斗分析 (GA4)</div>
+      <span style="font-size:11px;color:#94a3b8;">CRO · 本期</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">工作階段</div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ "{:,}".format(rd.total_sessions) }}</div>
+      </div>
+      <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">活躍用戶</div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ "{:,}".format(rd.total_users) }}</div>
+      </div>
+      <div style="background:{% if rd.total_conversions > 0 %}rgba(5,150,105,0.08){% else %}#f8fafc{% endif %};border-radius:10px;padding:12px 14px;border:1px solid {% if rd.total_conversions > 0 %}rgba(5,150,105,0.2){% else %}#e2e8f0{% endif %};">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">轉換數</div>
+        <div style="font-size:20px;font-weight:800;color:{% if rd.total_conversions > 0 %}#059669{% else %}#94a3b8{% endif %};">{{ rd.total_conversions }}</div>
+      </div>
+      <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">轉換率</div>
+        <div style="font-size:20px;font-weight:800;color:{% if rd.conversion_rate > 2 %}#059669{% elif rd.conversion_rate > 0.5 %}#d97706{% else %}#94a3b8{% endif %};">{{ rd.conversion_rate }}%</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;background:#f8fafc;border-radius:8px;padding:10px 12px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">平均跳出率</div>
+        <div style="font-size:16px;font-weight:700;color:{% if rd.avg_bounce_rate < 40 %}#059669{% elif rd.avg_bounce_rate < 65 %}#d97706{% else %}#ef4444{% endif %};">{{ rd.avg_bounce_rate }}%</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border-radius:8px;padding:10px 12px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">平均停留時間</div>
+        <div style="font-size:16px;font-weight:700;color:#0f172a;">{{ rd.avg_engagement_sec|int }}秒</div>
+      </div>
+    </div>
+    {% if rd.top_conversion_pages %}
+    <div style="margin-top:12px;">
+      <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">高轉換頁面</div>
+      {% for page in rd.top_conversion_pages %}
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;gap:8px;">
+        <span style="font-size:11px;color:#475569;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ page.page_path[-45:] if page.page_path|length > 45 else page.page_path }}</span>
+        <span style="font-size:11px;font-weight:700;color:#059669;flex-shrink:0;">{{ page.conversions or 0 }} 轉換</span>
+        <span style="font-size:10px;color:#94a3b8;flex-shrink:0;">{{ "{:,}".format(page.sessions|int) }} 工作階段</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="margin-top:12px;padding:12px;background:#fafafa;border-radius:8px;text-align:center;">
+      <div style="font-size:12px;color:#94a3b8;">尚無 GA4 轉換資料，請確認 GA4 連線設定</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 排名掉落預警（Core Update 偵測）-->
+  <div class="cf-card cf-card-p animate-up d6">
+    <div class="section-header" style="margin-bottom:14px;">
+      <div class="section-title">排名異動預警</div>
+      <span style="font-size:11px;color:#94a3b8;">核心更新 / 演算法影響偵測</span>
+    </div>
+    {% if rd.ranking_drops %}
+    <p style="font-size:12px;color:#64748b;margin-bottom:10px;">與上一期相比，以下關鍵字排名退步 ≥3 名，需關注是否受到 Core Update 或競品影響：</p>
+    {% for drop in rd.ranking_drops %}
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;margin-bottom:6px;{% if drop.delta >= 10 %}background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);{% else %}background:#f8fafc;border:1px solid #e2e8f0;{% endif %}">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ drop.keyword }}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:1px;">前期 #{{ drop.prev_pos }} → 本期 #{{ drop.curr_pos }}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:14px;font-weight:800;color:{% if drop.delta >= 10 %}#dc2626{% else %}#f59e0b{% endif %};">↓ {{ drop.delta }}</div>
+        <div style="font-size:10px;color:#94a3b8;">名</div>
+      </div>
+    </div>
+    {% endfor %}
+    <div style="margin-top:12px;padding:10px 12px;background:rgba(99,102,241,0.04);border-radius:8px;border:1px solid rgba(99,102,241,0.12);">
+      <div style="font-size:11px;color:#6366f1;font-weight:600;margin-bottom:4px;">建議動作</div>
+      <div style="font-size:11px;color:#64748b;line-height:1.6;">
+        1. 確認是否在 Google Search Central 公告了 Core Update<br>
+        2. 比較競品的排名變化（競品追蹤頁面）<br>
+        3. 對退步幅度 ≥10 名的文章優先執行 Content Refresh
+      </div>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:32px 16px;">
+      <div class="empty-state-icon">📈</div>
+      <p style="color:#059669;font-weight:600;">本期無顯著排名退步</p>
+      <p style="font-size:11px;">所有受追蹤關鍵字排名穩定或進步</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% else %}
+<div class="cf-card"><div class="empty-state"><div class="empty-state-icon">📋</div><p>請選擇一個專案並等待 GSC 資料同步</p></div></div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Make enumerate available in Jinja template via inline JS (already handled server-side, no JS needed)
+</script>
+{% endblock %}

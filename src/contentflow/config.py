@@ -79,6 +79,11 @@ class Settings(BaseSettings):
         alias="GA4_MEASUREMENT_ID",
         description="Google Analytics 4 Measurement ID（e.g. G-XXXXXXXXXX）",
     )
+    admin_url: str = Field(
+        default="http://localhost:8000",
+        alias="ADMIN_URL",
+        description="Admin 介面對外根 URL（不含結尾斜線），用於通知連結",
+    )
     site_name: str = Field(
         default="GoodBone 好骨頭",
         alias="SITE_NAME",

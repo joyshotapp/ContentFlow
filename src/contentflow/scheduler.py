@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 from typing import Callable, Awaitable
 
@@ -23,6 +23,7 @@ from loguru import logger
 from contentflow.config import settings
 from contentflow.db import SessionLocal
 from contentflow.models.database import SchedulerLog
+from sqlalchemy import func
 
 # ── 全域 scheduler 實例 ───────────────────────────────────────
 
@@ -143,39 +144,499 @@ async def sync_gsc_all_projects() -> None:
 
 @with_retry(max_retries=3)
 async def sync_ga4_all_projects() -> None:
-    """每日 03:30 — 同步全專案 GA4 頁面指標。"""
-    # GA4 client 實作後替換
-    logger.info("[GA4Sync] placeholder — GA4 client 尚未實作")
+    """每日 03:30 — 同步全專案 GA4 頁面指標，持久化到 GAPageMetric。"""
+    from datetime import date
+    from contentflow.tools.ga4 import GA4Client
+    from contentflow.models.database import Project, GAPageMetric
+
+    with SessionLocal() as session:
+        projects = session.query(Project).filter(Project.ga4_property_id != "").all()
+        project_data = [(p.id, p.ga4_property_id) for p in projects]
+
+    if not project_data:
+        logger.info("[GA4Sync] 無已設定 GA4 Property ID 的專案")
+        return
+
+    today = date.today()
+    client = GA4Client()
+    total_rows = 0
+
+    for project_id, property_id in project_data:
+        try:
+            metrics = await client.get_page_metrics(property_id=property_id)
+            with SessionLocal() as session:
+                # 同一天的數據先刪除（避免重複）
+                session.query(GAPageMetric).filter(
+                    GAPageMetric.project_id == project_id,
+                    GAPageMetric.tracked_date == today,
+                ).delete()
+                for m in metrics:
+                    session.add(GAPageMetric(
+                        project_id=project_id,
+                        page_path=m.page_path,
+                        active_users=m.active_users,
+                        sessions=m.sessions,
+                        avg_engagement_time_sec=m.avg_engagement_time_sec,
+                        bounce_rate=m.bounce_rate,
+                        conversions=m.conversions,
+                        tracked_date=today,
+                    ))
+                session.commit()
+                total_rows += len(metrics)
+            logger.info(f"[GA4Sync] project={project_id} 同步 {len(metrics)} 筆頁面指標")
+        except Exception as exc:
+            logger.warning(f"[GA4Sync] project={project_id} 失敗：{exc}")
+
+    logger.info(f"[GA4Sync] 全部完成，共 {total_rows} 筆")
 
 
 @with_retry(max_retries=2)
 async def run_competitor_serp_check() -> None:
-    """每週一 04:00 — 追蹤競品 SERP 排名變化。"""
-    logger.info("[CompetitorSERP] placeholder — serp tracker 尚未實作")
+    """每週一 04:00 — 追蹤競品 SERP 排名變化，寫入 CompetitorSnapshot。"""
+    import asyncio
+    from datetime import date
+    from contentflow.tools.serp import search_serp
+    from contentflow.models.database import Competitor, SEORanking, CompetitorSnapshot, Project
+
+    today = date.today()
+
+    with SessionLocal() as session:
+        competitors = session.query(Competitor).all()
+        comp_data = [(c.id, c.project_id, c.brand_name, c.website) for c in competitors]
+
+        # 取得每個專案的主要追蹤關鍵字（最多 5 個/專案）
+        project_keywords: dict[int, list[str]] = {}
+        for _cid, pid, _bname, _website in comp_data:
+            if pid not in project_keywords:
+                kws = (
+                    session.query(SEORanking.keyword)
+                    .filter(SEORanking.project_id == pid)
+                    .group_by(SEORanking.keyword)
+                    .limit(5)
+                    .all()
+                )
+                project_keywords[pid] = [k[0] for k in kws if k[0]]
+
+        projects = {p.id: p.brand_url for p in session.query(Project).all()}
+
+    snapshots_added = 0
+    for comp_id, project_id, brand_name, website in comp_data:
+        keywords = project_keywords.get(project_id, [])
+        if not keywords or not website:
+            continue
+
+        comp_domain = website.replace("https://", "").replace("http://", "").strip("/")
+        our_domain = (projects.get(project_id) or "").replace("https://", "").replace("http://", "").strip("/")
+
+        for keyword in keywords:
+            try:
+                analysis = await search_serp(keyword, num_results=20, gl="tw", hl="zh-tw")
+
+                comp_position: float | None = None
+                comp_url = ""
+                our_position: float | None = None
+
+                for r in analysis.top_results:
+                    if comp_domain and comp_domain in r.url:
+                        comp_position = float(r.position)
+                        comp_url = r.url
+                    if our_domain and our_domain in r.url:
+                        our_position = float(r.position)
+
+                with SessionLocal() as session:
+                    session.add(CompetitorSnapshot(
+                        project_id=project_id,
+                        competitor_id=comp_id,
+                        keyword=keyword,
+                        position=comp_position,
+                        url=comp_url,
+                        our_position=our_position,
+                        tracked_date=today,
+                    ))
+                    session.commit()
+                    snapshots_added += 1
+
+                await asyncio.sleep(1)  # 避免 SERP API 過度請求
+            except Exception as exc:
+                logger.warning(f"[CompetitorSERP] kw='{keyword}' comp='{brand_name}' 失敗：{exc}")
+
+    logger.info(f"[CompetitorSERP] 完成，新增 {snapshots_added} 筆競品快照")
 
 
 @with_retry(max_retries=2)
 async def run_attribution_engine() -> None:
-    """每週一 05:00 — 文章表現歸因分析。"""
-    logger.info("[Attribution] placeholder — attribution engine 尚未實作")
+    """每週一 05:00 — 文章表現歸因分析，計算 A-F 等級和推薦動作。"""
+    from contentflow.agents.analytics_agent import AttributionEngine
+    from contentflow.models.database import Project, Article
+
+    with SessionLocal() as session:
+        project_ids = [p.id for p in session.query(Project).all()]
+
+    total_analyzed = 0
+    for project_id in project_ids:
+        try:
+            with SessionLocal() as session:
+                engine = AttributionEngine(session)
+                performances = engine.get_project_performance(project_id)
+                # 把 eeat_score (used as a stand-in for performance grade) 回寫到文章
+                for perf in performances:
+                    article = session.get(Article, perf.article_id)
+                    if article:
+                        # Store grade as numeric: A=95, B=80, C=60, D=40, F=20
+                        grade_map = {"A": 95, "B": 80, "C": 60, "D": 40, "F": 20}
+                        article.eeat_score = grade_map.get(perf.performance_grade, 50)
+                        session.commit()
+                total_analyzed += len(performances)
+                logger.info(f"[Attribution] project={project_id}，分析 {len(performances)} 篇文章")
+        except Exception as exc:
+            logger.warning(f"[Attribution] project={project_id} 失敗：{exc}")
+
+    logger.info(f"[Attribution] 完成，共分析 {total_analyzed} 篇文章")
 
 
 @with_retry(max_retries=2)
 async def check_refresh_triggers() -> None:
-    """每週二 04:00 — 檢查 Content Refresh 觸發條件。"""
-    logger.info("[RefreshCheck] placeholder — refresh checker 尚未實作")
+    """每週二 04:00 — 檢查 Content Refresh 觸發條件，回寫 last_refresh_date 建議。"""
+    from contentflow.agents.analytics_agent import RefreshTriggerChecker, CannibalizationDetector
+    from contentflow.models.database import Project, Article, KnowledgeEntry
+
+    with SessionLocal() as session:
+        project_ids = [p.id for p in session.query(Project).all()]
+
+    total_refresh = 0
+    total_cannibal = 0
+
+    for project_id in project_ids:
+        try:
+            with SessionLocal() as session:
+                # Refresh 觸發
+                checker = RefreshTriggerChecker(session)
+                recommendations = checker.check_project(project_id)
+                for rec in recommendations:
+                    # 標記需要 refresh 的文章（寫入 KnowledgeEntry 作為待辦）
+                    existing = session.query(KnowledgeEntry).filter(
+                        KnowledgeEntry.project_id == project_id,
+                        KnowledgeEntry.category == "refresh_priority",
+                        KnowledgeEntry.pattern.contains(f"article_id:{rec.article_id}"),
+                    ).first()
+                    if not existing:
+                        import json as _json
+                        session.add(KnowledgeEntry(
+                            project_id=project_id,
+                            category="refresh_priority",
+                            pattern=f"article_id:{rec.article_id} — {rec.trigger_reason}",
+                            evidence_count=1,
+                            confidence_level="unverified",
+                            metadata_json=_json.dumps({
+                                "article_id": rec.article_id,
+                                "title": rec.article_title,
+                                "priority": rec.priority,
+                                "current_rank": rec.current_rank,
+                            }),
+                        ))
+                session.commit()
+                total_refresh += len(recommendations)
+
+                # 自蝕偵測
+                cannibal = CannibalizationDetector(session)
+                pairs = cannibal.detect(project_id)
+                for pair in pairs:
+                    existing = session.query(KnowledgeEntry).filter(
+                        KnowledgeEntry.project_id == project_id,
+                        KnowledgeEntry.category == "cannibalization",
+                        KnowledgeEntry.pattern.contains(pair.keyword),
+                    ).first()
+                    if not existing:
+                        import json as _json
+                        session.add(KnowledgeEntry(
+                            project_id=project_id,
+                            category="cannibalization",
+                            pattern=f"關鍵字「{pair.keyword}」有 {len(pair.article_ids)} 篇文章互競 — {pair.suggestion}",
+                            evidence_count=len(pair.article_ids),
+                            confidence_level="verified",
+                            metadata_json=_json.dumps({
+                                "keyword": pair.keyword,
+                                "article_ids": pair.article_ids,
+                                "urls": pair.article_urls,
+                            }),
+                        ))
+                session.commit()
+                total_cannibal += len(pairs)
+
+                logger.info(f"[RefreshCheck] project={project_id}：{len(recommendations)} Refresh 建議，{len(pairs)} 自蝕偵測")
+        except Exception as exc:
+            logger.warning(f"[RefreshCheck] project={project_id} 失敗：{exc}")
+
+    logger.info(f"[RefreshCheck] 完成：{total_refresh} Refresh 建議，{total_cannibal} 自蝕")
 
 
 @with_retry(max_retries=1)
 async def run_l1_pattern_analysis() -> None:
-    """每月 1 號 06:00 — L1 成功模式學習。"""
-    logger.info("[L1Learn] placeholder — learning agent 尚未實作")
+    """每月 1 號 06:00 — L1 成功模式學習，分析文章屬性 vs 排名。"""
+    from contentflow.agents.learning_agent import analyze_success_patterns
+    from contentflow.models.database import Project
+
+    with SessionLocal() as session:
+        project_ids = [p.id for p in session.query(Project).all()]
+
+    total_patterns = 0
+    for project_id in project_ids:
+        try:
+            with SessionLocal() as session:
+                report = analyze_success_patterns(project_id, session)
+                total_patterns += len(report.patterns)
+                logger.info(f"[L1Learn] project={project_id}，發現 {len(report.patterns)} 個成功模式，分析 {report.analyzed_articles} 篇文章")
+        except Exception as exc:
+            logger.warning(f"[L1Learn] project={project_id} 失敗：{exc}")
+
+    logger.info(f"[L1Learn] 完成，共發現 {total_patterns} 個模式")
 
 
 @with_retry(max_retries=1)
 async def run_l2_roi_analysis() -> None:
-    """每月 1 號 07:00 — L2 ROI 分析。"""
-    logger.info("[L2Learn] placeholder — ROI analyser 尚未實作")
+    """每月 1 號 07:00 — L2 ROI 分析，找出高/低 ROI 關鍵字，更新策略建議。"""
+    from contentflow.agents.learning_agent import optimize_content_strategy
+    from contentflow.models.database import Project
+
+    with SessionLocal() as session:
+        project_ids = [p.id for p in session.query(Project).all()]
+
+    for project_id in project_ids:
+        try:
+            with SessionLocal() as session:
+                update = optimize_content_strategy(project_id, session)
+                high = len(update.high_roi_keywords) if update.high_roi_keywords else 0
+                low = len(update.low_roi_keywords) if update.low_roi_keywords else 0
+                logger.info(f"[L2Learn] project={project_id}，高 ROI={high}，低 ROI={low}")
+        except Exception as exc:
+            logger.warning(f"[L2Learn] project={project_id} 失敗：{exc}")
+
+    logger.info("[L2Learn] L2 ROI 分析完成")
+
+
+@with_retry(max_retries=2)
+async def run_auto_pipeline() -> None:
+    """每日 08:00 — 自動對 planned 文章啟動 AI pipeline。
+
+    邏輯：
+    1. 找出所有 ContentCalendar.status == 'planned' 且排程月/週已到期的條目
+    2. 或直接找 Article.status == 'planned' 中最早建立的 N 篇
+    3. 對每篇執行 orchestrator pipeline
+    """
+    from contentflow.models.database import Article, ContentCalendar
+    from contentflow.models.schemas import ArticleTask
+    from contentflow.agents.orchestrator import run_orchestrator
+    import uuid
+
+    MAX_CONCURRENT = 2  # 每次最多處理 2 篇避免過度花費
+
+    with SessionLocal() as session:
+        # 優先：有 ContentCalendar 排程且已到期的 planned 文章
+        now = datetime.now(timezone.utc)
+        current_month = now.month
+        current_week = (now.day - 1) // 7 + 1  # 粗算第幾週
+
+        due_cal = (
+            session.query(ContentCalendar)
+            .filter(
+                ContentCalendar.status == "planned",
+                ContentCalendar.month <= current_month,
+            )
+            .limit(MAX_CONCURRENT)
+            .all()
+        )
+        article_ids = [c.article_id for c in due_cal if c.article_id]
+
+        # 補充：若日曆文章不足，從 planned articles 補上
+        if len(article_ids) < MAX_CONCURRENT:
+            remaining = MAX_CONCURRENT - len(article_ids)
+            extra = (
+                session.query(Article)
+                .filter(Article.status == "planned", ~Article.id.in_(article_ids) if article_ids else True)
+                .order_by(Article.created_at)
+                .limit(remaining)
+                .all()
+            )
+            article_ids.extend([a.id for a in extra])
+
+        if not article_ids:
+            logger.info("[AutoPipeline] 無待處理的 planned 文章")
+            return
+
+        articles = session.query(Article).filter(Article.id.in_(article_ids)).all()
+        article_data = [(a.id, a.title, a.primary_keyword or a.title, a.project_id) for a in articles]
+
+    logger.info(f"[AutoPipeline] 啟動 {len(article_data)} 篇文章的 pipeline")
+
+    for art_id, title, keyword, project_id in article_data:
+        run_id = str(uuid.uuid4())
+        task = ArticleTask(
+            task_id=run_id,
+            title=title,
+            keywords=[keyword],
+        )
+
+        try:
+            result = await run_orchestrator(task, project_id=project_id, article_id=art_id)
+
+            # 回寫結果到 DB
+            with SessionLocal() as session:
+                article = session.query(Article).filter(Article.id == art_id).first()
+                if article and result.draft:
+                    article.draft_content = result.draft.content_markdown
+                    article.meta_title = result.draft.meta_title
+                    article.meta_description = result.draft.meta_description
+                    article.slug = result.draft.slug
+                    article.faq_schema_json = result.draft.faq_schema_json
+                    article.article_schema_json = result.draft.article_schema_json
+                    article.seo_score = result.draft.seo_score or None
+                    article.status = result.status or "reviewing"
+                    article.updated_at = datetime.now(timezone.utc)
+                    session.commit()
+
+            logger.info(f"[AutoPipeline] ✅ 文章 '{title}' pipeline 完成")
+        except Exception as exc:
+            logger.error(f"[AutoPipeline] ❌ 文章 '{title}' pipeline 失敗：{exc}")
+
+
+@with_retry(max_retries=1)
+async def send_weekly_report() -> None:
+    """每週日 09:00 — 彙整週報 KPI 並推送 Slack 通知。
+
+    彙整最近 7 天的 GSC、文章發布量、SEO 分數均值，
+    使用 Slack Webhook 傳送摘要（需設定 SLACK_WEBHOOK_URL）。
+    """
+    from contentflow.models.database import Article, SEORanking
+    import httpx
+
+    slack_url = getattr(settings, "slack_webhook_url", None)
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+
+    with SessionLocal() as session:
+        # Articles published this week
+        published_this_week = (
+            session.query(Article)
+            .filter(Article.status == "published", Article.updated_at >= week_ago)
+            .count()
+        )
+        # Average SEO score
+        avg_seo_q = (
+            session.query(func.avg(SEORanking.position).label("avg_pos"),
+                          func.sum(SEORanking.clicks).label("total_clicks"),
+                          func.sum(SEORanking.impressions).label("total_imp"))
+            .filter(SEORanking.tracked_date >= week_ago.date())
+            .first()
+        )
+        avg_pos = round(float(avg_seo_q.avg_pos), 1) if avg_seo_q and avg_seo_q.avg_pos else None
+        total_clicks = int(avg_seo_q.total_clicks or 0) if avg_seo_q else 0
+        total_imp = int(avg_seo_q.total_impressions or 0) if avg_seo_q else 0
+
+        planned_count = session.query(Article).filter(Article.status == "planned").count()
+        writing_count = session.query(Article).filter(Article.status == "writing").count()
+
+    report_lines = [
+        f"*📊 ContentFlow 週報 — {now.strftime('%Y/%m/%d')}*",
+        "",
+        f"• 本週發布文章：*{published_this_week}* 篇",
+        f"• GSC 點擊數（7天）：*{total_clicks:,}*",
+        f"• GSC 曝光數（7天）：*{total_imp:,}*",
+        f"• 平均排名：*{avg_pos or '—'}*",
+        f"• 待撰寫：{writing_count} 篇 | 待規劃：{planned_count} 篇",
+        "",
+        f"🔗 <{settings.admin_url}/admin/reports|查看完整報告>",
+    ]
+    report_text = "\n".join(report_lines)
+    logger.info(f"[WeeklyReport] {report_text}")
+
+    if slack_url:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(slack_url, json={"text": report_text})
+                if resp.status_code == 200:
+                    logger.info("[WeeklyReport] ✅ Slack 通知已發送")
+                else:
+                    logger.warning(f"[WeeklyReport] Slack 回應異常: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"[WeeklyReport] Slack 發送失敗: {e}")
+    else:
+        logger.info("[WeeklyReport] 未設定 SLACK_WEBHOOK_URL，跳過推播")
+
+
+async def check_ranking_drops() -> None:
+    """每週三 06:00 — 核心演算法更新偵測：比對排名 7天 vs 前7天，退步 ≥5 名發送 Slack 警報。
+
+    Section 18：演算法應對 SOP
+    - 若發現批量關鍵字退步（≥5 個關鍵字退步 ≥5 名），視為 Core Update 訊號
+    - 自動推送 Slack 預警，並建議執行 Content Refresh
+    """
+    from contentflow.models.database import SEORanking
+    import httpx
+
+    slack_url = getattr(settings, "slack_webhook_url", None)
+    now = datetime.now(timezone.utc)
+    cutoff_curr = (now - timedelta(days=7)).date()
+    cutoff_prev = (now - timedelta(days=14)).date()
+
+    with SessionLocal() as session:
+        curr_ranks = {
+            row.keyword: float(row.avg_pos)
+            for row in session.query(
+                SEORanking.keyword,
+                func.avg(SEORanking.position).label("avg_pos"),
+            ).filter(SEORanking.tracked_date >= cutoff_curr).group_by(SEORanking.keyword).all()
+            if row.avg_pos
+        }
+
+        prev_ranks = {
+            row.keyword: float(row.avg_pos)
+            for row in session.query(
+                SEORanking.keyword,
+                func.avg(SEORanking.position).label("avg_pos"),
+            ).filter(
+                SEORanking.tracked_date >= cutoff_prev,
+                SEORanking.tracked_date < cutoff_curr,
+            ).group_by(SEORanking.keyword).all()
+            if row.avg_pos
+        }
+
+    drops = []
+    for kw, curr in curr_ranks.items():
+        if kw in prev_ranks:
+            delta = curr - prev_ranks[kw]
+            if delta >= 5:
+                drops.append((kw, round(prev_ranks[kw], 1), round(curr, 1), round(delta, 1)))
+
+    drops.sort(key=lambda x: x[3], reverse=True)
+    logger.info(f"[RankDrop] 偵測到 {len(drops)} 個關鍵字排名退步 ≥5 名")
+
+    if len(drops) >= 5:
+        # 批量退步 → 疑似 Core Update
+        lines = [
+            f"*⚠️ ContentFlow — 排名異動預警 {now.strftime('%Y/%m/%d')}*",
+            f"偵測到 *{len(drops)} 個*關鍵字在過去 7 天內排名退步 ≥5 名，可能受 Google Core Update 影響。",
+            "",
+        ]
+        for kw, prev, curr, delta in drops[:8]:
+            lines.append(f"• `{kw}` #{prev} → #{curr} (*↓{delta}*)")
+        lines.extend([
+            "",
+            "建議動作：",
+            "1. 確認 Google Search Central 是否公告 Core Update",
+            "2. 至競品追蹤頁面比對競品排名",
+            "3. 對退步幅度最大的文章執行 Content Refresh",
+        ])
+        alert_text = "\n".join(lines)
+        logger.warning(f"[RankDrop] Core Update 疑似訊號！{alert_text}")
+        if slack_url:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    await client.post(slack_url, json={"text": alert_text})
+                    logger.info("[RankDrop] ✅ 排名異動 Slack 警報已發送")
+            except Exception as e:
+                logger.error(f"[RankDrop] Slack 發送失敗: {e}")
+    elif drops:
+        logger.info(f"[RankDrop] 退步關鍵字 < 5 個（{len(drops)}），非批量退步，不發送警報")
 
 
 # ── 排程設定進入點 ────────────────────────────────────────────
@@ -193,6 +654,9 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(check_refresh_triggers,      CronTrigger(day_of_week="tue", hour=4, minute=0),            id="refresh_check",   replace_existing=True)
     scheduler.add_job(run_l1_pattern_analysis,     CronTrigger(day=1,   hour=6,  minute=0),                     id="l1_learn",        replace_existing=True)
     scheduler.add_job(run_l2_roi_analysis,         CronTrigger(day=1,   hour=7,  minute=0),                     id="l2_learn",        replace_existing=True)
+    scheduler.add_job(run_auto_pipeline,           CronTrigger(hour=8,  minute=0),                              id="auto_pipeline",   replace_existing=True)
+    scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
+    scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
 
     scheduler.start()
     logger.info(f"[Scheduler] 已啟動 {len(scheduler.get_jobs())} 個排程任務")

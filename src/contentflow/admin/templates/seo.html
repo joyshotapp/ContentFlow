@@ -66,8 +66,174 @@
     </div>
   </div>
 
-  <!-- Top keywords by position -->
+  <!-- A-F Grade Distribution -->
   <div class="cf-card cf-card-p animate-up d2">
+    <div class="section-header" style="margin-bottom:12px;">
+      <div class="section-title">排名等級分布</div>
+      <span style="font-size:11px;color:#94a3b8;">A–F 共 {{ (grade_counts.A + grade_counts.B + grade_counts.C + grade_counts.D + grade_counts.F) }} 組關鍵字</span>
+    </div>
+    <div style="height:140px;position:relative;">
+      <canvas id="gradeChart"></canvas>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+      {% set grade_colors = [('A','#059669'),('B','#3b82f6'),('C','#f59e0b'),('D','#f97316'),('F','#ef4444')] %}
+      {% for gname, gcolor in grade_colors %}
+      <div style="display:flex;align-items:center;gap:4px;">
+        <div style="width:10px;height:10px;border-radius:2px;background:{{ gcolor }};"></div>
+        <span style="font-size:11px;color:#64748b;">{{ gname }}: {{ grade_counts[gname] }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- ── Alerts row ─────────────────────────────────────────────── -->
+{% if cannibal_alerts or refresh_queue %}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;">
+  <!-- Cannibalization Alerts -->
+  {% if cannibal_alerts %}
+  <div class="cf-card animate-up d2">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);display:flex;align-items:center;gap:8px;">
+      <span style="font-size:16px;">⚠️</span>
+      <div class="section-title" style="color:#d97706;">自蝕關鍵字警告</div>
+    </div>
+    <div style="padding:12px 16px;">
+      {% for alert in cannibal_alerts %}
+      <div style="padding:8px 0;border-bottom:1px solid rgba(226,232,240,0.4);font-size:12.5px;">
+        <div style="color:#0f172a;font-weight:500;margin-bottom:2px;">{{ alert.pattern[:80] }}</div>
+        <div style="color:#94a3b8;font-size:11px;">{{ alert.created_at.strftime('%Y/%m/%d') if alert.created_at else '' }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Refresh Queue -->
+  {% if refresh_queue %}
+  <div class="cf-card animate-up d3">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);display:flex;align-items:center;gap:8px;">
+      <span style="font-size:16px;">🔄</span>
+      <div class="section-title" style="color:#6366f1;">Content Refresh 待辦</div>
+    </div>
+    <div style="padding:12px 16px;">
+      {% for item in refresh_queue %}
+      <div style="padding:8px 0;border-bottom:1px solid rgba(226,232,240,0.4);">
+        <div style="font-size:12.5px;color:#0f172a;margin-bottom:2px;">{{ item.pattern[:80] }}</div>
+        <div style="font-size:11px;color:#94a3b8;">{{ item.created_at.strftime('%Y/%m/%d') if item.created_at else '' }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ── Top Keywords table ──────────────────────────────────────── -->
+<div class="cf-card animate-up d2" style="margin-bottom:20px;">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">熱門關鍵字（含 7 日趨勢）</div>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>關鍵字</th>
+          <th>點擊</th>
+          <th>曝光</th>
+          <th>CTR</th>
+          <th>平均排名</th>
+          <th>7 日變化</th>
+          <th>等級</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for kw in top_keywords %}
+        {% set pos = kw.avg_position or 99 %}
+        {% set ctr = kw.avg_ctr or 0 %}
+        {% if pos <= 3 and ctr > 0.08 %}{% set grade = 'A' %}{% set gcol = '#059669' %}
+        {% elif pos <= 10 %}{% set grade = 'B' %}{% set gcol = '#3b82f6' %}
+        {% elif pos <= 20 %}{% set grade = 'C' %}{% set gcol = '#f59e0b' %}
+        {% elif pos <= 50 %}{% set grade = 'D' %}{% set gcol = '#f97316' %}
+        {% else %}{% set grade = 'F' %}{% set gcol = '#ef4444' %}{% endif %}
+        <tr>
+          <td style="font-weight:500;">{{ kw.keyword or '—' }}</td>
+          <td style="font-weight:700;">{{ "{:,}".format(kw.total_clicks|int) if kw.total_clicks else 0 }}</td>
+          <td style="color:#64748b;">{{ "{:,}".format(kw.total_impressions|int) if kw.total_impressions else 0 }}</td>
+          <td>{{ "%.2f"|format((kw.avg_ctr or 0) * 100) }}%</td>
+          <td><span style="font-weight:600;">{{ "%.1f"|format(pos) }}</span></td>
+          <td>
+            {% if kw.rank_delta is not none %}
+              {% if kw.rank_delta > 0 %}
+              <span style="color:#059669;font-weight:600;">▲ {{ "%.1f"|format(kw.rank_delta) }}</span>
+              {% elif kw.rank_delta < 0 %}
+              <span style="color:#ef4444;font-weight:600;">▼ {{ "%.1f"|format(kw.rank_delta|abs) }}</span>
+              {% else %}
+              <span style="color:#94a3b8;">—</span>
+              {% endif %}
+            {% else %}
+            <span style="color:#94a3b8;">—</span>
+            {% endif %}
+          </td>
+          <td><span style="background:{{ gcol }}22;color:{{ gcol }};font-size:11px;font-weight:700;padding:2px 8px;border-radius:9999px;">{{ grade }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📊</div><p>尚無關鍵字資料</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Top keywords by position -->
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:20px;">
+  <!-- GSC Data table -->
+  <div class="cf-card animate-up d3">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+      <div class="section-title">搜尋表現明細</div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="cf-table">
+        <thead>
+          <tr>
+            <th>搜尋詞</th>
+            <th>頁面</th>
+            <th>點擊</th>
+            <th>曝光</th>
+            <th>CTR</th>
+            <th>排名</th>
+            <th>日期</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in gsc_data %}
+          <tr>
+            <td style="font-weight:500;">{{ row.query or '—' }}</td>
+            <td style="font-size:12px;color:#64748b;">
+              {% if row.page %}
+              <a href="{{ row.page }}" target="_blank" style="color:#6366f1;text-decoration:none;font-size:12px;">
+                {{ row.page[-40:] if row.page|length > 40 else row.page }}
+              </a>
+              {% else %}—{% endif %}
+            </td>
+            <td style="font-weight:700;">{{ "{:,}".format(row.clicks) if row.clicks else 0 }}</td>
+            <td style="color:#64748b;">{{ "{:,}".format(row.impressions) if row.impressions else 0 }}</td>
+            <td>{{ "%.2f"|format(row.ctr * 100 if row.ctr else 0) }}%</td>
+            <td>
+              {% if row.position %}
+              <span style="font-weight:600;{% if row.position <= 3 %}color:#059669;{% elif row.position <= 10 %}color:#d97706;{% else %}color:#64748b;{% endif %}">{{ "%.1f"|format(row.position) }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td style="color:#94a3b8;font-size:12px;">{{ row.date.strftime('%m/%d') if row.date else '—' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📊</div><p>尚無 GSC 資料 · 請確認 Search Console 已連接</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cf-card cf-card-p animate-up d4">
     <div class="section-header" style="margin-bottom:10px;">
       <div class="section-title">機會關鍵字</div>
       <span style="font-size:11px;color:#94a3b8;">排名 3–15</span>
@@ -90,58 +256,11 @@
   </div>
 </div>
 
-<!-- ── GSC Data table ─────────────────────────────────────────── -->
-<div class="cf-card animate-up d2">
-  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
-    <div class="section-title">搜尋表現明細</div>
-  </div>
-  <div style="overflow-x:auto;">
-    <table class="cf-table">
-      <thead>
-        <tr>
-          <th>搜尋詞</th>
-          <th>頁面</th>
-          <th>點擊</th>
-          <th>曝光</th>
-          <th>CTR</th>
-          <th>排名</th>
-          <th>日期</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in gsc_data %}
-        <tr>
-          <td style="font-weight:500;">{{ row.query or '—' }}</td>
-          <td style="font-size:12px;color:#64748b;">
-            {% if row.page %}
-            <a href="{{ row.page }}" target="_blank" style="color:#6366f1;text-decoration:none;font-size:12px;">
-              {{ row.page[-40:] if row.page|length > 40 else row.page }}
-            </a>
-            {% else %}—{% endif %}
-          </td>
-          <td style="font-weight:700;">{{ "{:,}".format(row.clicks) if row.clicks else 0 }}</td>
-          <td style="color:#64748b;">{{ "{:,}".format(row.impressions) if row.impressions else 0 }}</td>
-          <td>{{ "%.2f"|format(row.ctr * 100 if row.ctr else 0) }}%</td>
-          <td>
-            {% if row.position %}
-            <span style="font-weight:600;{% if row.position <= 3 %}color:#059669;{% elif row.position <= 10 %}color:#d97706;{% else %}color:#64748b;{% endif %}">{{ "%.1f"|format(row.position) }}</span>
-            {% else %}—{% endif %}
-          </td>
-          <td style="color:#94a3b8;font-size:12px;">{{ row.date.strftime('%m/%d') if row.date else '—' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📊</div><p>尚無 GSC 資料 · 請確認 Search Console 已連接</p></div></td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
-const trend = {{ gsc_trend | tojson }};
+const trend = {{ gsc_trend | safe }};
 if (trend && trend.length) {
   new Chart(document.getElementById('gscTrendChart'), {
     type: 'line',
@@ -168,6 +287,32 @@ if (trend && trend.length) {
         x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#94a3b8', maxTicksLimit: 10 } },
         y: { grid: { color: 'rgba(226,232,240,0.5)' }, ticks: { font: { size: 10 }, color: '#94a3b8' }, position: 'left' },
         y1: { display: false, position: 'right' }
+      }
+    }
+  });
+}
+
+// A-F Grade Distribution Doughnut
+const gradeData = {{ grade_json | safe }};
+const gradeCanvas = document.getElementById('gradeChart');
+if (gradeCanvas) {
+  new Chart(gradeCanvas, {
+    type: 'doughnut',
+    data: {
+      labels: ['A (P1-3 CTR>8%)', 'B (P1-10)', 'C (P11-20)', 'D (P21-50)', 'F (P50+)'],
+      datasets: [{
+        data: [gradeData.A, gradeData.B, gradeData.C, gradeData.D, gradeData.F],
+        backgroundColor: ['#059669', '#3b82f6', '#f59e0b', '#f97316', '#ef4444'],
+        borderWidth: 2,
+        borderColor: '#fff',
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw} 組` } }
       }
     }
   });

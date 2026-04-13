@@ -3,7 +3,120 @@
 {% block page_title %}關鍵字庫{% endblock %}
 {% block page_subtitle %}{{ total }} 個追蹤關鍵字{% endblock %}
 
+{% block topbar_actions %}
+<button onclick="document.getElementById('ai-suggest-panel').classList.toggle('hidden');document.getElementById('add-kw-panel').classList.add('hidden')"
+  class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+  AI 挖掘關鍵字
+</button>
+<button onclick="document.getElementById('add-kw-panel').classList.toggle('hidden');document.getElementById('ai-suggest-panel').classList.add('hidden')"
+  class="btn btn-ghost btn-sm" style="display:flex;align-items:center;gap:6px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+  手動新增
+</button>
+{% endblock %}
+
 {% block content %}
+
+<!-- ── AI Keyword Suggestion Panel ───────────────────────────── -->
+<div id="ai-suggest-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:14px;">🔍</div>
+    <div>
+      <div style="font-size:14px;font-weight:700;color:#0f172a;">AI 關鍵字挖掘</div>
+      <div style="font-size:11.5px;color:#94a3b8;">輸入主題 → 系統從 Google PAA、相關搜尋、競品標題自動挖掘候選關鍵字</div>
+    </div>
+  </div>
+
+  <!-- Input row -->
+  <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;">
+    <div class="form-group" style="flex:1;margin:0;">
+      <label class="form-label">種子主題</label>
+      <input class="form-input" type="text" id="suggest-topic" placeholder="例：骨刺、膝蓋退化、椎間盤突出" style="font-size:14px;">
+    </div>
+    <button type="button" onclick="runSuggest()" id="suggest-btn"
+      class="btn btn-primary btn-sm" style="height:38px;padding:0 20px;white-space:nowrap;">
+      開始挖掘
+    </button>
+  </div>
+
+  <!-- Results area -->
+  <div id="suggest-results" style="display:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--cf-border);">
+      <div style="font-size:12.5px;font-weight:600;color:#475569;" id="suggest-count-label"></div>
+      <div style="display:flex;gap:8px;">
+        <button type="button" onclick="selectAll(true)" class="btn btn-ghost btn-sm" style="font-size:11px;">全選</button>
+        <button type="button" onclick="selectAll(false)" class="btn btn-ghost btn-sm" style="font-size:11px;">全不選</button>
+      </div>
+    </div>
+
+    <div id="suggest-notice" style="display:none;margin-bottom:10px;padding:8px 12px;background:#fef9c3;border-radius:8px;border-left:3px solid #fbbf24;font-size:12px;color:#92400e;">
+      💡 搜尋量與難度需自行以 Ahrefs / SEMrush 補入。匯入後可在表格中直接編輯。
+    </div>
+
+    <div id="suggest-list" style="display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;"></div>
+
+    <div style="margin-top:14px;display:flex;gap:10px;align-items:center;">
+      <button type="button" onclick="importSelected()" id="import-btn"
+        class="btn btn-primary btn-sm" style="padding:0 20px;height:36px;">
+        匯入勾選的關鍵字
+      </button>
+      <span id="import-status" style="font-size:12px;color:#64748b;"></span>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div id="suggest-error" style="display:none;padding:10px 14px;background:#fef2f2;border-radius:8px;border-left:3px solid #ef4444;font-size:12.5px;color:#b91c1c;"></div>
+</div>
+
+<!-- ── Manual Add Keyword Panel ──────────────────────────────── -->
+<div id="add-kw-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
+  <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;">🔑 新增關鍵字</div>
+  <form method="post" action="/admin/keywords/new">
+    <input type="hidden" name="project_id" value="{{ project_id }}">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+      <div class="form-group">
+        <label class="form-label">關鍵字 *</label>
+        <input class="form-input" type="text" name="keyword" placeholder="例：膝蓋疼痛治療" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">月搜尋量</label>
+        <input class="form-input" type="number" name="search_volume" placeholder="例：1200" min="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">SEO 難度 (0-100)</label>
+        <input class="form-input" type="number" name="seo_difficulty" placeholder="例：45" min="0" max="100">
+      </div>
+      <div class="form-group">
+        <label class="form-label">搜尋意圖</label>
+        <select class="form-input" name="intent">
+          <option value="">— 選擇 —</option>
+          <option value="informational">資訊型</option>
+          <option value="navigational">導航型</option>
+          <option value="transactional">交易型</option>
+          <option value="commercial">商業調查型</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">漏斗階段</label>
+        <select class="form-input" name="funnel_stage">
+          <option value="">— 選擇 —</option>
+          <option value="tofu">TOFU（認知）</option>
+          <option value="mofu">MOFU（考慮）</option>
+          <option value="bofu">BOFU（決策）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">備註</label>
+        <input class="form-input" type="text" name="steve_note" placeholder="策略備註...">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button type="submit" class="btn btn-primary btn-sm">儲存關鍵字</button>
+      <button type="button" onclick="document.getElementById('add-kw-panel').classList.add('hidden')" class="btn btn-ghost btn-sm">取消</button>
+    </div>
+  </form>
+</div>
 
 <!-- ── Stats row ──────────────────────────────────────────────── -->
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
@@ -85,28 +198,44 @@
   <!-- Search + sort -->
   <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--cf-border);">
     <form method="get" style="display:flex;align-items:center;gap:10px;flex:1;">
-      <div class="cf-search" style="max-width:260px;flex:1;">
+      <div class="cf-search" style="max-width:240px;flex:1;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input name="q" value="{{ q or '' }}" placeholder="搜尋關鍵字...">
       </div>
+      <select name="intent_filter" class="btn btn-ghost btn-sm" onchange="this.form.submit()" style="font-size:12px;">
+        <option value="">全部意圖</option>
+        <option value="informational" {% if intent_filter=='informational' %}selected{% endif %}>資訊型</option>
+        <option value="commercial" {% if intent_filter=='commercial' %}selected{% endif %}>商業調查型</option>
+        <option value="transactional" {% if intent_filter=='transactional' %}selected{% endif %}>交易型</option>
+        <option value="navigational" {% if intent_filter=='navigational' %}selected{% endif %}>導航型</option>
+      </select>
+      <select name="funnel_filter" class="btn btn-ghost btn-sm" onchange="this.form.submit()" style="font-size:12px;">
+        <option value="">全部漏斗</option>
+        <option value="tofu" {% if funnel_filter=='tofu' %}selected{% endif %}>TOFU 認知</option>
+        <option value="mofu" {% if funnel_filter=='mofu' %}selected{% endif %}>MOFU 考慮</option>
+        <option value="bofu" {% if funnel_filter=='bofu' %}selected{% endif %}>BOFU 決策</option>
+      </select>
       <select name="sort" class="btn btn-ghost btn-sm" onchange="this.form.submit()" style="font-size:12px;">
-        <option value="volume" {% if sort=='volume' %}selected{% endif %}>依搜尋量排序</option>
-        <option value="difficulty" {% if sort=='difficulty' %}selected{% endif %}>依難度排序</option>
-        <option value="keyword" {% if sort=='keyword' %}selected{% endif %}>依字母排序</option>
+        <option value="volume" {% if sort=='volume' %}selected{% endif %}>依搜尋量</option>
+        <option value="difficulty" {% if sort=='difficulty' %}selected{% endif %}>依難度</option>
+        <option value="keyword" {% if sort=='keyword' %}selected{% endif %}>依字母</option>
       </select>
     </form>
   </div>
 
   <div style="overflow-x:auto;">
+    {% set INTENT_MAP = {"informational": "資訊型", "commercial": "商業調查", "transactional": "交易型", "navigational": "導航型", "investigational": "比較型"} %}
+    {% set FUNNEL_MAP = {"tofu": ("TOFU", "#0ea5e9"), "mofu": ("MOFU", "#f59e0b"), "bofu": ("BOFU", "#10b981"), "awareness": ("認知", "#0ea5e9"), "consideration": ("考慮", "#f59e0b"), "decision": ("決策", "#10b981")} %}
     <table class="cf-table">
       <thead>
         <tr>
           <th>關鍵字</th>
           <th>月搜尋量</th>
           <th>競爭難度</th>
-          <th>意圖</th>
-          <th>相關文章</th>
+          <th>搜尋意圖</th>
+          <th>漏斗階段</th>
           <th>更新</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -141,19 +270,27 @@
             {% else %}—{% endif %}
           </td>
           <td>
-            {% if kw.usage %}
-            <span class="badge badge-info" style="font-size:10.5px;">{{ kw.usage }}</span>
-            {% else %}—{% endif %}
+            {% if kw.intent %}
+            <span class="badge badge-info" style="font-size:10.5px;">{{ INTENT_MAP.get(kw.intent, kw.intent) }}</span>
+            {% else %}<span style="color:#cbd5e1;">—</span>{% endif %}
           </td>
           <td>
-            <span style="color:#cbd5e1;font-size:12px;">—</span>
+            {% if kw.funnel_stage %}
+            {% set funnel_info = FUNNEL_MAP.get(kw.funnel_stage, (kw.funnel_stage, "#94a3b8")) %}
+            <span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;background:{{ funnel_info[1] }}20;color:{{ funnel_info[1] }};">{{ funnel_info[0] }}</span>
+            {% else %}<span style="color:#cbd5e1;">—</span>{% endif %}
           </td>
           <td style="color:#94a3b8;font-size:11.5px;">
             {{ kw.updated_at.strftime('%m/%d') if kw.updated_at else '—' }}
           </td>
+          <td>
+            <form method="post" action="/admin/keywords/{{ kw.id }}/delete" onsubmit="return confirm('刪除關鍵字「{{ kw.keyword }}」？')">
+              <button type="submit" class="btn btn-ghost btn-sm" style="color:#ef4444;font-size:11px;padding:3px 7px;">🗑</button>
+            </form>
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="6"><div class="empty-state"><p>尚無關鍵字資料</p></div></td></tr>
+        <tr><td colspan="7"><div class="empty-state"><p>尚無關鍵字資料</p></div></td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -183,6 +320,127 @@ new Chart(document.getElementById('volChart'), {
       y: { grid: { color: 'rgba(226,232,240,0.6)' }, ticks: { font: { size: 10 }, color: '#94a3b8', precision: 0 } }
     }
   }
+});
+
+// ── AI Keyword Suggest ───────────────────────────────────────
+const PROJECT_ID = {{ project_id | default(0) }};
+const INTENT_ZH = {
+  informational: '資訊型', commercial: '商業調查', transactional: '交易型', navigational: '導航型'
+};
+const SOURCE_COLORS = {
+  'PAA': '#6366f1', '關聯搜尋': '#0ea5e9', '競品標題': '#f59e0b'
+};
+let _candidates = [];
+
+async function runSuggest() {
+  const topic = document.getElementById('suggest-topic').value.trim();
+  if (!topic) { document.getElementById('suggest-topic').focus(); return; }
+
+  const btn = document.getElementById('suggest-btn');
+  btn.disabled = true;
+  btn.textContent = '挖掘中…';
+  document.getElementById('suggest-results').style.display = 'none';
+  document.getElementById('suggest-error').style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('topic', topic);
+    fd.append('project_id', PROJECT_ID);
+    const res = await fetch('/admin/keywords/suggest', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (data.error && !data.candidates?.length) {
+      document.getElementById('suggest-error').textContent = data.error;
+      document.getElementById('suggest-error').style.display = 'block';
+      return;
+    }
+
+    _candidates = data.candidates || [];
+    renderCandidates(_candidates);
+    document.getElementById('suggest-count-label').textContent =
+      `找到 ${_candidates.length} 個候選關鍵字（主題：${data.topic}）`;
+    document.getElementById('suggest-notice').style.display = 'block';
+    document.getElementById('suggest-results').style.display = 'block';
+
+    if (data.error) {
+      document.getElementById('suggest-error').textContent = data.error;
+      document.getElementById('suggest-error').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('suggest-error').textContent = `請求失敗：${e}`;
+    document.getElementById('suggest-error').style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '重新挖掘';
+  }
+}
+
+function renderCandidates(list) {
+  const container = document.getElementById('suggest-list');
+  container.innerHTML = '';
+  list.forEach((c, i) => {
+    const srcColor = SOURCE_COLORS[c.source] || '#94a3b8';
+    const intentLabel = INTENT_ZH[c.intent] || '';
+    const existsBadge = c.exists
+      ? '<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:#fef9c3;color:#92400e;font-weight:600;">已存在</span>'
+      : '';
+    const row = document.createElement('label');
+    row.style.cssText = `display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;border:1px solid #e2e8f0;cursor:pointer;transition:background 0.1s;${c.exists ? 'opacity:0.6;' : ''}`;
+    row.onmouseover = () => row.style.background = '#f8fafc';
+    row.onmouseout = () => row.style.background = '';
+    row.innerHTML = `
+      <input type="checkbox" data-idx="${i}" ${c.exists ? '' : 'checked'} style="width:15px;height:15px;accent-color:#6366f1;flex-shrink:0;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:500;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.keyword}</div>
+      </div>
+      <span style="font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;background:${srcColor}18;color:${srcColor};flex-shrink:0;">${c.source}</span>
+      ${intentLabel ? `<span style="font-size:10.5px;padding:2px 7px;border-radius:5px;background:#e0e7ff;color:#4f46e5;flex-shrink:0;">${intentLabel}</span>` : ''}
+      ${existsBadge}
+    `;
+    container.appendChild(row);
+  });
+}
+
+function selectAll(checked) {
+  document.querySelectorAll('#suggest-list input[type="checkbox"]').forEach(cb => {
+    const idx = parseInt(cb.dataset.idx);
+    if (!_candidates[idx]?.exists) cb.checked = checked;
+  });
+}
+
+async function importSelected() {
+  const selected = [];
+  document.querySelectorAll('#suggest-list input[type="checkbox"]:checked').forEach(cb => {
+    const idx = parseInt(cb.dataset.idx);
+    if (_candidates[idx] && !_candidates[idx].exists) selected.push(_candidates[idx]);
+  });
+  if (!selected.length) {
+    document.getElementById('import-status').textContent = '請勾選至少一個新關鍵字';
+    return;
+  }
+
+  const btn = document.getElementById('import-btn');
+  btn.disabled = true;
+  document.getElementById('import-status').textContent = '匯入中…';
+
+  try {
+    const res = await fetch('/admin/keywords/bulk-import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: selected, project_id: PROJECT_ID }),
+    });
+    const data = await res.json();
+    document.getElementById('import-status').textContent = `✓ 成功匯入 ${data.imported} 個關鍵字`;
+    setTimeout(() => location.reload(), 1000);
+  } catch(e) {
+    document.getElementById('import-status').textContent = `匯入失敗：${e}`;
+    btn.disabled = false;
+  }
+}
+
+// Enter key triggers suggest
+document.getElementById('suggest-topic').addEventListener('keydown', e => {
+  if (e.key === 'Enter') runSuggest();
 });
 </script>
 {% endblock %}

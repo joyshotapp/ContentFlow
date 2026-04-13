@@ -426,6 +426,160 @@ def _generate_article_schema(
     return json.dumps(schema, ensure_ascii=False, indent=2)
 
 
+# ── Step 5c: HowTo JSON-LD Schema ─────────────────────────────
+
+def _generate_howto_schema(content_markdown: str, title: str) -> str:
+    """從文章 Markdown 中偵測步驟型內容，產出 HowTo JSON-LD structured data。
+
+    偵測規則：
+    - 文中存在一個 H2 段落，內容含有「步驟」「方法」「做法」「如何」「教學」「流程」
+    - 該段落下有至少 3 個有序清單項目（1. / 2. 開頭）或 H3 小節
+    - 符合條件才產出 HowTo，避免誤判說明性文章
+    """
+    # 找出含有步驟意圖的 H2 段落
+    step_intent_re = re.compile(
+        r'^(##\s+(?:[^\n]*(?:步驟|方法|做法|如何|教學|流程|操作|技巧)[^\n]*)\n)(.*?)(?=^##\s|\Z)',
+        re.MULTILINE | re.DOTALL,
+    )
+    match = step_intent_re.search(content_markdown)
+    if not match:
+        return ""
+
+    section_header = match.group(1).strip().lstrip('#').strip()
+    section_body = match.group(2)
+
+    # 嘗試提取有序清單步驟
+    ol_steps = re.findall(r'^\d+[.、]\s+(.+)', section_body, re.MULTILINE)
+
+    # 嘗試提取 H3 作為步驟
+    h3_steps: list[str] = []
+    h3_blocks = re.split(r'^###\s+', section_body, flags=re.MULTILINE)
+    for block in h3_blocks[1:]:  # skip leading text before first H3
+        lines = block.splitlines()
+        if lines:
+            step_title = lines[0].strip()
+            step_text = ' '.join(
+                l.strip() for l in lines[1:] if l.strip() and not l.startswith('#')
+            )[:200]
+            h3_steps.append((step_title, step_text))
+
+    # 優先使用 H3 步驟（結構更完整），其次才用有序清單
+    if len(h3_steps) >= 3:
+        how_to_steps = [
+            {
+                "@type": "HowToStep",
+                "name": s[0],
+                "text": s[1] if s[1] else s[0],
+            }
+            for s in h3_steps
+        ]
+    elif len(ol_steps) >= 3:
+        how_to_steps = [
+            {"@type": "HowToStep", "text": s}
+            for s in ol_steps
+        ]
+    else:
+        return ""  # not enough steps → skip
+
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        "name": title,
+        "step": how_to_steps,
+    }
+    return json.dumps(schema, ensure_ascii=False, indent=2)
+
+
+# ── Step 5d: CTA 注入（SEO × CRO）──────────────────────────────
+
+_CTA_TEMPLATES: dict[str, dict] = {
+    "informational": {
+        "heading": "延伸學習",
+        "text": (
+            "如果你想深入了解，歡迎參閱我們的完整指南，"
+            "裡面涵蓋更多實用資訊與工具建議。"
+        ),
+        "link_text": "查看完整指南",
+        "link_placeholder": "<!-- TODO: 填入指南連結 -->",
+    },
+    "investigational": {
+        "heading": "免費諮詢",
+        "text": (
+            "還有疑問？歡迎預約免費諮詢，"
+            "專業團隊將根據你的情況提供個人化建議。"
+        ),
+        "link_text": "預約免費諮詢",
+        "link_placeholder": "<!-- TODO: 填入諮詢連結 -->",
+    },
+    "transactional": {
+        "heading": "立即行動",
+        "text": (
+            "準備好開始了嗎？點擊下方按鈕，"
+            "了解我們的方案與價格，或直接預約服務。"
+        ),
+        "link_text": "查看方案與價格",
+        "link_placeholder": "<!-- TODO: 填入購買/預約連結 -->",
+    },
+}
+
+# 漏斗階段 → CTA 類型對照
+_FUNNEL_TO_CTA: dict[str, str] = {
+    "tofu": "informational",
+    "mofu": "investigational",
+    "bofu": "transactional",
+    "informational": "informational",
+    "investigational": "investigational",
+    "transactional": "transactional",
+    "navigational": "informational",
+}
+
+
+def _inject_cta_blocks(content_markdown: str, strategy_context: dict | None) -> str:
+    """在文章適當位置注入 CTA 區塊（SEO × CRO Phase 15）。
+
+    策略：
+    - 在 FAQ 段落之前（若存在）插入 CTA，使讀者在看完內容後有明確行動出口
+    - 若沒有 FAQ，則在文章結尾（E-E-A-T 聲明之前）插入
+    - 根據 strategy_context 的 funnel_stage / search_intent 選擇 CTA 類型
+    - 若已有 CTA（避免冪等重複注入），則跳過
+    """
+    # 冪等保護：若已含 CTA 標記則跳過
+    if "<!-- CTA_BLOCK -->" in content_markdown:
+        return content_markdown
+
+    # 決定 CTA 類型
+    cta_type = "informational"
+    if strategy_context:
+        funnel = (strategy_context.get("funnel_stage") or
+                  strategy_context.get("search_intent") or "").lower()
+        cta_type = _FUNNEL_TO_CTA.get(funnel, "informational")
+
+    tpl = _CTA_TEMPLATES[cta_type]
+    cta_block = (
+        f"\n\n<!-- CTA_BLOCK -->\n"
+        f"> **{tpl['heading']}**\n>\n"
+        f"> {tpl['text']}\n>\n"
+        f"> [{tpl['link_text']}]({tpl['link_placeholder']})\n"
+    )
+
+    # 插入位置：FAQ 前
+    faq_pattern = re.compile(r'^(##\s+(?:FAQ|常見問題)[^\n]*)', re.MULTILINE)
+    faq_match = faq_pattern.search(content_markdown)
+    if faq_match:
+        insert_pos = faq_match.start()
+        return content_markdown[:insert_pos] + cta_block + "\n" + content_markdown[insert_pos:]
+
+    # 插入位置：E-E-A-T 聲明前
+    eeat_pattern = re.compile(r'^---\s*\n## 關於本文審閱', re.MULTILINE)
+    eeat_match = eeat_pattern.search(content_markdown)
+    if eeat_match:
+        insert_pos = eeat_match.start()
+        return content_markdown[:insert_pos] + cta_block + "\n" + content_markdown[insert_pos:]
+
+    # 插入位置：文章結尾
+    return content_markdown.rstrip() + cta_block
+
+
 # ── Step 6: E-E-A-T 作者聲明（醫療類）──────────────────────────
 
 def _append_eeat_section(content_markdown: str, ctx: ProjectContext) -> str:
@@ -527,18 +681,29 @@ async def run_writing_agent(
     slug = _generate_slug(client, article_title)
     logger.info(f"[Writing Agent] Slug：{slug}")
 
-    # 6. 產出 FAQ JSON-LD structured data
+    # 6. 注入 CTA 區塊（SEO × CRO）
+    full_content = _inject_cta_blocks(full_content, strategy_context)
+    logger.info("[Writing Agent] CTA 區塊已注入")
+
+    # 7. 產出 FAQ JSON-LD structured data
     faq_schema = _generate_faq_schema(full_content)
     if faq_schema:
         logger.info(f"[Writing Agent] FAQ Schema：提取到 {faq_schema.count('@type')-1} 個問答對")
     else:
         logger.info("[Writing Agent] FAQ Schema：未找到 FAQ 段落，跳過")
 
-    # 7. E-E-A-T 作者聲明（醫療保健類）
+    # 7b. 產出 HowTo JSON-LD（若文章含步驟型段落）
+    howto_schema = _generate_howto_schema(full_content, article_title)
+    if howto_schema:
+        logger.info("[Writing Agent] HowTo Schema 已產出")
+    else:
+        logger.info("[Writing Agent] HowTo Schema：無步驟型段落，跳過")
+
+    # 8. E-E-A-T 作者聲明（醫療保健類）
     full_content = _append_eeat_section(full_content, ctx)
     word_count = len(full_content)
 
-    # 8. Article/BlogPosting JSON-LD
+    # 9. Article/BlogPosting JSON-LD
     article_schema = _generate_article_schema(
         title=article_title,
         meta_description=meta.get("meta_description", ""),
@@ -548,7 +713,17 @@ async def run_writing_agent(
     )
     logger.info("[Writing Agent] Article JSON-LD 已產出")
 
-    # 9. 組裝 ArticleDraft
+    # 10. PAA 問題提取並持久化
+    paa_list: list[str] = []
+    if report.serp_analysis and report.serp_analysis.people_also_ask:
+        paa_list = [p.question for p in report.serp_analysis.people_also_ask]
+    elif report.paa_questions:
+        paa_list = report.paa_questions
+    paa_questions_json = json.dumps(paa_list, ensure_ascii=False)
+    if paa_list:
+        logger.info(f"[Writing Agent] PAA 問題已提取：{len(paa_list)} 條")
+
+    # 11. 組裝 ArticleDraft
     draft = ArticleDraft(
         title=article_title,
         meta_title=meta.get("meta_title", article_title),
@@ -557,7 +732,9 @@ async def run_writing_agent(
         word_count=word_count,
         slug=slug,
         faq_schema_json=faq_schema,
+        howto_schema_json=howto_schema,
         article_schema_json=article_schema,
+        paa_questions_json=paa_questions_json,
         status=ArticleStatus.WRITING,
     )
 

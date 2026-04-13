@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Tech SEO{% endblock %}
+{% block page_title %}Tech SEO 健康儀表板{% endblock %}
+{% block page_subtitle %}Core Web Vitals · 索引狀況 · GA4 頁面指標{% endblock %}
+
+{% block content %}
+
+<!-- ── Project switcher ─────────────────────────────────────── -->
+{% if projects | length > 1 %}
+<div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;">
+  {% for proj in projects %}
+  <a href="/admin/tech-seo?project_id={{ proj.id }}"
+     style="padding:6px 14px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid var(--cf-border);text-decoration:none;
+            {% if proj.id == project_id %}background:#6366f1;color:#fff;border-color:#6366f1;{% else %}background:#fff;color:#475569;{% endif %}">
+    {{ proj.name }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ── KPI Row ─────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ pages_indexed }}</div>
+        <div style="font-size:11px;color:#94a3b8;">GSC 索引頁數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d1">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-indigo" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ ga_metrics | length }}</div>
+        <div style="font-size:11px;color:#94a3b8;">GA4 監控頁面</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d2">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ tech_issues | length }}</div>
+        <div style="font-size:11px;color:#94a3b8;">技術問題數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d3">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-sky" style="width:40px;height:40px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;">
+          {% if cwv_summary %}{{ cwv_summary.get('lcp_score', '—') }}{% else %}—{% endif %}
+        </div>
+        <div style="font-size:11px;color:#94a3b8;">LCP 評分</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── CWV Summary ─────────────────────────────────────────── -->
+{% if cwv_summary %}
+<div class="cf-card cf-card-p animate-up d1" style="margin-bottom:20px;">
+  <div class="section-title" style="margin-bottom:16px;">Core Web Vitals</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+    {% for metric, label, good, needs in [
+      ('lcp', 'Largest Contentful Paint', cwv_summary.get('lcp'), '≤2.5s 為佳'),
+      ('fid', 'First Input Delay', cwv_summary.get('fid'), '≤100ms 為佳'),
+      ('cls', 'Cumulative Layout Shift', cwv_summary.get('cls'), '≤0.1 為佳'),
+    ] %}
+    <div style="padding:14px;background:#f8fafc;border-radius:10px;text-align:center;">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">{{ label }}</div>
+      <div style="font-size:28px;font-weight:900;color:{% if good %}#059669{% else %}#94a3b8{% endif %};">{{ good or '—' }}</div>
+      <div style="font-size:10.5px;color:#94a3b8;margin-top:4px;">{{ needs }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Tech Issues ─────────────────────────────────────────── -->
+{% if tech_issues %}
+<div class="cf-card animate-up d2" style="margin-bottom:20px;">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">技術 SEO 問題</div>
+  </div>
+  <div style="padding:14px 18px;">
+    {% for issue in tech_issues %}
+    <div style="padding:10px;border-radius:8px;border-left:3px solid {% if issue.severity == 'error' %}#ef4444{% elif issue.severity == 'warning' %}#f59e0b{% else %}#3b82f6{% endif %};background:#f8fafc;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="font-size:13px;font-weight:600;color:#0f172a;">{{ issue.title or issue.type or '問題' }}</div>
+        {% if issue.severity == 'error' %}<span class="badge badge-danger" style="font-size:10px;">錯誤</span>
+        {% elif issue.severity == 'warning' %}<span class="badge badge-warning" style="font-size:10px;">警告</span>
+        {% else %}<span class="badge badge-info" style="font-size:10px;">建議</span>{% endif %}
+      </div>
+      {% if issue.description %}<div style="font-size:12px;color:#64748b;">{{ issue.description }}</div>{% endif %}
+      {% if issue.affected_urls %}<div style="font-size:11px;color:#94a3b8;margin-top:4px;">影響 {{ issue.affected_urls | length }} 個頁面</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="cf-card cf-card-p animate-up d2" style="margin-bottom:20px;">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span style="font-size:20px;">🔍</span>
+    <div>
+      <div style="font-size:13.5px;font-weight:600;color:#0f172a;">技術 SEO 掃描</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px;">排程任務每週自動掃描，或需先設定 Brand URL</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── GA4 Page Metrics ────────────────────────────────────── -->
+<div class="cf-card animate-up d3">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">GA4 頁面指標（最新同步）</div>
+  </div>
+  {% if ga_metrics %}
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>頁面路徑</th>
+          <th>活躍用戶</th>
+          <th>工作階段</th>
+          <th>平均停留</th>
+          <th>跳出率</th>
+          <th>轉換</th>
+          <th>日期</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in ga_metrics %}
+        <tr>
+          <td style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ m.page_path or '—' }}</td>
+          <td style="font-weight:600;">{{ "{:,}".format(m.active_users or 0) }}</td>
+          <td>{{ "{:,}".format(m.sessions or 0) }}</td>
+          <td>{{ "%.0f"|format(m.avg_engagement_time_sec or 0) }}s</td>
+          <td>
+            <span style="{% if (m.bounce_rate or 0) > 0.7 %}color:#ef4444;{% elif (m.bounce_rate or 0) > 0.5 %}color:#d97706;{% else %}color:#059669;{% endif %}font-weight:600;">
+              {{ "%.1f"|format((m.bounce_rate or 0) * 100) }}%
+            </span>
+          </td>
+          <td>{{ m.conversions or 0 }}</td>
+          <td style="font-size:11px;color:#94a3b8;">{{ m.tracked_date.strftime('%m/%d') if m.tracked_date else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-state-icon">📊</div>
+    <p>尚無 GA4 指標資料 · 請在專案設定中填入 GA4 Property ID 並執行同步</p>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -3,7 +3,79 @@
 {% block page_title %}內容日曆{% endblock %}
 {% block page_subtitle %}{{ total }} 篇已計畫{% endblock %}
 
+{% block topbar_actions %}
+<button onclick="document.getElementById('add-cal-panel').classList.toggle('hidden')"
+  class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+  新增排程
+</button>
+{% endblock %}
+
 {% block content %}
+
+<!-- ── Add Calendar Entry Panel ──────────────────────────────── -->
+<div id="add-cal-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
+  <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;">📅 新增排程文章</div>
+  <form method="post" action="/admin/calendar/new">
+    <input type="hidden" name="project_id" value="{{ project_id }}">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+      <div class="form-group" style="grid-column:span 2;">
+        <label class="form-label">文章標題 *</label>
+        <input class="form-input" type="text" name="title" placeholder="例：膝蓋退化性關節炎：症狀、成因與治療完整指南" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">文章類型</label>
+        <select class="form-input" name="article_type">
+          <option value="">— 選擇 —</option>
+          <option value="pillar">Pillar（主幹）</option>
+          <option value="cluster">Cluster（衛星）</option>
+          <option value="faq">FAQ</option>
+          <option value="news">News</option>
+          <option value="product">產品頁</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">月份（YYYY-MM）</label>
+        <input class="form-input" type="month" name="month">
+      </div>
+      <div class="form-group">
+        <label class="form-label">週次</label>
+        <select class="form-input" name="week">
+          <option value="">— 選擇 —</option>
+          <option value="1">第 1 週</option>
+          <option value="2">第 2 週</option>
+          <option value="3">第 3 週</option>
+          <option value="4">第 4 週</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">目標關鍵字</label>
+        <input class="form-input" type="text" name="keywords" placeholder="例：膝蓋退化性關節炎">
+      </div>
+      <div class="form-group" style="grid-column:span 3;">
+        <label class="form-label">搜尋意圖 / 目標受眾</label>
+        <input class="form-input" type="text" name="search_intent" placeholder="例：資訊型，50歲以上有膝彎困難的患者">
+      </div>
+      <div class="form-group">
+        <label class="form-label">目標受眾</label>
+        <input class="form-input" type="text" name="target_audience" placeholder="例：50歲以上、有退化性關節炎困擾">
+      </div>
+      <div class="form-group">
+        <label class="form-label">撰寫架構</label>
+        <select class="form-input" name="writing_architecture">
+          <option value="倒三角">倒三角（結論先行）</option>
+          <option value="金字塔">金字塔（由淺入深）</option>
+          <option value="思維流程">思維流程（問題→分析→答案）</option>
+          <option value="敘事型">敘事型（故事導入）</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button type="submit" class="btn btn-primary btn-sm">加入日曆</button>
+      <button type="button" onclick="document.getElementById('add-cal-panel').classList.add('hidden')" class="btn btn-ghost btn-sm">取消</button>
+    </div>
+  </form>
+</div>
 
 <!-- ── Month stats ──────────────────────────────────────────── -->
 <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
@@ -40,8 +112,7 @@
       <span style="font-size:11px;color:#cbd5e1;margin-left:8px;">{{ week.date_range }}</span>
     </div>
     {% for item in week.items %}
-    <a href="/admin/articles/{{ item.id }}" style="text-decoration:none;">
-      <div style="
+    <div style="
         display:flex;align-items:center;gap:12px;padding:12px 20px;
         border-bottom:1px solid rgba(226,232,240,0.3);transition:background 0.1s;"
         onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
@@ -53,15 +124,15 @@
           {{ item.scheduled_date.strftime('%m/%d') if item.scheduled_date else '未排程' }}
         </div>
 
-        <!-- Title -->
-        <div style="flex:1;min-width:0;">
+        <!-- Title (link) -->
+        <a href="/admin/articles/{{ item.id }}" style="text-decoration:none;flex:1;min-width:0;">
           <div style="font-size:13.5px;font-weight:500;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
             {{ item.title or '（尚未命名）' }}
           </div>
           {% if item.primary_keyword %}
           <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">🔑 {{ item.primary_keyword }}</div>
           {% endif %}
-        </div>
+        </a>
 
         <!-- SEO score -->
         {% if item.seo_score %}
@@ -74,8 +145,13 @@
         <span class="badge badge-{{ STATUS_COLORS.get(item.status,'neutral') }}" style="font-size:10.5px;flex-shrink:0;">
           {{ STATUS_LABELS.get(item.status, item.status) }}
         </span>
+
+        <!-- Delete -->
+        <form method="post" action="/admin/calendar/{{ item.cal_id }}/delete" onsubmit="return confirm('刪除排程「{{ item.title }}」？')">
+          <input type="hidden" name="month" value="{{ month }}">
+          <button type="submit" class="btn btn-ghost btn-sm" style="color:#ef4444;font-size:11px;padding:3px 7px;">🗑</button>
+        </form>
       </div>
-    </a>
     {% endfor %}
   </div>
   {% endfor %}

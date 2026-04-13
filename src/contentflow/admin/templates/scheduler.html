@@ -1,65 +1,54 @@
 {% extends "base.html" %}
 {% block title %}排程監控{% endblock %}
 {% block page_title %}排程監控{% endblock %}
-{% block page_subtitle %}4 項定時任務{% endblock %}
+{% block page_subtitle %}{{ known_jobs|length }} 項定時任務{% endblock %}
 
 {% block content %}
 
-<!-- ── 4 Job status cards ──────────────────────────────────────── -->
+<!-- ── Job status cards ──────────────────────────────────────── -->
 <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px;">
-  {% set job_icons = {
-    "gsc_sync"       : "📡",
-    "ga4_sync"       : "📊",
-    "competitor_serp": "🕵️",
-    "attribution"    : "🔗"
-  } %}
-  {% set job_schedule = {
-    "gsc_sync"       : "每日 03:00",
-    "ga4_sync"       : "每日 03:30",
-    "competitor_serp": "每週一 04:00",
-    "attribution"    : "每週一 05:00"
-  } %}
   {% for job in known_jobs %}
+  {% set latest = job.latest %}
   <div class="cf-card cf-card-p cf-card-hover animate-up" style="animation-delay:{{ loop.index0 * 0.06 }}s;">
     <div style="display:flex;align-items:flex-start;gap:12px;">
-      <div style="font-size:22px;flex-shrink:0;">{{ job_icons.get(job.name, '⚙️') }}</div>
+      <div style="font-size:22px;flex-shrink:0;">{{ job.icon }}</div>
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-          <div style="font-size:14px;font-weight:700;color:#0f172a;">{{ job.display_name }}</div>
-          {% if job.last_status == 'success' %}
+          <div style="font-size:14px;font-weight:700;color:#0f172a;">{{ job.name }}</div>
+          {% if latest and latest.status == 'success' %}
           <span class="badge badge-success" style="font-size:10px;">✓ 正常</span>
-          {% elif job.last_status == 'failed' %}
+          {% elif latest and latest.status == 'failed' %}
           <span class="badge badge-danger" style="font-size:10px;">✗ 失敗</span>
           {% else %}
           <span class="badge badge-neutral" style="font-size:10px;">—</span>
           {% endif %}
         </div>
-        <div style="font-size:12px;color:#64748b;">{{ job_schedule.get(job.name, '—') }}</div>
-        {% if job.last_run %}
+        <div style="font-size:12px;color:#64748b;">{{ job.schedule }}</div>
+        {% if latest %}
         <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
           <div>
             <div style="font-size:11px;color:#94a3b8;">上次執行</div>
-            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ job.last_run.strftime('%Y/%m/%d %H:%M') }}</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ latest.started_at.strftime('%Y/%m/%d %H:%M') }}</div>
           </div>
-          {% if job.duration_s %}
+          {% if latest.duration_s %}
           <div>
             <div style="font-size:11px;color:#94a3b8;">耗時</div>
-            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ "%.1f"|format(job.duration_s) }}s</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ "%.1f"|format(latest.duration_s) }}s</div>
           </div>
           {% endif %}
-          {% if job.rows_synced is not none %}
+          {% if latest.rows_synced is not none %}
           <div>
             <div style="font-size:11px;color:#94a3b8;">同步筆數</div>
-            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ job.rows_synced }}</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ latest.rows_synced }}</div>
           </div>
           {% endif %}
         </div>
         {% else %}
         <div style="font-size:12px;color:#94a3b8;margin-top:6px;">尚未執行</div>
         {% endif %}
-        {% if job.last_error %}
+        {% if latest and latest.error_message %}
         <div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,0.06);border-radius:6px;border-left:3px solid #ef4444;">
-          <div style="font-size:11.5px;color:#dc2626;">{{ job.last_error[:100] }}</div>
+          <div style="font-size:11.5px;color:#dc2626;">{{ latest.error_message[:100] }}</div>
         </div>
         {% endif %}
       </div>

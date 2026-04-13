@@ -182,6 +182,46 @@ def run_seo_check_agent(
         covered = sum(1 for keyword in secondary_keywords if _keyword_in_text(keyword, draft.content_markdown))
         add_check("secondary_keyword_coverage", covered >= max(1, min(2, len(secondary_keywords))), f"副關鍵字覆蓋 {covered}/{len(secondary_keywords)}", weight=1.0)
 
+    # Featured Snippet 最佳化（H2 問句 + 緊接 40-60 字簡答段落）
+    def _has_featured_snippet_pattern(md: str) -> bool:
+        lines = (md or "").splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # H2 must end with ？ or ?
+            if not re.match(r"^##\s+.+[？?]", stripped):
+                continue
+            # Look for the next non-empty paragraph within 3 lines
+            for j in range(i + 1, min(i + 4, len(lines))):
+                para = lines[j].strip()
+                if not para or para.startswith("#") or para.startswith("|"):
+                    continue
+                # Para length in chars: target 40-80 (Chinese chars count more per word)
+                char_count = len(re.sub(r"\s+", "", para))
+                if 30 <= char_count <= 100:
+                    return True
+                break
+        return False
+
+    add_check(
+        "featured_snippet_pattern",
+        _has_featured_snippet_pattern(draft.content_markdown),
+        "建議至少一個 H2 問句（結尾？）後緊接 40-80 字的直接回答段落，有助取得精選摘要",
+        weight=1.5,
+    )
+
+    # 段落標題層级檢查：H2 應出現在 H3 之前
+    def _heading_hierarchy_ok(md: str) -> bool:
+        seen_h2 = False
+        for m in re.finditer(r"^(#{2,3})\s+", md or "", re.MULTILINE):
+            level = len(m.group(1))
+            if level == 2:
+                seen_h2 = True
+            elif level == 3 and not seen_h2:
+                return False
+        return True
+
+    add_check("heading_hierarchy_ok", _heading_hierarchy_ok(draft.content_markdown), "H3 標題應在 H2 之後出現（避免跳過層級）", weight=0.5)
+
     # 加權計分
     passed_count = sum(1 for item in checks if item["passed"])
     total_weight = sum(item["weight"] for item in checks)
