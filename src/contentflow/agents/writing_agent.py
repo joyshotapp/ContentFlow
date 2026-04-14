@@ -33,6 +33,61 @@ def _chat(client: OpenAI, system: str, user: str, temperature: float = 0.7) -> s
     return resp.choices[0].message.content or ""
 
 
+def _load_project_author_metadata(project_id: int | None) -> dict[str, str]:
+    """讀取專案作者與醫療審閱者；沒有真實資料時回傳空字串。"""
+    if not project_id:
+        return {
+            "author_name": "",
+            "author_title": "",
+            "author_credentials": "",
+            "author_profile_url": "",
+            "reviewer_name": "",
+            "reviewer_title": "",
+            "reviewer_credentials": "",
+        }
+
+    try:
+        from ..db import SessionLocal
+        from ..models.database import Author
+
+        session = SessionLocal()
+        try:
+            authors = (
+                session.query(Author)
+                .filter(Author.project_id == project_id)
+                .order_by(Author.id)
+                .all()
+            )
+        finally:
+            session.close()
+    except Exception as exc:
+        logger.warning(f"[Writing Agent] 載入作者資料失敗：{exc}")
+        authors = []
+
+    author = next((item for item in authors if not item.is_medical_reviewer), None)
+    reviewer = next((item for item in authors if item.is_medical_reviewer), None)
+
+    return {
+        "author_name": author.name if author else "",
+        "author_title": author.title if author else "",
+        "author_credentials": author.credentials if author else "",
+        "author_profile_url": author.profile_url if author else "",
+        "reviewer_name": reviewer.name if reviewer else "",
+        "reviewer_title": reviewer.title if reviewer else "",
+        "reviewer_credentials": reviewer.credentials if reviewer else "",
+    }
+
+
+def _format_person_label(name: str, title: str = "", credentials: str = "") -> str:
+    if not name:
+        return ""
+    label = " ".join(part for part in [title.strip(), name.strip()] if part and part.strip())
+    creds = credentials.strip()
+    if creds:
+        label = f"{label}（{creds}）"
+    return label
+
+
 # ── 系統 Prompt 組裝 ──────────────────────────────────────────
 
 def _build_brand_context_from_project(ctx: ProjectContext) -> str:
@@ -381,6 +436,8 @@ def _generate_article_schema(
     slug: str,
     word_count: int,
     ctx: ProjectContext,
+    author_name: str = "",
+    author_profile_url: str = "",
 ) -> str:
     """產出 Article (BlogPosting) JSON-LD structured data。
 
@@ -402,11 +459,13 @@ def _generate_article_schema(
         schema["url"] = f"{base}/blog/{slug}"
         schema["mainEntityOfPage"] = {"@type": "WebPage", "@id": schema["url"]}
 
-    # 作者佔位（CMS 發布時替換）
-    schema["author"] = {
-        "@type": "Person",
-        "name": "<!-- TODO: 作者姓名 -->",
-    }
+    if author_name:
+        schema["author"] = {
+            "@type": "Person",
+            "name": author_name,
+        }
+        if author_profile_url:
+            schema["author"]["url"] = author_profile_url
 
     # 出版者（品牌資訊）
     if ctx.brand_name:
@@ -414,10 +473,6 @@ def _generate_article_schema(
         if ctx.brand_url:
             publisher["url"] = ctx.brand_url
         schema["publisher"] = publisher
-
-    # 日期佔位
-    schema["datePublished"] = "<!-- TODO: 發布日期 YYYY-MM-DD -->"
-    schema["dateModified"] = "<!-- TODO: 修改日期 YYYY-MM-DD -->"
 
     # YMYL 醫療類加上 MedicalWebPage type
     if project_uses_pubmed(ctx):
@@ -500,7 +555,6 @@ _CTA_TEMPLATES: dict[str, dict] = {
             "裡面涵蓋更多實用資訊與工具建議。"
         ),
         "link_text": "查看完整指南",
-        "link_placeholder": "<!-- TODO: 填入指南連結 -->",
     },
     "investigational": {
         "heading": "免費諮詢",
@@ -509,7 +563,6 @@ _CTA_TEMPLATES: dict[str, dict] = {
             "專業團隊將根據你的情況提供個人化建議。"
         ),
         "link_text": "預約免費諮詢",
-        "link_placeholder": "<!-- TODO: 填入諮詢連結 -->",
     },
     "transactional": {
         "heading": "立即行動",
@@ -518,8 +571,13 @@ _CTA_TEMPLATES: dict[str, dict] = {
             "了解我們的方案與價格，或直接預約服務。"
         ),
         "link_text": "查看方案與價格",
-        "link_placeholder": "<!-- TODO: 填入購買/預約連結 -->",
     },
+}
+
+_CTA_URL_KEYS: dict[str, tuple[str, ...]] = {
+    "informational": ("guide_url", "learn_more_url", "cta_url", "primary_cta_url"),
+    "investigational": ("consult_url", "contact_url", "cta_url", "primary_cta_url"),
+    "transactional": ("booking_url", "pricing_url", "cta_url", "primary_cta_url"),
 }
 
 # 漏斗階段 → CTA 類型對照
@@ -534,7 +592,11 @@ _FUNNEL_TO_CTA: dict[str, str] = {
 }
 
 
-def _inject_cta_blocks(content_markdown: str, strategy_context: dict | None) -> str:
+def _inject_cta_blocks(
+    content_markdown: str,
+    strategy_context: dict | None,
+    ctx: ProjectContext,
+) -> str:
     """在文章適當位置注入 CTA 區塊（SEO × CRO Phase 15）。
 
     策略：
@@ -555,11 +617,28 @@ def _inject_cta_blocks(content_markdown: str, strategy_context: dict | None) -> 
         cta_type = _FUNNEL_TO_CTA.get(funnel, "informational")
 
     tpl = _CTA_TEMPLATES[cta_type]
+    destination_url = ""
+    if strategy_context:
+        for key in _CTA_URL_KEYS.get(cta_type, ()) + ("brand_url",):
+            value = strategy_context.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                destination_url = value.strip()
+                break
+    if not destination_url and ctx.brand_url.startswith(("http://", "https://")):
+        destination_url = ctx.brand_url.rstrip("/")
+        tpl = {
+            "heading": "前往官方網站",
+            "text": "若想了解更多品牌資訊與服務內容，可直接前往官方網站查看。",
+            "link_text": "造訪官方網站",
+        }
+    if not destination_url:
+        return content_markdown
+
     cta_block = (
         f"\n\n<!-- CTA_BLOCK -->\n"
         f"> **{tpl['heading']}**\n>\n"
         f"> {tpl['text']}\n>\n"
-        f"> [{tpl['link_text']}]({tpl['link_placeholder']})\n"
+        f"> [{tpl['link_text']}]({destination_url})\n"
     )
 
     # 插入位置：FAQ 前
@@ -570,7 +649,7 @@ def _inject_cta_blocks(content_markdown: str, strategy_context: dict | None) -> 
         return content_markdown[:insert_pos] + cta_block + "\n" + content_markdown[insert_pos:]
 
     # 插入位置：E-E-A-T 聲明前
-    eeat_pattern = re.compile(r'^---\s*\n## 關於本文審閱', re.MULTILINE)
+    eeat_pattern = re.compile(r'^---\s*\n## (?:關於本文資訊與審閱|本文資訊聲明|關於本文審閱)', re.MULTILINE)
     eeat_match = eeat_pattern.search(content_markdown)
     if eeat_match:
         insert_pos = eeat_match.start()
@@ -582,7 +661,11 @@ def _inject_cta_blocks(content_markdown: str, strategy_context: dict | None) -> 
 
 # ── Step 6: E-E-A-T 作者聲明（醫療類）──────────────────────────
 
-def _append_eeat_section(content_markdown: str, ctx: ProjectContext) -> str:
+def _append_eeat_section(
+    content_markdown: str,
+    ctx: ProjectContext,
+    author_metadata: dict[str, str] | None = None,
+) -> str:
     """為醫療保健類文章（YMYL）在結尾附加 E-E-A-T 作者聲明佔位區塊。
 
     - 只對 project_uses_pubmed(ctx) == True 的專案加入
@@ -590,19 +673,32 @@ def _append_eeat_section(content_markdown: str, ctx: ProjectContext) -> str:
     """
     if not project_uses_pubmed(ctx):
         return content_markdown
-    if "關於本文審閱" in content_markdown:
+    if "關於本文資訊與審閱" in content_markdown or "本文資訊聲明" in content_markdown:
         return content_markdown
 
-    eeat_block = (
-        "\n\n---\n\n"
-        "## 關於本文審閱\n\n"
-        "> **作者：**"
-        "<!-- TODO: 填入作者姓名與資歷，例如「健康編輯 陳○○」 -->\n>\n"
-        "> **醫療審閱：**"
-        "<!-- TODO: 填入審閱醫師，例如「家醫科醫師 林○○ 醫師（執照字號：...）」 -->\n>\n"
+    author_metadata = author_metadata or {}
+    author_label = _format_person_label(
+        author_metadata.get("author_name", ""),
+        author_metadata.get("author_title", ""),
+        author_metadata.get("author_credentials", ""),
+    )
+    reviewer_label = _format_person_label(
+        author_metadata.get("reviewer_name", ""),
+        author_metadata.get("reviewer_title", ""),
+        author_metadata.get("reviewer_credentials", ""),
+    )
+    section_title = "## 關於本文資訊與審閱" if (author_label or reviewer_label) else "## 本文資訊聲明"
+
+    eeat_parts = ["\n\n---\n\n", f"{section_title}\n\n"]
+    if author_label:
+        eeat_parts.append(f"> **作者：** {author_label}\n>\n")
+    if reviewer_label:
+        eeat_parts.append(f"> **醫療審閱：** {reviewer_label}\n>\n")
+    eeat_parts.append(
         "> **免責聲明：** 本文醫療保健資訊僅供教育參考，不構成醫療診斷或治療建議。"
         "如有健康疑慮，請諮詢合格醫師或藥師。\n"
     )
+    eeat_block = "".join(eeat_parts)
     return content_markdown.rstrip() + eeat_block
 
 
@@ -660,6 +756,7 @@ async def run_writing_agent(
     logger.info("[Writing Agent] Step 2/3 — 逐段撰寫文章...")
     content_parts = []
     prev_summary = ""
+    author_metadata = _load_project_author_metadata(project_id)
 
     for i, section in enumerate(sections):
         logger.info(f"[Writing Agent] 撰寫段落 {i+1}/{len(sections)}: {section.get('h2', '')}")
@@ -682,7 +779,7 @@ async def run_writing_agent(
     logger.info(f"[Writing Agent] Slug：{slug}")
 
     # 6. 注入 CTA 區塊（SEO × CRO）
-    full_content = _inject_cta_blocks(full_content, strategy_context)
+    full_content = _inject_cta_blocks(full_content, strategy_context, ctx)
     logger.info("[Writing Agent] CTA 區塊已注入")
 
     # 7. 產出 FAQ JSON-LD structured data
@@ -700,7 +797,7 @@ async def run_writing_agent(
         logger.info("[Writing Agent] HowTo Schema：無步驟型段落，跳過")
 
     # 8. E-E-A-T 作者聲明（醫療保健類）
-    full_content = _append_eeat_section(full_content, ctx)
+    full_content = _append_eeat_section(full_content, ctx, author_metadata)
     word_count = len(full_content)
 
     # 9. Article/BlogPosting JSON-LD
@@ -710,6 +807,8 @@ async def run_writing_agent(
         slug=slug,
         word_count=word_count,
         ctx=ctx,
+        author_name=author_metadata.get("author_name", ""),
+        author_profile_url=author_metadata.get("author_profile_url", ""),
     )
     logger.info("[Writing Agent] Article JSON-LD 已產出")
 

@@ -79,7 +79,7 @@
 
 <!-- ── Month stats ──────────────────────────────────────────── -->
 <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
-  {% set statuses = [("published","已發佈","stat-icon-emerald"),("reviewing","審閱中","stat-icon-violet"),("writing","撰寫中","stat-icon-amber"),("researching","研究中","stat-icon-sky"),("planned","規劃中","stat-icon-slate")] %}
+  {% set statuses = [("published","已發佈","stat-icon-emerald"),("reviewing","審閱中","stat-icon-violet"),("writing","撰寫中","stat-icon-amber"),("researching","研究中","stat-icon-sky"),("planned","規劃中","stat-icon-slate"),("completed","已完成","stat-icon-emerald")] %}
   {% for st, label, icon_cls in statuses %}
   <div class="cf-card cf-card-p cf-card-hover animate-up">
     <div style="display:flex;align-items:center;gap:10px;">

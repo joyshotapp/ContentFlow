@@ -85,7 +85,13 @@
       <div>
         <div class="stat-label">Pipeline 執行次數</div>
         <div class="stat-value" style="margin-top:6px;">{{ total_runs }}</div>
-        <div class="stat-sub">累計 AI 成本 ~${{ "%.2f"|format(est_cost) }}</div>
+        <div class="stat-sub">
+          {% if total_cost is not none %}
+            累計 AI 成本 ${{ "%.2f"|format(total_cost) }}
+          {% else %}
+            累計 AI 成本：無真實資料
+          {% endif %}
+        </div>
       </div>
       <div class="stat-icon stat-icon-violet">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>

@@ -2611,6 +2611,80 @@ async def reports_page(request: Request, project_id: int = 0, period: str = "wee
                 "ranking_drops": ranking_drops,
             }
 
+            # ── 戰略計畫執行成效 ──────────────────────────────────
+            cutoff_dt = datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=timezone.utc)
+            strategic_plans = (
+                db.query(StrategicPlan)
+                .filter(
+                    StrategicPlan.project_id == project_id,
+                    StrategicPlan.plan_date >= cutoff,
+                )
+                .order_by(desc(StrategicPlan.plan_date))
+                .all()
+            )
+            plan_ids = [p.id for p in strategic_plans]
+
+            # Strategic Agent 觸發的 PipelineRun
+            strategic_runs = []
+            if plan_ids:
+                strategic_runs = (
+                    db.query(PipelineRun)
+                    .filter(PipelineRun.strategic_plan_id.in_(plan_ids))
+                    .all()
+                )
+            # 也找 trigger="strategic_agent" 但沒有 plan_id 的歷史資料
+            legacy_runs = (
+                db.query(PipelineRun)
+                .filter(
+                    PipelineRun.project_id == project_id,
+                    PipelineRun.trigger == "strategic_agent",
+                    PipelineRun.started_at >= cutoff_dt,
+                    PipelineRun.strategic_plan_id == None,
+                )
+                .all()
+            )
+            all_strategic_runs = strategic_runs + legacy_runs
+            # 去重
+            seen_ids = set()
+            unique_runs = []
+            for r in all_strategic_runs:
+                if r.id not in seen_ids:
+                    seen_ids.add(r.id)
+                    unique_runs.append(r)
+            all_strategic_runs = unique_runs
+
+            sp_total = len(strategic_plans)
+            sp_completed = sum(1 for p in strategic_plans if p.status == "completed")
+            sp_actions_total = sum(p.total_count for p in strategic_plans)
+            sp_actions_executed = sum(p.executed_count for p in strategic_plans)
+            sp_runs_ok = sum(1 for r in all_strategic_runs if r.status == "completed")
+            sp_runs_fail = sum(1 for r in all_strategic_runs if r.status == "failed")
+
+            # 取得 strategic runs 對應的文章標題與 SEO score
+            sp_run_details = []
+            for r in all_strategic_runs:
+                art = db.query(Article).get(r.article_id) if r.article_id else None
+                sp_run_details.append({
+                    "run_id": r.run_id[:8],
+                    "article_title": art.title if art else "—",
+                    "article_id": r.article_id,
+                    "status": r.status,
+                    "seo_score": r.seo_score,
+                    "cost": round(r.total_cost or 0, 3),
+                    "started_at": r.started_at,
+                    "finished_at": r.finished_at,
+                })
+
+            report_data["strategic"] = {
+                "plans_total": sp_total,
+                "plans_completed": sp_completed,
+                "actions_total": sp_actions_total,
+                "actions_executed": sp_actions_executed,
+                "runs_ok": sp_runs_ok,
+                "runs_fail": sp_runs_fail,
+                "run_details": sp_run_details,
+            }
+
         return templates.TemplateResponse(request, "reports.html", {
             "request": request, "page": "reports",
             "projects": projects, "project_id": project_id,

@@ -14,6 +14,18 @@
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
   手動新增
 </button>
+{% if keywords %}
+<button onclick="runEnrichTrends()" id="enrich-trends-btn"
+  class="btn btn-ghost btn-sm" style="display:flex;align-items:center;gap:6px;color:#059669;border-color:#059669;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+  Google Trends 補充
+</button>
+<button onclick="runEnrichVolume()" id="enrich-volume-btn"
+  class="btn btn-ghost btn-sm" style="display:flex;align-items:center;gap:6px;color:#6366f1;border-color:#6366f1;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="4" height="18"/><rect x="9" y="8" width="4" height="13"/><rect x="16" y="13" width="4" height="8"/></svg>
+  搜尋量補充
+</button>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -24,7 +36,7 @@
     <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:14px;">🔍</div>
     <div>
       <div style="font-size:14px;font-weight:700;color:#0f172a;">AI 關鍵字挖掘</div>
-      <div style="font-size:11.5px;color:#94a3b8;">輸入主題 → 系統從 Google PAA、相關搜尋、競品標題自動挖掘候選關鍵字</div>
+      <div style="font-size:11.5px;color:#94a3b8;">輸入主題 → 系統從 Google PAA 與相關搜尋自動挖掘候選關鍵字</div>
     </div>
   </div>
 
@@ -51,7 +63,7 @@
     </div>
 
     <div id="suggest-notice" style="display:none;margin-bottom:10px;padding:8px 12px;background:#fef9c3;border-radius:8px;border-left:3px solid #fbbf24;font-size:12px;color:#92400e;">
-      💡 搜尋量與難度需自行以 Ahrefs / SEMrush 補入。匯入後可在表格中直接編輯。
+      💡 搜尋量與難度需自行以 Ahrefs / SEMrush 補入，或使用「Google Trends 補充」自動填入相對熱度。匯入後可在表格中直接編輯。
     </div>
 
     <div id="suggest-list" style="display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;"></div>
@@ -234,6 +246,7 @@
           <th>競爭難度</th>
           <th>搜尋意圖</th>
           <th>漏斗階段</th>
+          <th title="Google Trends 相對熱度（0-100）">Trends 熱度</th>
           <th>更新</th>
           <th></th>
         </tr>
@@ -280,6 +293,19 @@
             <span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;background:{{ funnel_info[1] }}20;color:{{ funnel_info[1] }};">{{ funnel_info[0] }}</span>
             {% else %}<span style="color:#cbd5e1;">—</span>{% endif %}
           </td>
+          <td>
+            {% if kw.trends_score is not none %}
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:12px;font-weight:700;{% if kw.trends_score >= 60 %}color:#059669;{% elif kw.trends_score >= 30 %}color:#d97706;{% else %}color:#94a3b8;{% endif %}">{{ kw.trends_score }}</span>
+              <div style="height:5px;width:40px;border-radius:99px;background:#e2e8f0;overflow:hidden;">
+                <div style="height:100%;border-radius:99px;{% if kw.trends_score >= 60 %}background:#10b981;{% elif kw.trends_score >= 30 %}background:#f59e0b;{% else %}background:#94a3b8;{% endif %} width:{{ kw.trends_score }}%;"></div>
+              </div>
+              {% if kw.trend_direction == 'up' %}<span style="color:#059669;font-size:11px;">↑</span>
+              {% elif kw.trend_direction == 'down' %}<span style="color:#ef4444;font-size:11px;">↓</span>
+              {% else %}<span style="color:#94a3b8;font-size:11px;">→</span>{% endif %}
+            </div>
+            {% else %}<span style="color:#cbd5e1;font-size:11px;">—</span>{% endif %}
+          </td>
           <td style="color:#94a3b8;font-size:11.5px;">
             {{ kw.updated_at.strftime('%m/%d') if kw.updated_at else '—' }}
           </td>
@@ -290,7 +316,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="7"><div class="empty-state"><p>尚無關鍵字資料</p></div></td></tr>
+        <tr><td colspan="8"><div class="empty-state"><p>尚無關鍵字資料</p></div></td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -328,7 +354,7 @@ const INTENT_ZH = {
   informational: '資訊型', commercial: '商業調查', transactional: '交易型', navigational: '導航型'
 };
 const SOURCE_COLORS = {
-  'PAA': '#6366f1', '關聯搜尋': '#0ea5e9', '競品標題': '#f59e0b'
+  'PAA': '#6366f1', '關聯搜尋': '#0ea5e9'
 };
 let _candidates = [];
 
@@ -442,5 +468,72 @@ async function importSelected() {
 document.getElementById('suggest-topic').addEventListener('keydown', e => {
   if (e.key === 'Enter') runSuggest();
 });
+
+async function runEnrichTrends() {
+  const btn = document.getElementById('enrich-trends-btn');
+  if (!btn) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 查詢中…';
+  btn.style.opacity = '0.7';
+
+  try {
+    const res = await fetch('/admin/keywords/enrich-trends', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: PROJECT_ID }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('Trends 補充失敗：' + data.error);
+    } else {
+      btn.innerHTML = `✓ 已補充 ${data.enriched} 個關鍵字`;
+      btn.style.color = '#059669';
+      setTimeout(() => location.reload(), 1200);
+    }
+  } catch(e) {
+    alert('Trends 補充失敗：' + e);
+    btn.innerHTML = original;
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+
+async function runEnrichVolume() {
+  const btn = document.getElementById('enrich-volume-btn');
+  if (!btn) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 查詢中…';
+  btn.style.opacity = '0.7';
+
+  try {
+    const res = await fetch('/admin/keywords/enrich-volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: PROJECT_ID }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('搜尋量補充失敗：' + data.error);
+      btn.innerHTML = original;
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    } else {
+      btn.innerHTML = `✓ 補充 ${data.enriched} 個`;
+      btn.style.color = '#6366f1';
+      setTimeout(() => location.reload(), 1200);
+    }
+  } catch(e) {
+    alert('搜尋量補充失敗：' + e);
+    btn.innerHTML = original;
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
 </script>
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+</style>
 {% endblock %}

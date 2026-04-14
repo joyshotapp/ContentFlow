@@ -248,6 +248,65 @@
   </div>
 </div>
 
+<!-- ── 戰略計畫執行成效 ──────────────────────────────────────── -->
+{% if rd.strategic and rd.strategic.plans_total > 0 %}
+{% set sp = rd.strategic %}
+<div class="cf-card cf-card-p animate-up d7" style="margin-top:16px;">
+  <div class="section-header" style="margin-bottom:14px;">
+    <div class="section-title">戰略計畫執行成效</div>
+    <span style="font-size:11px;color:#94a3b8;">Strategic Agent · 本期</span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">
+    <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;border:1px solid #e2e8f0;">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">計畫數</div>
+      <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ sp.plans_total }}</div>
+      <div style="font-size:10px;color:#64748b;">{{ sp.plans_completed }} 已完成</div>
+    </div>
+    <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;border:1px solid #e2e8f0;">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">動作數</div>
+      <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ sp.actions_executed }}<span style="font-size:12px;color:#94a3b8;">/{{ sp.actions_total }}</span></div>
+      <div style="font-size:10px;color:#64748b;">已執行 / 計畫總數</div>
+    </div>
+    <div style="background:{% if sp.runs_ok > 0 %}rgba(5,150,105,0.08){% else %}#f8fafc{% endif %};border-radius:10px;padding:12px 14px;border:1px solid {% if sp.runs_ok > 0 %}rgba(5,150,105,0.2){% else %}#e2e8f0{% endif %};">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Pipeline 成功</div>
+      <div style="font-size:20px;font-weight:800;color:{% if sp.runs_ok > 0 %}#059669{% else %}#94a3b8{% endif %};">{{ sp.runs_ok }}</div>
+    </div>
+    <div style="background:{% if sp.runs_fail > 0 %}rgba(239,68,68,0.05){% else %}#f8fafc{% endif %};border-radius:10px;padding:12px 14px;border:1px solid {% if sp.runs_fail > 0 %}rgba(239,68,68,0.15){% else %}#e2e8f0{% endif %};">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Pipeline 失敗</div>
+      <div style="font-size:20px;font-weight:800;color:{% if sp.runs_fail > 0 %}#ef4444{% else %}#94a3b8{% endif %};">{{ sp.runs_fail }}</div>
+    </div>
+  </div>
+  {% if sp.run_details %}
+  <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">執行明細</div>
+  <div style="overflow-x:auto;">
+    <table class="data-table" style="font-size:12px;">
+      <thead><tr>
+        <th>Run</th><th>文章</th><th>狀態</th><th>SEO 分數</th><th>LLM 費用</th><th>時間</th>
+      </tr></thead>
+      <tbody>
+      {% for run in sp.run_details %}
+      <tr>
+        <td style="font-family:monospace;font-size:11px;color:#6366f1;">{{ run.run_id }}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          {% if run.article_id %}<a href="/admin/articles/{{ run.article_id }}" style="color:#6366f1;text-decoration:none;">{{ run.article_title }}</a>{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if run.status == 'completed' %}<span style="color:#059669;font-weight:600;">✓ 完成</span>
+          {% elif run.status == 'failed' %}<span style="color:#ef4444;font-weight:600;">✗ 失敗</span>
+          {% else %}<span style="color:#d97706;">{{ run.status }}</span>{% endif %}
+        </td>
+        <td style="font-weight:700;">{{ run.seo_score or '—' }}</td>
+        <td>${{ run.cost }}</td>
+        <td style="font-size:11px;color:#94a3b8;">{{ run.started_at.strftime('%m/%d %H:%M') if run.started_at else '—' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% else %}
 <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">📋</div><p>請選擇一個專案並等待 GSC 資料同步</p></div></div>
 {% endif %}

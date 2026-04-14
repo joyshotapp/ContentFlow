@@ -90,6 +90,9 @@ class Keyword(Base):
     # Phase 2 — 搜尋意圖 & 漏斗階段（SEO SOP §4）
     intent = Column(String, default="")          # informational / investigational / transactional / navigational
     funnel_stage = Column(String, default="")    # awareness / consideration / decision
+    # Phase 3 — Google Trends 相對熱度
+    trends_score = Column(Integer, default=None)     # 0-100，SerpAPI Google Trends 年均值
+    trend_direction = Column(String, default=None)   # "up" / "down" / "stable"
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -184,6 +187,8 @@ class Article(Base):
     factcheck_flags_json = Column(Text, default="[]")    # FactCheck 高風險標記
     suggested_internal_links = Column(Text, default="[]")  # AI 建議的內部連結
     scheduled_publish_at = Column(DateTime, nullable=True)  # 排程發布時間
+    published_at = Column(DateTime, nullable=True)          # 實際發布時間（Phase 6 時間線基準）
+    target_word_count = Column(Integer, nullable=True)       # Phase 3 任務定義的目標字數
     wp_post_id = Column(String, default="")         # WordPress post ID
     forgebase_id = Column(String, default="")       # ForgeBase page ID
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -538,3 +543,73 @@ class ClusterMember(Base):
 
     def __repr__(self):
         return f"<ClusterMember cluster={self.cluster_id} kw='{self.keyword}'>"
+
+
+# ── Pipeline 執行記錄（強化版 B：Tactical 層 checkpoint）──────────────────────
+
+class PipelineRun(Base):
+    """每次 pipeline 執行的持久化記錄，支援中途崩潰後 debug 與未來 resume。"""
+    __tablename__ = "pipeline_runs"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String, nullable=False, unique=True, index=True)  # UUID
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True, index=True)
+    calendar_id = Column(Integer, ForeignKey("content_calendar.id"), nullable=True)
+    strategic_plan_id = Column(Integer, ForeignKey("strategic_plans.id"), nullable=True, index=True)
+    trigger = Column(String, default="manual")              # manual / scheduler / strategic_agent
+    current_step = Column(String, default="pending")        # pending / research / strategy / ... / completed / failed
+    status = Column(String, default="running")              # running / completed / failed
+    state_json = Column(Text, default="{}")                 # checkpoint 的 pipeline 可序列化狀態
+    error_message = Column(Text, nullable=True)
+    total_llm_calls = Column(Integer, default=0)
+    total_cost = Column(Float, default=0.0)
+    seo_score = Column(Integer, nullable=True)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<PipelineRun {self.run_id[:8]} step={self.current_step} status={self.status}>"
+
+
+# ── Strategic Agent 執行計畫（強化版 B：Strategic 層）──────────────────────────
+
+class StrategicPlan(Base):
+    """Strategic Agent 每日/每週產出的執行計畫，供 Tactical Pipeline 消費。"""
+    __tablename__ = "strategic_plans"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    plan_date = Column(Date, nullable=False, index=True)    # 計畫日期
+    plan_type = Column(String, default="daily")             # daily / weekly / quarterly
+    actions_json = Column(Text, default="[]")               # JSON array: [{action, target_id, reason, priority}]
+    summary = Column(Text, default="")                      # LLM 產出的自然語言摘要
+    context_snapshot = Column(Text, default="{}")            # 決策時的數據快照（排名、日曆、知識庫摘要）
+    executed_count = Column(Integer, default=0)              # 已執行幾項 action
+    total_count = Column(Integer, default=0)                 # 總共幾項 action
+    status = Column(String, default="pending")              # pending / executing / completed
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<StrategicPlan {self.plan_date} type={self.plan_type} status={self.status}>"
+
+
+# ── Reflective Loop 執行摘要（強化版 B：Reflective 層）────────────────────────
+
+class ReflectionLog(Base):
+    """Pipeline 完成後的反思記錄：LLM 分析結果 → 學習洞察 → 知識更新建議。"""
+    __tablename__ = "reflection_logs"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    run_id = Column(String, nullable=True, index=True)      # 對應 PipelineRun.run_id
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True)
+    reflection_type = Column(String, default="post_pipeline")  # post_pipeline / weekly_review / human_edit
+    insights_json = Column(Text, default="[]")               # 發現的洞察 [{type, observation, action, confidence}]
+    knowledge_updates = Column(Integer, default=0)           # 本次更新了幾條 KnowledgeEntry
+    writing_rule_updates = Column(Integer, default=0)        # 本次更新了幾條 WritingRule
+    session_summary = Column(Text, default="")               # 壓縮摘要（供下次 Agent 讀取）
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<ReflectionLog run={self.run_id[:8] if self.run_id else '—'} type={self.reflection_type}>"

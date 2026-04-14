@@ -22,6 +22,10 @@ class ProjectContext:
     serp_gl: str = "tw"
     serp_hl: str = "zh-tw"
 
+    # Phase 0 — 商業目標 & 受眾
+    business_goals: str = ""
+    target_audience_json: str = "{}"  # JSON: persona_name, age_range, pain_points...
+
     # 從 DB 載入（延遲填充）
     writing_rules: list[str] = field(default_factory=list)
     strategies: list[str] = field(default_factory=list)
@@ -40,6 +44,21 @@ class ProjectContext:
             parts.append(f"- 定位：{self.brand_description}")
         if self.writing_principles:
             parts.append(f"- 核心原則：「{self.writing_principles}」")
+        if self.business_goals:
+            parts.append(f"- 商業目標：{self.business_goals}")
+        if self.target_audience_json and self.target_audience_json != "{}":
+            import json as _json
+            try:
+                ta = _json.loads(self.target_audience_json)
+                if isinstance(ta, dict) and ta:
+                    desc_parts = []
+                    if ta.get("persona_name"): desc_parts.append(ta["persona_name"])
+                    if ta.get("age_range"): desc_parts.append(f"年齡 {ta['age_range']}")
+                    if ta.get("pain_points"): desc_parts.append(f"痛點：{ta['pain_points']}")
+                    if desc_parts:
+                        parts.append(f"- 目標受眾：{' / '.join(desc_parts)}")
+            except (ValueError, TypeError):
+                pass
         parts.append("")
 
         if self.writing_rules:
@@ -159,6 +178,8 @@ def load_project_context(
                 locale=project.locale or "zh-tw",
                 serp_gl=project.serp_gl or "tw",
                 serp_hl=project.serp_hl or "zh-tw",
+                business_goals=project.business_goals or "",
+                target_audience_json=project.target_audience_json or "{}",
             )
 
             # 載入撰寫規範

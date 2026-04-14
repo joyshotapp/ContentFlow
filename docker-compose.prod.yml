@@ -39,7 +39,7 @@ services:
         --forwarded-allow-ips=*
     env_file: .env.prod
     environment:
-      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@db:5432/contentflow
+      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@localhost:5432/contentflow
     depends_on:
       db:
         condition: service_healthy

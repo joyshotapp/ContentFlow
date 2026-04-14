@@ -394,6 +394,7 @@ async def record_performance(
         ctr=body.ctr,
     )
     db.add(ranking)
+    db.commit()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -427,4 +428,5 @@ async def submit_review_feedback(
         updated_at=datetime.now(timezone.utc),
     )
     db.add(entry)
+    db.commit()
     logger.info(f"[ReviewFeedback] article_id={article_id} 新增 KnowledgeEntry category={body.category!r}")

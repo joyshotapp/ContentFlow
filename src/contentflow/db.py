@@ -30,12 +30,23 @@ def _ensure_sqlite_columns(conn) -> None:
             "article_schema_json": 'ALTER TABLE articles ADD COLUMN article_schema_json TEXT DEFAULT ""',
             "seo_score": 'ALTER TABLE articles ADD COLUMN seo_score INTEGER',
         },
+        "seo_rankings": {
+            "keyword": 'ALTER TABLE seo_rankings ADD COLUMN keyword VARCHAR DEFAULT ""',
+            "position": 'ALTER TABLE seo_rankings ADD COLUMN position FLOAT',
+            "landing_page": 'ALTER TABLE seo_rankings ADD COLUMN landing_page VARCHAR DEFAULT ""',
+            "search_engine": 'ALTER TABLE seo_rankings ADD COLUMN search_engine VARCHAR DEFAULT "Google"',
+            "tracked_date": 'ALTER TABLE seo_rankings ADD COLUMN tracked_date DATE',
+            "impressions": 'ALTER TABLE seo_rankings ADD COLUMN impressions INTEGER',
+            "clicks": 'ALTER TABLE seo_rankings ADD COLUMN clicks INTEGER',
+            "ctr": 'ALTER TABLE seo_rankings ADD COLUMN ctr FLOAT',
+        },
     }
 
     for table_name, columns in tables.items():
-        existing_cols = {
-            row[1] for row in conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-        }
+        rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+        if not rows:          # table doesn't exist yet — skip
+            continue
+        existing_cols = {row[1] for row in rows}
         for column_name, ddl in columns.items():
             if column_name not in existing_cols:
                 conn.execute(text(ddl))

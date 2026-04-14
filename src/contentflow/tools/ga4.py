@@ -33,7 +33,7 @@ class GA4Client:
         credentials_file: str | None = None,
     ) -> None:
         from contentflow.config import settings as _s
-        self._property_id = property_id or ""
+        self._property_id = property_id or _s.ga4_property_id or ""
         self._creds_file = credentials_file or _s.google_service_account_file
         self._client = None
 

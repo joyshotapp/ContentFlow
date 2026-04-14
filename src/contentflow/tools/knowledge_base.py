@@ -86,12 +86,12 @@ def _get_or_create_collection(project_id: Optional[int]):
 _EMBED_MODEL = "text-embedding-3-small"
 
 
-def _get_embedding(text: str) -> list[float]:
-    """呼叫 OpenAI embedding API，若 API key 未設定則回傳全零向量"""
+def _get_embedding(text: str) -> list[float] | None:
+    """呼叫 OpenAI embedding API；若 embedding 不可用則回傳 None。"""
     api_key = getattr(settings, "openai_api_key", None) or os.environ.get("OPENAI_API_KEY", "")
     if not api_key or api_key.startswith("sk-placeholder"):
-        # fallback：回傳 1536 維全零向量（只在測試環境使用）
-        return [0.0] * 1536
+        logger.warning("[KB] 未設定有效 OpenAI API key，跳過 embedding，改走 DB fallback")
+        return None
 
     try:
         from openai import OpenAI
@@ -99,8 +99,8 @@ def _get_embedding(text: str) -> list[float]:
         resp = client.embeddings.create(model=_EMBED_MODEL, input=text[:8000])
         return resp.data[0].embedding
     except Exception as e:
-        logger.warning(f"[KB] embedding 失敗：{e}，使用零向量 fallback")
-        return [0.0] * 1536
+        logger.warning(f"[KB] embedding 失敗：{e}，改走 DB fallback")
+        return None
 
 
 def _entry_to_document(entry: KnowledgeEntry) -> str:
@@ -165,6 +165,9 @@ def sync_project_knowledge(session, project_id: int) -> int:
         for entry in entry_list:
             doc = _entry_to_document(entry)
             embedding = _get_embedding(doc)
+            if embedding is None:
+                logger.warning(f"[KB] entry_{entry.id} 無有效 embedding，略過向量同步")
+                continue
             entry_id = f"entry_{entry.id}"
             try:
                 collection.upsert(
@@ -223,6 +226,9 @@ def query_kb(
                 if count == 0:
                     continue
                 embedding = _get_embedding(query_text)
+                if embedding is None:
+                    results = []
+                    break
                 resp = collection.query(
                     query_embeddings=[embedding],
                     n_results=min(top_k, count),

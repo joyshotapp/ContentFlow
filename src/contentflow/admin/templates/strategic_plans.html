@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Strategic 計畫{% endblock %}
+{% block page_title %}Strategic 計畫{% endblock %}
+{% block page_subtitle %}共 {{ total_plans }} 份計畫 · 完成 {{ completed_plans }} · 待執行 {{ pending_plans }}{% endblock %}
+
+{% block content %}
+
+<!-- ── Stats ─────────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-violet" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_plans }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總計畫數</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ completed_plans }}</div>
+        <div style="font-size:11px;color:#94a3b8;">已完成執行</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ pending_plans }}</div>
+        <div style="font-size:11px;color:#94a3b8;">待執行</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Plan list ──────────────────────────────────────────────── -->
+{% for item in plans_decoded %}
+{% set plan = item.plan %}
+{% set actions = item.actions %}
+{% set ctx = item.context %}
+{% set ac = item.action_counts %}
+<div class="cf-card animate-up" style="margin-bottom:14px;animation-delay:{{ loop.index0 * 0.06 }}s;">
+
+  <!-- header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--cf-border);">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:20px;">🧠</div>
+      <div>
+        <div style="font-weight:700;font-size:14px;color:#0f172a;">
+          {{ plan.plan_date.strftime('%Y/%m/%d') if plan.plan_date else '—' }}
+          <span style="font-size:12px;font-weight:500;color:#64748b;margin-left:6px;">{{ plan.plan_type or 'daily' }}</span>
+        </div>
+        {% if plan.summary %}
+        <div style="font-size:12.5px;color:#64748b;margin-top:2px;">{{ plan.summary[:120] }}{% if plan.summary|length > 120 %}…{% endif %}</div>
+        {% endif %}
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      {% if plan.executed_count is not none and plan.total_count %}
+      <div style="font-size:12px;color:#64748b;">{{ plan.executed_count }}/{{ plan.total_count }}</div>
+      {% endif %}
+      {% if plan.status == 'completed' %}<span class="badge badge-success" style="font-size:10.5px;">✓ 完成</span>
+      {% elif plan.status == 'partial' %}<span class="badge badge-warning" style="font-size:10.5px;">⚡ 部分</span>
+      {% elif plan.status == 'pending' %}<span class="badge badge-neutral" style="font-size:10.5px;">⏳ 待執行</span>
+      {% else %}<span class="badge badge-neutral" style="font-size:10.5px;">{{ plan.status or '—' }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- action type summary + context -->
+  <div style="display:flex;gap:16px;padding:12px 20px;border-bottom:1px solid var(--cf-border);flex-wrap:wrap;">
+    {% if ac.generate > 0 %}
+    <span style="font-size:12px;background:#ede9fe;color:#6d28d9;padding:3px 10px;border-radius:20px;font-weight:600;">✏️ 新增 {{ ac.generate }}</span>
+    {% endif %}
+    {% if ac.refresh > 0 %}
+    <span style="font-size:12px;background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-weight:600;">🔄 更新 {{ ac.refresh }}</span>
+    {% endif %}
+    {% if ac.alert > 0 %}
+    <span style="font-size:12px;background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:20px;font-weight:600;">⚠️ 告警 {{ ac.alert }}</span>
+    {% endif %}
+    {% if ctx.total_articles is not none %}
+    <span style="font-size:11.5px;color:#94a3b8;margin-left:auto;">文章總數 {{ ctx.total_articles }}　待更新 {{ ctx.stale_articles or 0 }}　avg SEO {{ ctx.avg_seo_score or '—' }}</span>
+    {% endif %}
+  </div>
+
+  <!-- actions table -->
+  {% if actions %}
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>動作</th>
+          <th>關鍵字</th>
+          <th>優先度</th>
+          <th>說明</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in actions %}
+        <tr>
+          <td style="color:#94a3b8;font-size:12px;">{{ loop.index }}</td>
+          <td>
+            {% if a.action == 'generate' %}<span class="badge badge-neutral" style="font-size:10.5px;background:#ede9fe;color:#6d28d9;">✏️ 新增</span>
+            {% elif a.action == 'refresh' %}<span class="badge badge-neutral" style="font-size:10.5px;background:#d1fae5;color:#065f46;">🔄 更新</span>
+            {% elif a.action == 'alert' %}<span class="badge badge-warning" style="font-size:10.5px;">⚠️ 告警</span>
+            {% else %}<span class="badge badge-neutral" style="font-size:10.5px;">{{ a.action }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:12.5px;font-weight:500;">{{ a.keyword or a.title or '—' }}</td>
+          <td style="font-size:12.5px;text-align:right;">
+            {% if a.priority %}
+            <span style="font-weight:700;color:{% if a.priority >= 8 %}#ef4444{% elif a.priority >= 5 %}#f59e0b{% else %}#10b981{% endif %};">{{ a.priority }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748b;max-width:300px;">{{ a.reason or a.message or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div style="padding:8px 20px;font-size:11.5px;color:#94a3b8;">
+    建立時間：{{ plan.created_at.strftime('%Y/%m/%d %H:%M') if plan.created_at else '—' }}
+    {% if plan.project_id %}· 專案 {{ plan.project_id }}{% endif %}
+  </div>
+</div>
+{% else %}
+<div class="cf-card">
+  <div class="empty-state"><div class="empty-state-icon">🧠</div><p>尚無 Strategic 計畫資料</p><p style="font-size:12px;color:#94a3b8;margin-top:4px;">排程器每日 08:00 TWN 自動生成</p></div>
+</div>
+{% endfor %}
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div style="display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 0 4px;">
+  {% if page_num > 1 %}
+  <a href="?page={{ page_num - 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">&lsaquo; 上一頁</a>
+  {% endif %}
+  <span style="font-size:12.5px;color:#64748b;">第 {{ page_num }} / {{ total_pages }} 頁</span>
+  {% if page_num < total_pages %}
+  <a href="?page={{ page_num + 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">下一頁 &rsaquo;</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

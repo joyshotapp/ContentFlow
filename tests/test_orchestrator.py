@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from contentflow.agents.orchestrator import run_orchestrator
+from contentflow.agents.orchestrator import (
+    run_orchestrator,
+    research_node,
+    strategy_node,
+    writing_node,
+    seo_check_node,
+    seo_qa_node,
+    factcheck_node,
+    budget_guard_node,
+    seo_gate,
+)
 from contentflow.models import (
     ArticleDraft,
     ArticleStatus,
@@ -13,6 +23,28 @@ from contentflow.models import (
     ResearchReport,
 )
 from contentflow.project_context import ProjectContext
+
+
+class _FakeCompiledGraph:
+    """模擬 LangGraph compiled graph — 依序執行節點 + SEO 閘門。"""
+
+    @staticmethod
+    async def _call(fn, state):
+        import asyncio
+        result = fn(state)
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
+
+    async def ainvoke(self, state: dict) -> dict:
+        for node_fn in (research_node, strategy_node, writing_node, seo_check_node):
+            state.update(await self._call(node_fn, state))
+        while seo_gate(state) == "retry":
+            state.update(await self._call(seo_qa_node, state))
+            state.update(await self._call(seo_check_node, state))
+        state.update(await self._call(factcheck_node, state))
+        state.update(await self._call(budget_guard_node, state))
+        return state
 
 
 @pytest.mark.asyncio
@@ -82,6 +114,10 @@ async def test_orchestrator_uses_current_agent_signatures(monkeypatch):
         draft = kwargs["draft"]
         draft.status = ArticleStatus.APPROVED
         return draft
+
+    # 用假 Graph 取代 LangGraph（測試環境未安裝 langgraph）
+    import contentflow.agents.orchestrator as _orch
+    monkeypatch.setattr(_orch, "_agent", _FakeCompiledGraph())
 
     monkeypatch.setattr("contentflow.agents.orchestrator.load_project_context", lambda **_: ctx)
     monkeypatch.setattr("contentflow.agents.orchestrator.project_uses_pubmed", lambda _: False)

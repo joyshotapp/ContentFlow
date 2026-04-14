@@ -131,7 +131,7 @@
 
   <!-- Cost cards -->
   <div class="cf-card cf-card-p animate-up d3">
-    <div class="section-title" style="margin-bottom:14px;">💰 AI 成本估算</div>
+    <div class="section-title" style="margin-bottom:14px;">💰 AI 成本資料</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div style="padding:12px;background:#f8fafc;border-radius:8px;">
         <div style="display:flex;justify-content:space-between;">
@@ -141,20 +141,20 @@
       </div>
       <div style="padding:12px;background:#f8fafc;border-radius:8px;">
         <div style="display:flex;justify-content:space-between;">
-          <span style="font-size:12.5px;color:#64748b;">平均每篇成本</span>
-          <span style="font-size:13px;font-weight:700;color:#0f172a;">${{ "%.4f"|format(avg_article_cost) if avg_article_cost else '—' }}</span>
+          <span style="font-size:12.5px;color:#64748b;">平均每次執行成本</span>
+          <span style="font-size:13px;font-weight:700;color:#0f172a;">{{ ('$' ~ "%.4f"|format(avg_article_cost)) if avg_article_cost else '—' }}</span>
         </div>
       </div>
       <div style="padding:12px;background:#f8fafc;border-radius:8px;">
         <div style="display:flex;justify-content:space-between;">
-          <span style="font-size:12.5px;color:#64748b;">本月估計總成本</span>
-          <span style="font-size:13px;font-weight:700;color:#0f172a;">${{ "%.2f"|format(month_cost) if month_cost else '—' }}</span>
+          <span style="font-size:12.5px;color:#64748b;">本月總成本</span>
+          <span style="font-size:13px;font-weight:700;color:#0f172a;">{{ ('$' ~ "%.2f"|format(month_cost)) if month_cost else '—' }}</span>
         </div>
       </div>
       <div style="padding:12px;background:#f8fafc;border-radius:8px;">
         <div style="display:flex;justify-content:space-between;">
           <span style="font-size:12.5px;color:#64748b;">累計總成本</span>
-          <span style="font-size:13px;font-weight:700;color:#0f172a;">${{ "%.2f"|format(total_cost) if total_cost else '0.00' }}</span>
+          <span style="font-size:13px;font-weight:700;color:#0f172a;">{{ ('$' ~ "%.2f"|format(total_cost)) if total_cost else '—' }}</span>
         </div>
       </div>
     </div>

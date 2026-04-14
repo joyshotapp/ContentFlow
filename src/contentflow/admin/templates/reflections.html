@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}反思日誌{% endblock %}
+{% block page_title %}反思日誌{% endblock %}
+{% block page_subtitle %}共 {{ total_logs }} 筆 · KB 更新 {{ total_kb }} · 寫作規範更新 {{ total_wr }}{% endblock %}
+
+{% block content %}
+
+<!-- ── Stats ─────────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-teal" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 9v-.75A2.25 2.25 0 0012 6v0a2.25 2.25 0 00-2.25 2.25V9m4.5 0H9.75"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_logs }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總反思紀錄</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-violet" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_kb }}</div>
+        <div style="font-size:11px;color:#94a3b8;">知識庫新增</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-sky" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_wr }}</div>
+        <div style="font-size:11px;color:#94a3b8;">寫作規範更新</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ type_counts|length }}</div>
+        <div style="font-size:11px;color:#94a3b8;">反思類型</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Type filter ────────────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;" class="animate-up d1">
+  <div class="tab-bar" style="overflow-x:auto;">
+    <a href="?" class="tab-item {% if not type_filter %}active{% endif %}">全部</a>
+    <a href="?type=pipeline" class="tab-item {% if type_filter == 'pipeline' %}active{% endif %}">Pipeline{% if type_counts.pipeline %} ({{ type_counts.pipeline }}){% endif %}</a>
+    <a href="?type=weekly" class="tab-item {% if type_filter == 'weekly' %}active{% endif %}">每週{% if type_counts.weekly %} ({{ type_counts.weekly }}){% endif %}</a>
+    <a href="?type=human_edit" class="tab-item {% if type_filter == 'human_edit' %}active{% endif %}">人工編輯{% if type_counts.human_edit %} ({{ type_counts.human_edit }}){% endif %}</a>
+  </div>
+</div>
+
+<!-- ── Log cards ──────────────────────────────────────────────── -->
+{% for item in logs_decoded %}
+{% set log = item.log %}
+{% set insights = item.insights %}
+<div class="cf-card animate-up" style="margin-bottom:12px;animation-delay:{{ loop.index0 * 0.05 }}s;">
+
+  <!-- header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--cf-border);">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="font-size:18px;">
+        {% if log.reflection_type == 'pipeline' %}🔄
+        {% elif log.reflection_type == 'weekly' %}📅
+        {% elif log.reflection_type == 'human_edit' %}✏️
+        {% else %}🧠{% endif %}
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:13.5px;color:#0f172a;">
+          {% if log.reflection_type == 'pipeline' %}Pipeline 反思
+          {% elif log.reflection_type == 'weekly' %}每週反思
+          {% elif log.reflection_type == 'human_edit' %}人工編輯反思
+          {% else %}{{ log.reflection_type or '反思' }}{% endif %}
+        </div>
+        {% if log.article_id and log.article_id in articles_by_id %}
+        <div style="font-size:12px;color:#64748b;">{{ articles_by_id[log.article_id][:50] }}{% if articles_by_id[log.article_id]|length > 50 %}…{% endif %}</div>
+        {% endif %}
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      {% if log.knowledge_updates %}
+      <span style="font-size:11px;background:#ede9fe;color:#6d28d9;padding:2px 8px;border-radius:20px;font-weight:600;">KB +{{ log.knowledge_updates }}</span>
+      {% endif %}
+      {% if log.writing_rule_updates %}
+      <span style="font-size:11px;background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-weight:600;">規範 +{{ log.writing_rule_updates }}</span>
+      {% endif %}
+      <span style="font-size:11.5px;color:#94a3b8;">{{ log.created_at.strftime('%Y/%m/%d %H:%M') if log.created_at else '—' }}</span>
+    </div>
+  </div>
+
+  <!-- session summary -->
+  {% if log.session_summary %}
+  <div style="padding:10px 20px;background:rgba(99,102,241,0.04);border-bottom:1px solid var(--cf-border);">
+    <div style="font-size:11px;font-weight:600;color:#6366f1;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">摘要</div>
+    <div style="font-size:12.5px;color:#475569;line-height:1.6;">{{ log.session_summary[:500] }}{% if log.session_summary|length > 500 %}…{% endif %}</div>
+  </div>
+  {% endif %}
+
+  <!-- insights -->
+  {% if insights %}
+  <div style="padding:10px 20px;">
+    <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">AI 洞察（{{ insights|length }}）</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      {% for insight in insights[:5] %}
+      <div style="display:flex;gap:8px;align-items:flex-start;">
+        <span style="flex-shrink:0;width:18px;height:18px;background:#f1f5f9;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#64748b;font-weight:700;margin-top:1px;">{{ loop.index }}</span>
+        <div style="font-size:12.5px;color:#475569;line-height:1.5;">
+          {% if insight is string %}{{ insight }}
+          {% elif insight.observation %}{{ insight.observation }}
+          {% elif insight.content %}{{ insight.content }}
+          {% elif insight.insight %}{{ insight.insight }}
+          {% else %}{{ insight | tojson }}{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      {% if insights|length > 5 %}
+      <div style="font-size:12px;color:#94a3b8;text-align:center;padding-top:4px;">… 還有 {{ insights|length - 5 }} 條</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% else %}
+<div class="cf-card">
+  <div class="empty-state"><div class="empty-state-icon">🧠</div><p>尚無反思日誌</p><p style="font-size:12px;color:#94a3b8;margin-top:4px;">Pipeline 完成後自動產生，或每週日 08:00 TWN 執行週度反思</p></div>
+</div>
+{% endfor %}
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div style="display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 0 4px;">
+  {% if page_num > 1 %}
+  <a href="?type={{ type_filter }}&page={{ page_num - 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">&lsaquo; 上一頁</a>
+  {% endif %}
+  <span style="font-size:12.5px;color:#64748b;">第 {{ page_num }} / {{ total_pages }} 頁</span>
+  {% if page_num < total_pages %}
+  <a href="?type={{ type_filter }}&page={{ page_num + 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">下一頁 &rsaquo;</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

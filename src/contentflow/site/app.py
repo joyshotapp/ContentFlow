@@ -210,6 +210,26 @@ site_app = FastAPI(
     openapi_url=None,
 )
 
+
+@site_app.on_event("startup")
+async def _startup():
+    """初始化 DB + 排程（只在第一個 worker 啟動排程）。"""
+    from contentflow.db import init_db
+    from contentflow.scheduler import scheduler, schedule_all_jobs
+
+    init_db()
+    # 多 worker 模式下只啟動一次 scheduler
+    if not scheduler.running:
+        schedule_all_jobs()
+
+
+@site_app.on_event("shutdown")
+async def _shutdown():
+    from contentflow.scheduler import scheduler
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+
+
 @site_app.get("/health")
 async def health():
     return {"status": "ok", "service": "reference-site"}

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from contentflow.agents.writing_agent import (
     _generate_faq_schema,
     _append_eeat_section,
+    _generate_article_schema,
     _generate_slug,
 )
 from contentflow.project_context import ProjectContext
@@ -102,14 +103,13 @@ class TestAppendEeatSection:
     def test_appended_for_health_project(self):
         ctx = _make_ctx("保健食品")
         result = _append_eeat_section(self._BASE, ctx)
-        assert "關於本文審閱" in result
-        assert "醫療審閱" in result
+        assert "本文資訊聲明" in result
         assert "免責聲明" in result
 
     def test_not_appended_for_tech_project(self):
         ctx = _make_ctx("科技媒體")
         result = _append_eeat_section(self._BASE, ctx)
-        assert "關於本文審閱" not in result
+        assert "本文資訊聲明" not in result
         assert result.strip() == self._BASE.strip()
 
     def test_idempotent_health(self):
@@ -117,18 +117,19 @@ class TestAppendEeatSection:
         ctx = _make_ctx("健康照護")
         once = _append_eeat_section(self._BASE, ctx)
         twice = _append_eeat_section(once, ctx)
-        assert twice.count("關於本文審閱") == 1
+        assert twice.count("本文資訊聲明") == 1
 
-    def test_author_placeholder_present(self):
+    def test_no_placeholder_in_eeat_section(self):
         ctx = _make_ctx("醫療保健")
         result = _append_eeat_section(self._BASE, ctx)
-        assert "TODO" in result  # 佔位符提示
+        assert "TODO" not in result
+        assert "免責聲明" in result
 
     def test_industries_that_trigger_eeat(self):
         for industry in ["保健", "健康食品", "醫療器材", "生技", "營養補充"]:
             ctx = _make_ctx(industry)
             result = _append_eeat_section(self._BASE, ctx)
-            assert "關於本文審閱" in result, f"industry={industry} 應加入 E-E-A-T"
+            assert "本文資訊聲明" in result, f"industry={industry} 應加入 E-E-A-T"
 
 
 # ════════════════════════════════════════════════════════════
@@ -170,3 +171,21 @@ class TestGenerateSlug:
         client = self._mock_client("")
         slug = _generate_slug(client, "骨刺原因")
         assert slug == "article"
+
+
+class TestGenerateArticleSchema:
+    def test_schema_omits_placeholder_fields(self):
+        ctx = ProjectContext(project_id=1, slug="test", name="測試品牌", brand_url="https://example.com")
+        schema_json = _generate_article_schema(
+            title="骨刺治療完整指南",
+            meta_description="骨刺治療方式說明",
+            slug="bone-spur-guide",
+            word_count=1800,
+            ctx=ctx,
+        )
+        schema = json.loads(schema_json)
+
+        assert "author" not in schema
+        assert "datePublished" not in schema
+        assert "dateModified" not in schema
+        assert "TODO" not in schema_json

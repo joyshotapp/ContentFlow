@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Pipeline 執行紀錄{% endblock %}
+{% block page_title %}Pipeline 執行紀錄{% endblock %}
+{% block page_subtitle %}共 {{ total_runs }} 筆 · 完成 {{ completed }} · 失敗 {{ failed }}{% endblock %}
+
+{% block content %}
+
+<!-- ── Stats ─────────────────────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-indigo" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3 12.193 3.1 11.94a1.5 1.5 0 01.915-.915C4.268 10.875 4.58 10.875 5.2 10.875h13.6c.62 0 .93 0 1.185.15a1.5 1.5 0 01.915.915c.1.255.1.565.1 1.185v5.25c0 .62 0 .93-.1 1.185a1.5 1.5 0 01-.915.915c-.255.1-.565.1-1.185.1H5.2c-.62 0-.93 0-1.185-.1a1.5 1.5 0 01-.915-.915C3 19.305 3 18.993 3 18.375v-5.25z"/><path d="M6 10.875V7.5a3 3 0 013-3h6a3 3 0 013 3v3.375"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ total_runs }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總執行次</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-emerald" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ completed }}</div>
+        <div style="font-size:11px;color:#94a3b8;">已完成</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-rose" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ failed }}</div>
+        <div style="font-size:11px;color:#94a3b8;">失敗</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-amber" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ avg_seo }}</div>
+        <div style="font-size:11px;color:#94a3b8;">平均 SEO 分</div>
+      </div>
+    </div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-violet" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">${{ total_cost }}</div>
+        <div style="font-size:11px;color:#94a3b8;">總 LLM 花費</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Filters ────────────────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;" class="animate-up d1">
+  <div class="tab-bar">
+    <a href="?" class="tab-item {% if not status_filter %}active{% endif %}">全部</a>
+    <a href="?status=running" class="tab-item {% if status_filter == 'running' %}active{% endif %}">執行中</a>
+    <a href="?status=completed" class="tab-item {% if status_filter == 'completed' %}active{% endif %}">已完成</a>
+    <a href="?status=failed" class="tab-item {% if status_filter == 'failed' %}active{% endif %}">失敗</a>
+  </div>
+  <div style="flex:1;"></div>
+  <div class="tab-bar">
+    <a href="?" class="tab-item {% if not trigger_filter %}active{% endif %}">所有觸發</a>
+    <a href="?trigger=scheduler" class="tab-item {% if trigger_filter == 'scheduler' %}active{% endif %}">排程</a>
+    <a href="?trigger=manual" class="tab-item {% if trigger_filter == 'manual' %}active{% endif %}">手動</a>
+  </div>
+</div>
+
+<!-- ── Table ──────────────────────────────────────────────────── -->
+<div class="cf-card animate-up d2">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+    <div class="section-title">執行清單</div>
+    {% if running_now > 0 %}
+    <span class="badge badge-warning" style="font-size:10.5px;">🔄 {{ running_now }} 筆進行中</span>
+    {% endif %}
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>Run ID</th>
+          <th>文章</th>
+          <th>狀態</th>
+          <th>目前步驟</th>
+          <th>觸發</th>
+          <th>LLM 次</th>
+          <th>花費</th>
+          <th>SEO 分</th>
+          <th>開始時間</th>
+          <th>完成時間</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td style="font-family:monospace;font-size:11.5px;color:#64748b;">{{ run.run_id[:8] }}…</td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {% if run.article_id and run.article_id in articles_by_id %}
+            <span title="{{ articles_by_id[run.article_id] }}">{{ articles_by_id[run.article_id][:30] }}{% if articles_by_id[run.article_id]|length > 30 %}…{% endif %}</span>
+            {% elif run.article_id %}
+            <span style="color:#94a3b8;">ID {{ run.article_id }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if run.status == 'completed' %}<span class="badge badge-success" style="font-size:10.5px;">✓ 完成</span>
+            {% elif run.status == 'failed' %}<span class="badge badge-danger" style="font-size:10.5px;">✗ 失敗</span>
+            {% elif run.status == 'running' %}<span class="badge badge-warning" style="font-size:10.5px;">🔄 執行中</span>
+            {% else %}<span class="badge badge-neutral" style="font-size:10.5px;">{{ run.status }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748b;">{{ run.current_step or '—' }}</td>
+          <td>
+            {% if run.trigger == 'scheduler' %}<span class="badge badge-neutral" style="font-size:10px;">⏰ 排程</span>
+            {% elif run.trigger == 'manual' %}<span class="badge badge-neutral" style="font-size:10px;">👤 手動</span>
+            {% else %}<span style="font-size:12px;color:#94a3b8;">{{ run.trigger or '—' }}</span>{% endif %}
+          </td>
+          <td style="font-size:12.5px;color:#64748b;text-align:right;">{{ run.total_llm_calls or '—' }}</td>
+          <td style="font-size:12.5px;color:#64748b;text-align:right;">
+            {% if run.total_cost %}${{ "%.4f"|format(run.total_cost) }}{% else %}—{% endif %}
+          </td>
+          <td style="font-size:12.5px;text-align:right;">
+            {% if run.seo_score %}
+            <span style="font-weight:700;color:{% if run.seo_score >= 80 %}#10b981{% elif run.seo_score >= 60 %}#f59e0b{% else %}#ef4444{% endif %};">{{ run.seo_score }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748b;white-space:nowrap;">
+            {{ run.started_at.strftime('%m/%d %H:%M') if run.started_at else '—' }}
+          </td>
+          <td style="font-size:12px;color:#64748b;white-space:nowrap;">
+            {{ run.finished_at.strftime('%m/%d %H:%M') if run.finished_at else '—' }}
+          </td>
+        </tr>
+        {% if run.error_message %}
+        <tr style="background:rgba(239,68,68,0.03);">
+          <td colspan="10" style="padding:4px 12px 10px 44px;">
+            <div style="font-size:11.5px;color:#dc2626;background:rgba(239,68,68,0.06);border-left:3px solid #ef4444;padding:6px 10px;border-radius:4px;">
+              {{ run.error_message[:200] }}{% if run.error_message|length > 200 %}…{% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="10">
+          <div class="empty-state"><div class="empty-state-icon">🚀</div><p>尚無 Pipeline 執行記錄</p></div>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;justify-content:center;gap:6px;padding:16px;">
+    {% if page_num > 1 %}
+    <a href="?status={{ status_filter }}&trigger={{ trigger_filter }}&page={{ page_num - 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">&lsaquo; 上一頁</a>
+    {% endif %}
+    <span style="font-size:12.5px;color:#64748b;">第 {{ page_num }} / {{ total_pages }} 頁</span>
+    {% if page_num < total_pages %}
+    <a href="?status={{ status_filter }}&trigger={{ trigger_filter }}&page={{ page_num + 1 }}" class="btn-outline" style="font-size:12.5px;padding:5px 12px;">下一頁 &rsaquo;</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

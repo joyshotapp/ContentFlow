@@ -30,7 +30,25 @@
 {% elif art.status == 'reviewing' %}
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="published">
-  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈</button>
+  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 GoodBone</button>
+</form>
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="writing">
+  <button type="submit" class="btn btn-danger-ghost btn-sm">↩ 退回重寫</button>
+</form>
+{% elif art.status == 'approved' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="published">
+  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 GoodBone</button>
+</form>
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="writing">
+  <button type="submit" class="btn btn-danger-ghost btn-sm">↩ 退回重寫</button>
+</form>
+{% elif art.status == 'review_required' %}
+<form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
+  <input type="hidden" name="status" value="published">
+  <button type="submit" class="btn btn-primary btn-sm" onclick="return confirm('⚠️ 此文章有事實查核待確認項目，確定發布？')">⚠️ 確認後發佈到 GoodBone</button>
 </form>
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="writing">
@@ -38,8 +56,8 @@
 </form>
 {% endif %}
 
-{% if art.draft_content and art.status in ['reviewing', 'published'] %}
-<button onclick="publishToWP()" class="btn btn-sm" style="background:linear-gradient(135deg,#21759b,#0073aa);color:#fff;border:none;" id="btn-publish-wp">🌐 發布到 WordPress</button>
+{% if art.draft_content and art.status == 'published' and art.publish_url %}
+<a href="{{ art.publish_url }}" target="_blank" class="btn btn-sm" style="background:linear-gradient(135deg,#059669,#047857);color:#fff;border:none;text-decoration:none;">🌐 查看上線頁面 ↗</a>
 {% endif %}
 {% endblock %}
 
@@ -231,7 +249,12 @@
         {{ row('主要關鍵字類型', art.article_type) }}
         {{ row('Meta Title', art.meta_title) }}
         {{ row('Slug', art.slug) }}
-        {{ row('發佈 URL', art.publish_url) }}
+        <div style="display:flex;gap:8px;">
+          <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:100px;">發佈 URL</div>
+          <div style="font-size:12.5px;color:#0f172a;flex:1;word-break:break-all;">
+            {% if art.publish_url %}<a href="{{ art.publish_url }}" target="_blank" style="color:#6366f1;">{{ art.publish_url }}</a>{% else %}—{% endif %}
+          </div>
+        </div>
         {{ row('Google Doc', art.google_doc_url) }}
         <div style="height:1px;background:var(--cf-border);margin:2px 0;"></div>
         {{ row('建立時間', art.created_at.strftime('%Y-%m-%d %H:%M') if art.created_at else None) }}
@@ -440,32 +463,8 @@ async function saveArticle(refs) {
   }
 }
 
-// ── Publish to WordPress ────────────────────────────────────
-async function publishToWP() {
-  const btn = document.getElementById('btn-publish-wp');
-  if (!confirm('確認要發布到 WordPress？')) return;
-  btn.disabled = true;
-  btn.textContent = '發布中…';
-  try {
-    const resp = await fetch('/admin/articles/{{ art.id }}/publish-wp', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-    });
-    const data = await resp.json();
-    if (data.ok) {
-      alert('✅ 發布成功！\nURL: ' + (data.url || '(草稿)'));
-      window.location.reload();
-    } else {
-      alert('❌ 發布失敗：' + (data.error || '未知錯誤'));
-      btn.disabled = false;
-      btn.textContent = '🌐 發布到 WordPress';
-    }
-  } catch (e) {
-    alert('發布錯誤：' + e.message);
-    btn.disabled = false;
-    btn.textContent = '🌐 發布到 WordPress';
-  }
-}
+// 發布到 GoodBone：透過「✓ 批准並發佈」按鈕（status → published）即可上線
+// publish_url 由後端自動設為 https://goodbone.com.tw/blog/{slug}
 </script>
 
 {% if seo_history %}

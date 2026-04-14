@@ -346,6 +346,37 @@ class TestKBQueryAdapter:
         results = query_kb(p.id, "不存在的關鍵字", top_k=5, session=session)
         assert isinstance(results, list)
 
+    def test_query_kb_falls_back_to_db_when_embedding_unavailable(self, session, monkeypatch):
+        """embedding 不可用時，應退回 DB 查詢而非產生假向量結果。"""
+        from contentflow.tools import knowledge_base
+
+        p = _project(session)
+        session.add(KnowledgeEntry(
+            project_id=p.id,
+            category="format_pattern",
+            pattern="真實知識條目",
+            evidence_count=3,
+            confidence_level="verified",
+            is_active=True,
+        ))
+        session.commit()
+
+        class _FakeCollection:
+            def count(self):
+                return 1
+
+        class _FakeClient:
+            pass
+
+        monkeypatch.setattr(knowledge_base, "_get_chroma_client", lambda: _FakeClient())
+        monkeypatch.setattr(knowledge_base, "_get_or_create_collection", lambda pid: _FakeCollection())
+        monkeypatch.setattr(knowledge_base, "_get_embedding", lambda text: None)
+
+        results = knowledge_base.query_kb(p.id, "測試關鍵字", top_k=5, session=session)
+
+        assert isinstance(results, list)
+        assert any("真實知識條目" in item for item in results)
+
     def test_format_kb_context_produces_text(self, session):
         """format_kb_context 應產生有意義的區塊文字"""
         from contentflow.tools.knowledge_base import format_kb_context

@@ -37,10 +37,34 @@ class StrategyReport:
 
     def to_strategy_context(self) -> dict:
         """轉換為 writing_agent 可用的 strategy_context dict"""
+        # 從 writing_architecture 推導 format_type（供 decision log 顯示）
+        arch = self.writing_architecture or ""
+        if "比較" in arch or "對比" in arch:
+            fmt = "comparison"
+        elif "步驟" in arch or "how-to" in arch.lower():
+            fmt = "howto"
+        elif "問答" in arch or "FAQ" in arch:
+            fmt = "faq"
+        else:
+            fmt = "guide"
+        # 從 writing_architecture 推導目標字數
+        wc = 2500
+        if "2000" in arch:
+            wc = 2000
+        elif "3000" in arch:
+            wc = 3000
+        elif "4000" in arch or "長" in arch:
+            wc = 4000
+        elif "1500" in arch:
+            wc = 1500
         return {
             "search_intent": self.search_intent,
             "target_audience": self.target_audience,
             "writing_architecture": self.writing_architecture,
+            "content_angle": self.content_angle,
+            "competitor_gap": self.competitor_gap,
+            "format_type": fmt,
+            "target_word_count": wc,
             "faq_questions": " ".join(
                 f"{i+1}.{q}" for i, q in enumerate(self.faq_questions[:6])
             ),

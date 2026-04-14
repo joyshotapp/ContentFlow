@@ -11,10 +11,15 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from typing import Callable, Awaitable
+
+# 跨 process 排程鎖（多 worker 部署時只讓一個 worker 啟動排程）
+_scheduler_lock_fd = None
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -126,6 +131,28 @@ def with_retry(max_retries: int = 3, base_delay: int = 300):
 # ── 排程任務定義 ──────────────────────────────────────────────
 # 各 tool 模組尚未實作時為 placeholder，接上後直接呼叫即可。
 
+def _to_gsc_site_url(brand_url: str) -> str:
+    """將品牌 URL 轉換為 GSC API 接受的 site_url 格式。
+
+    GSC Domain Property（sc-domain:）覆蓋所有子網域與 http/https；
+    URL-prefix property 只覆蓋特定前綴，使用 Domain Property 更準確。
+
+    Examples:
+        "https://goodbone.com.tw"  → "sc-domain:goodbone.com.tw"
+        "https://www.example.com/" → "sc-domain:example.com"
+        "sc-domain:already.com"    → "sc-domain:already.com"（原樣回傳）
+    """
+    if brand_url.startswith("sc-domain:"):
+        return brand_url
+    from urllib.parse import urlparse
+    parsed = urlparse(brand_url)
+    hostname = parsed.hostname or brand_url
+    # 移除 www. 前綴（Domain Property 不含 www）
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return f"sc-domain:{hostname}"
+
+
 @with_retry(max_retries=3)
 async def sync_gsc_all_projects() -> None:
     """每日 03:00 — 同步全專案 GSC 排名數據。"""
@@ -138,7 +165,8 @@ async def sync_gsc_all_projects() -> None:
         projects = session.query(Project).all()
     for project in projects:
         if project.brand_url:
-            await client.sync_to_db(project_id=project.id, site_url=project.brand_url)
+            site_url = _to_gsc_site_url(project.brand_url)
+            await client.sync_to_db(project_id=project.id, site_url=site_url)
     logger.info(f"[GSCSync] 已同步 {len(projects)} 個專案")
 
 
@@ -416,87 +444,57 @@ async def run_l2_roi_analysis() -> None:
 
 @with_retry(max_retries=2)
 async def run_auto_pipeline() -> None:
-    """每日 08:00 — 自動對 planned 文章啟動 AI pipeline。
+    """每日 08:00 — 三層架構入口：Strategic Agent 規劃 → Tactical Pipeline 執行。
 
-    邏輯：
-    1. 找出所有 ContentCalendar.status == 'planned' 且排程月/週已到期的條目
-    2. 或直接找 Article.status == 'planned' 中最早建立的 N 篇
-    3. 對每篇執行 orchestrator pipeline
+    流程：
+    1. 對每個專案呼叫 Strategic Agent 產出當日計畫
+    2. 依計畫執行 generate / refresh / alert actions
+    3. Pipeline 完成後自動觸發 Reflective Loop（在 orchestrator 內建）
     """
-    from contentflow.models.database import Article, ContentCalendar
-    from contentflow.models.schemas import ArticleTask
-    from contentflow.agents.orchestrator import run_orchestrator
-    import uuid
-
-    MAX_CONCURRENT = 2  # 每次最多處理 2 篇避免過度花費
+    from contentflow.models.database import Project
+    from contentflow.agents.strategic_agent import run_strategic_agent, execute_strategic_plan
 
     with SessionLocal() as session:
-        # 優先：有 ContentCalendar 排程且已到期的 planned 文章
-        now = datetime.now(timezone.utc)
-        current_month = now.month
-        current_week = (now.day - 1) // 7 + 1  # 粗算第幾週
+        project_ids = [p.id for p in session.query(Project).all()]
 
-        due_cal = (
-            session.query(ContentCalendar)
-            .filter(
-                ContentCalendar.status == "planned",
-                ContentCalendar.month <= current_month,
-            )
-            .limit(MAX_CONCURRENT)
-            .all()
-        )
-        article_ids = [c.article_id for c in due_cal if c.article_id]
+    if not project_ids:
+        logger.info("[AutoPipeline] 無專案")
+        return
 
-        # 補充：若日曆文章不足，從 planned articles 補上
-        if len(article_ids) < MAX_CONCURRENT:
-            remaining = MAX_CONCURRENT - len(article_ids)
-            extra = (
-                session.query(Article)
-                .filter(Article.status == "planned", ~Article.id.in_(article_ids) if article_ids else True)
-                .order_by(Article.created_at)
-                .limit(remaining)
-                .all()
-            )
-            article_ids.extend([a.id for a in extra])
-
-        if not article_ids:
-            logger.info("[AutoPipeline] 無待處理的 planned 文章")
-            return
-
-        articles = session.query(Article).filter(Article.id.in_(article_ids)).all()
-        article_data = [(a.id, a.title, a.primary_keyword or a.title, a.project_id) for a in articles]
-
-    logger.info(f"[AutoPipeline] 啟動 {len(article_data)} 篇文章的 pipeline")
-
-    for art_id, title, keyword, project_id in article_data:
-        run_id = str(uuid.uuid4())
-        task = ArticleTask(
-            task_id=run_id,
-            title=title,
-            keywords=[keyword],
-        )
-
+    for project_id in project_ids:
         try:
-            result = await run_orchestrator(task, project_id=project_id, article_id=art_id)
+            # Strategic Agent：決定今天要做什麼
+            plan = await run_strategic_agent(project_id)
+            logger.info(
+                f"[AutoPipeline] project={project_id} 計畫：{plan.total_count} 項 action"
+            )
 
-            # 回寫結果到 DB
-            with SessionLocal() as session:
-                article = session.query(Article).filter(Article.id == art_id).first()
-                if article and result.draft:
-                    article.draft_content = result.draft.content_markdown
-                    article.meta_title = result.draft.meta_title
-                    article.meta_description = result.draft.meta_description
-                    article.slug = result.draft.slug
-                    article.faq_schema_json = result.draft.faq_schema_json
-                    article.article_schema_json = result.draft.article_schema_json
-                    article.seo_score = result.draft.seo_score or None
-                    article.status = result.status or "reviewing"
-                    article.updated_at = datetime.now(timezone.utc)
-                    session.commit()
-
-            logger.info(f"[AutoPipeline] ✅ 文章 '{title}' pipeline 完成")
+            if plan.total_count > 0 and plan.status == "pending":
+                # Tactical Pipeline：按計畫執行
+                await execute_strategic_plan(plan.id)
         except Exception as exc:
-            logger.error(f"[AutoPipeline] ❌ 文章 '{title}' pipeline 失敗：{exc}")
+            logger.error(f"[AutoPipeline] project={project_id} 失敗：{exc}")
+
+    logger.info("[AutoPipeline] 三層架構每日執行完成")
+
+
+@with_retry(max_retries=1)
+async def run_weekly_reflection() -> None:
+    """每週日 08:00 — 週級反思：L1/L2 跨文章學習，更新知識庫與寫作規範。"""
+    from contentflow.models.database import Project
+    from contentflow.agents.reflective_agent import reflect_weekly
+
+    with SessionLocal() as session:
+        project_ids = [p.id for p in session.query(Project).all()]
+
+    for project_id in project_ids:
+        try:
+            await reflect_weekly(project_id)
+            logger.info(f"[WeeklyReflection] project={project_id} 完成")
+        except Exception as exc:
+            logger.warning(f"[WeeklyReflection] project={project_id} 失敗：{exc}")
+
+    logger.info("[WeeklyReflection] 全部專案週級反思完成")
 
 
 @with_retry(max_retries=1)
@@ -642,9 +640,21 @@ async def check_ranking_drops() -> None:
 # ── 排程設定進入點 ────────────────────────────────────────────
 
 def schedule_all_jobs() -> None:
-    """註冊全部排程任務。由 api.py startup 呼叫。"""
+    """註冊全部排程任務。由 site_app startup 呼叫。"""
+    global _scheduler_lock_fd
+
     if not settings.scheduler_enabled:
         logger.info("[Scheduler] SCHEDULER_ENABLED=false，跳過排程初始化")
+        return
+
+    # 多 worker 部署：用檔案鎖確保只有一個 process 啟動排程
+    try:
+        _scheduler_lock_fd = open("/tmp/contentflow_scheduler.lock", "w")
+        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _scheduler_lock_fd.write(str(os.getpid()))
+        _scheduler_lock_fd.flush()
+    except (IOError, OSError):
+        logger.info("[Scheduler] 另一個 worker 已持有排程鎖，跳過")
         return
 
     scheduler.add_job(sync_gsc_all_projects,      CronTrigger(hour=3,  minute=0),                              id="gsc_sync",        replace_existing=True)
@@ -655,6 +665,7 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(run_l1_pattern_analysis,     CronTrigger(day=1,   hour=6,  minute=0),                     id="l1_learn",        replace_existing=True)
     scheduler.add_job(run_l2_roi_analysis,         CronTrigger(day=1,   hour=7,  minute=0),                     id="l2_learn",        replace_existing=True)
     scheduler.add_job(run_auto_pipeline,           CronTrigger(hour=8,  minute=0),                              id="auto_pipeline",   replace_existing=True)
+    scheduler.add_job(run_weekly_reflection,        CronTrigger(day_of_week="sun", hour=8, minute=0),            id="weekly_reflection", replace_existing=True)
     scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
     scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
 

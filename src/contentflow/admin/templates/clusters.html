@@ -59,7 +59,7 @@
       </div>
       <div>
         <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ total_members }}</div>
-        <div style="font-size:11px;color:#94a3b8;">衛星文章</div>
+        <div style="font-size:11px;color:#94a3b8;">衛星主題</div>
       </div>
     </div>
   </div>
@@ -109,7 +109,7 @@
 
       <div style="text-align:center;flex-shrink:0;">
         <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ cluster.member_count }}</div>
-        <div style="font-size:10px;color:#94a3b8;">篇規劃</div>
+        <div style="font-size:10px;color:#94a3b8;">個衛星主題</div>
       </div>
     </div>
 
@@ -144,6 +144,7 @@
   <!-- Member list -->
   <div style="max-height:180px;overflow-y:auto;">
     {% for member in cluster.members %}
+    {% if member.article_id %}
     <a href="/admin/articles/{{ member.article_id }}" style="text-decoration:none;">
       <div style="
         display:flex;align-items:center;gap:10px;padding:9px 18px;
@@ -160,7 +161,18 @@
       </div>
     </a>
     {% else %}
-    <div style="padding:14px 18px;color:#94a3b8;font-size:12.5px;">尚無衛星文章</div>
+    <div style="
+      display:flex;align-items:center;gap:10px;padding:9px 18px;
+      border-bottom:1px solid rgba(226,232,240,0.35);background:#fcfcfd;">
+      <span class="dot dot-neutral"></span>
+      <div style="flex:1;min-width:0;font-size:13px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        {{ member.keyword }}
+      </div>
+      <span class="badge badge-neutral" style="font-size:10px;">未建立文章</span>
+    </div>
+    {% endif %}
+    {% else %}
+    <div style="padding:14px 18px;color:#94a3b8;font-size:12.5px;">尚無衛星主題</div>
     {% endfor %}
   </div>
   <div style="padding:8px 18px 12px;border-top:1px solid var(--cf-border);display:flex;justify-content:flex-end;">
