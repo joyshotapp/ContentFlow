@@ -3002,6 +3002,26 @@ async def strategic_plans_page(request: Request, page: int = 1):
                 },
             })
 
+        # 從 pipeline_runs 計算每個 strategic plan 的平均 SEO 分數
+        plan_ids = [p.id for p in plans]
+        plan_avg_seo: dict[int, float] = {}
+        if plan_ids:
+            for plan_id, avg_s in (
+                db.query(PipelineRun.strategic_plan_id, func.avg(PipelineRun.seo_score))
+                .filter(
+                    PipelineRun.strategic_plan_id.in_(plan_ids),
+                    PipelineRun.seo_score.isnot(None),
+                )
+                .group_by(PipelineRun.strategic_plan_id)
+                .all()
+            ):
+                plan_avg_seo[plan_id] = round(float(avg_s), 0)
+        # 將 avg_seo_score 注入 context dict（覆蓋舊快照中可能過時的值）
+        for pd_item in plans_decoded:
+            pid = pd_item["plan"].id
+            if pid in plan_avg_seo:
+                pd_item["context"]["avg_seo_score"] = int(plan_avg_seo[pid])
+
         total_plans    = db.query(StrategicPlan).count()
         completed_plans = db.query(StrategicPlan).filter(StrategicPlan.status == "completed").count()
         pending_plans  = db.query(StrategicPlan).filter(StrategicPlan.status == "pending").count()

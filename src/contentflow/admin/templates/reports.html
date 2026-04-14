@@ -139,7 +139,7 @@
           </td>
           <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             {% if art.landing_page %}
-            <a href="{{ art.landing_page }}" target="_blank" style="color:#6366f1;text-decoration:none;">{{ art.landing_page[-60:] if art.landing_page|length > 60 else art.landing_page }}</a>
+            <a href="{{ art.landing_page }}" target="_blank" style="color:#6366f1;text-decoration:none;">{{ art.landing_page[:55] + '…' if art.landing_page|length > 58 else art.landing_page }}</a>
             {% else %}—{% endif %}
           </td>
           <td style="font-weight:700;">{{ "{:,}".format(art.total_clicks|int) if art.total_clicks else 0 }}</td>

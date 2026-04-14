@@ -279,13 +279,9 @@
       <div style="padding:16px 18px 0;">
         <div class="section-title">📊 SEO 分數歷程</div>
       </div>
-      {% if seo_history %}
-      <div style="padding:10px 16px 14px;position:relative;height:160px;">
-        <canvas id="seoHistoryChart"></canvas>
-      </div>
       <div style="padding:0 18px 14px;display:flex;align-items:center;gap:12px;">
         <div>
-          <div style="font-size:24px;font-weight:800;color:{% if art.seo_score >= 85 %}#059669{% elif art.seo_score >= 70 %}#d97706{% else %}#dc2626{% endif %};">{{ art.seo_score or '—' }}</div>
+          <div style="font-size:24px;font-weight:800;color:{% if art.seo_score and art.seo_score >= 85 %}#059669{% elif art.seo_score and art.seo_score >= 70 %}#d97706{% elif art.seo_score %}#dc2626{% else %}#94a3b8{% endif %};">{{ art.seo_score or '—' }}</div>
           <div style="font-size:11px;color:#94a3b8;">當前分數</div>
         </div>
         <div style="flex:1;text-align:right;">
@@ -297,8 +293,12 @@
           {% endif %}
         </div>
       </div>
+      {% if seo_history %}
+      <div style="padding:0 16px 14px;position:relative;height:140px;">
+        <canvas id="seoHistoryChart"></canvas>
+      </div>
       {% else %}
-      <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">尚無 SEO 評分記錄</div>
+      <div style="padding:0 18px 14px;font-size:11px;color:#94a3b8;text-align:center;">排名歷程資料累積中</div>
       {% endif %}
     </div>
 
