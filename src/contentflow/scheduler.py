@@ -561,6 +561,188 @@ async def send_weekly_report() -> None:
         logger.info("[WeeklyReport] 未設定 SLACK_WEBHOOK_URL，跳過推播")
 
 
+@with_retry(max_retries=2)
+async def backfill_action_outcomes() -> None:
+    """每日 04:00 — 回填 ActionOutcome 的 7d / 14d / 28d GSC 數據。
+
+    掃描所有未完成的 ActionOutcome，根據距離 action_date 的天數
+    查詢 GSC 排名數據回填，並在 28d 完成後判定 success_flag。
+    """
+    from datetime import date
+    from contentflow.models.database import ActionOutcome, SEORanking
+
+    today = date.today()
+
+    with SessionLocal() as session:
+        # 找出所有 checked_28d_at 為 NULL（尚未完成 28 天追蹤）的 outcome
+        pending = (
+            session.query(ActionOutcome)
+            .filter(ActionOutcome.checked_28d_at.is_(None))
+            .all()
+        )
+
+        if not pending:
+            logger.info("[OutcomeBackfill] 無待回填的 ActionOutcome")
+            return
+
+        filled_count = 0
+        for outcome in pending:
+            days_since = (today - outcome.action_date).days
+            kw = outcome.primary_keyword
+            project_id = outcome.project_id
+
+            # 查詢指定時間窗口的 GSC 平均排名
+            def _avg_gsc(target_date):
+                """取 target_date ±2 天窗口的 GSC 平均數據。"""
+                window_start = target_date - timedelta(days=2)
+                window_end = target_date + timedelta(days=2)
+                rows = (
+                    session.query(
+                        func.avg(SEORanking.position),
+                        func.sum(SEORanking.impressions),
+                        func.sum(SEORanking.clicks),
+                        func.avg(SEORanking.ctr),
+                    )
+                    .filter(
+                        SEORanking.project_id == project_id,
+                        SEORanking.keyword == kw,
+                        SEORanking.tracked_date >= window_start,
+                        SEORanking.tracked_date <= window_end,
+                    )
+                    .first()
+                )
+                if rows and rows[0] is not None:
+                    return {
+                        "rank": round(float(rows[0]), 1),
+                        "impressions": int(rows[1] or 0),
+                        "clicks": int(rows[2] or 0),
+                        "ctr": round(float(rows[3] or 0), 4),
+                    }
+                return None
+
+            now_ts = datetime.now(timezone.utc)
+
+            # 7 天回填
+            if days_since >= 7 and outcome.checked_7d_at is None:
+                data = _avg_gsc(outcome.action_date + timedelta(days=7))
+                if data:
+                    outcome.rank_after_7d = data["rank"]
+                    outcome.impressions_after_7d = data["impressions"]
+                    outcome.clicks_after_7d = data["clicks"]
+                    outcome.ctr_after_7d = data["ctr"]
+                    outcome.checked_7d_at = now_ts
+                    filled_count += 1
+
+            # 14 天回填
+            if days_since >= 14 and outcome.checked_14d_at is None:
+                data = _avg_gsc(outcome.action_date + timedelta(days=14))
+                if data:
+                    outcome.rank_after_14d = data["rank"]
+                    outcome.impressions_after_14d = data["impressions"]
+                    outcome.clicks_after_14d = data["clicks"]
+                    outcome.ctr_after_14d = data["ctr"]
+                    outcome.checked_14d_at = now_ts
+                    filled_count += 1
+
+            # 28 天回填 + 成效判定
+            if days_since >= 28 and outcome.checked_28d_at is None:
+                data = _avg_gsc(outcome.action_date + timedelta(days=28))
+                if data:
+                    outcome.rank_after_28d = data["rank"]
+                    outcome.impressions_after_28d = data["impressions"]
+                    outcome.clicks_after_28d = data["clicks"]
+                    outcome.ctr_after_28d = data["ctr"]
+                    outcome.checked_28d_at = now_ts
+
+                    # 成效判定
+                    if outcome.baseline_rank is not None:
+                        delta = data["rank"] - outcome.baseline_rank
+                        outcome.rank_delta = round(delta, 1)
+                        if delta <= -3:
+                            outcome.success_flag = "improved"
+                            outcome.learning_confidence = "high"
+                        elif delta <= 0:
+                            outcome.success_flag = "improved"
+                            outcome.learning_confidence = "medium"
+                        elif delta <= 3:
+                            outcome.success_flag = "stable"
+                            outcome.learning_confidence = "medium"
+                        else:
+                            outcome.success_flag = "declined"
+                            outcome.learning_confidence = "high"
+                    else:
+                        # 新文章：有排名就算成功
+                        if data["rank"] <= 50:
+                            outcome.success_flag = "improved"
+                            outcome.learning_confidence = "medium"
+                        else:
+                            outcome.success_flag = "stable"
+                            outcome.learning_confidence = "low"
+
+                    filled_count += 1
+
+        session.commit()
+
+    logger.info(f"[OutcomeBackfill] 回填完成：{filled_count} 筆更新，{len(pending)} 筆追蹤中")
+
+
+def record_action_outcome(
+    *,
+    project_id: int,
+    article_id: int,
+    run_id: str | None = None,
+    strategic_plan_id: int | None = None,
+    action_type: str,
+    primary_keyword: str,
+) -> None:
+    """在 pipeline 完成後記錄一筆 ActionOutcome，同時抓取當前 GSC baseline。
+
+    由 strategic_agent._execute_generate / _execute_refresh 呼叫。
+    """
+    from datetime import date
+    from contentflow.models.database import ActionOutcome, SEORanking
+
+    today = date.today()
+    with SessionLocal() as session:
+        # 取得當前 GSC 基線（最近 7 天平均）
+        week_ago = today - timedelta(days=7)
+        baseline = (
+            session.query(
+                func.avg(SEORanking.position),
+                func.sum(SEORanking.impressions),
+                func.sum(SEORanking.clicks),
+                func.avg(SEORanking.ctr),
+            )
+            .filter(
+                SEORanking.project_id == project_id,
+                SEORanking.keyword == primary_keyword,
+                SEORanking.tracked_date >= week_ago,
+            )
+            .first()
+        )
+
+        outcome = ActionOutcome(
+            project_id=project_id,
+            article_id=article_id,
+            run_id=run_id,
+            strategic_plan_id=strategic_plan_id,
+            action_type=action_type,
+            action_date=today,
+            primary_keyword=primary_keyword,
+            baseline_rank=round(float(baseline[0]), 1) if baseline and baseline[0] else None,
+            baseline_impressions=int(baseline[1] or 0) if baseline else None,
+            baseline_clicks=int(baseline[2] or 0) if baseline else None,
+            baseline_ctr=round(float(baseline[3] or 0), 4) if baseline else None,
+            success_flag="too_early",
+        )
+        session.add(outcome)
+        session.commit()
+        logger.info(
+            f"[ActionOutcome] 記錄 {action_type} kw='{primary_keyword}' "
+            f"baseline_rank={outcome.baseline_rank}"
+        )
+
+
 async def check_ranking_drops() -> None:
     """每週三 06:00 — 核心演算法更新偵測：比對排名 7天 vs 前7天，退步 ≥5 名發送 Slack 警報。
 
@@ -659,7 +841,8 @@ def schedule_all_jobs() -> None:
 
     scheduler.add_job(sync_gsc_all_projects,      CronTrigger(hour=3,  minute=0),                              id="gsc_sync",        replace_existing=True)
     scheduler.add_job(sync_ga4_all_projects,       CronTrigger(hour=3,  minute=30),                             id="ga4_sync",        replace_existing=True)
-    scheduler.add_job(run_competitor_serp_check,   CronTrigger(day_of_week="mon", hour=4, minute=0),            id="competitor_serp", replace_existing=True)
+    scheduler.add_job(backfill_action_outcomes,     CronTrigger(hour=4,  minute=0),                              id="outcome_backfill", replace_existing=True)
+    scheduler.add_job(run_competitor_serp_check,   CronTrigger(day_of_week="mon", hour=4, minute=30),           id="competitor_serp", replace_existing=True)
     scheduler.add_job(run_attribution_engine,      CronTrigger(day_of_week="mon", hour=5, minute=0),            id="attribution",     replace_existing=True)
     scheduler.add_job(check_refresh_triggers,      CronTrigger(day_of_week="tue", hour=4, minute=0),            id="refresh_check",   replace_existing=True)
     scheduler.add_job(run_l1_pattern_analysis,     CronTrigger(day=1,   hour=6,  minute=0),                     id="l1_learn",        replace_existing=True)

@@ -615,3 +615,64 @@ class ReflectionLog(Base):
 
     def __repr__(self):
         return f"<ReflectionLog run={self.run_id[:8] if self.run_id else '—'} type={self.reflection_type}>"
+
+
+# ── Action Outcome Tracking（因果閉環：追蹤每個動作的 7/14/28 天成效）───────
+
+class ActionOutcome(Base):
+    """記錄每個 SEO 動作（generate / refresh / rewrite）的前後成效對比。
+
+    由 scheduler cron job 在 7d / 14d / 28d 時自動回填 GSC 排名數據，
+    供 Strategic Agent 學習哪類動作真正有效。
+    """
+    __tablename__ = "action_outcomes"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=False, index=True)
+    run_id = Column(String, nullable=True, index=True)          # 對應 PipelineRun.run_id
+    strategic_plan_id = Column(Integer, ForeignKey("strategic_plans.id"), nullable=True)
+
+    action_type = Column(String, nullable=False)                # generate / refresh / rewrite
+    action_date = Column(Date, nullable=False, index=True)      # 動作執行日期
+    primary_keyword = Column(String, nullable=False)            # 追蹤的主要關鍵字
+
+    # 基線（動作執行時的 GSC 數據）
+    baseline_rank = Column(Float, nullable=True)                # 動作前排名（NULL = 全新文章）
+    baseline_impressions = Column(Integer, nullable=True)
+    baseline_clicks = Column(Integer, nullable=True)
+    baseline_ctr = Column(Float, nullable=True)
+
+    # 7 天後追蹤
+    rank_after_7d = Column(Float, nullable=True)
+    impressions_after_7d = Column(Integer, nullable=True)
+    clicks_after_7d = Column(Integer, nullable=True)
+    ctr_after_7d = Column(Float, nullable=True)
+    checked_7d_at = Column(DateTime, nullable=True)
+
+    # 14 天後追蹤
+    rank_after_14d = Column(Float, nullable=True)
+    impressions_after_14d = Column(Integer, nullable=True)
+    clicks_after_14d = Column(Integer, nullable=True)
+    ctr_after_14d = Column(Float, nullable=True)
+    checked_14d_at = Column(DateTime, nullable=True)
+
+    # 28 天後追蹤
+    rank_after_28d = Column(Float, nullable=True)
+    impressions_after_28d = Column(Integer, nullable=True)
+    clicks_after_28d = Column(Integer, nullable=True)
+    ctr_after_28d = Column(Float, nullable=True)
+    checked_28d_at = Column(DateTime, nullable=True)
+
+    # 成效判定
+    success_flag = Column(String, nullable=True)                # improved / stable / declined / too_early
+    rank_delta = Column(Float, nullable=True)                   # 28d 排名變化（負值 = 進步）
+    learning_confidence = Column(String, default="low")         # low / medium / high
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project")
+    article = relationship("Article")
+
+    def __repr__(self):
+        return f"<ActionOutcome {self.action_type} kw='{self.primary_keyword}' {self.success_flag or 'pending'}>"

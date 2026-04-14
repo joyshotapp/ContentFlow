@@ -32,6 +32,7 @@ from ..models.database import (
     ReflectionLog,
     SEORanking,
     StrategicPlan,
+    ActionOutcome,
 )
 
 
@@ -189,6 +190,41 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         .count()
     )
 
+    # 7. 過去動作的成效回饋（ActionOutcome — 因果學習資料）
+    recent_outcomes = (
+        session.query(ActionOutcome)
+        .filter(
+            ActionOutcome.project_id == project_id,
+            ActionOutcome.success_flag.isnot(None),
+            ActionOutcome.success_flag != "too_early",
+        )
+        .order_by(ActionOutcome.action_date.desc())
+        .limit(20)
+        .all()
+    )
+    outcome_summary = []
+    for o in recent_outcomes:
+        outcome_summary.append({
+            "action_type": o.action_type,
+            "keyword": o.primary_keyword,
+            "action_date": o.action_date.isoformat() if o.action_date else None,
+            "baseline_rank": o.baseline_rank,
+            "rank_after_28d": o.rank_after_28d,
+            "rank_delta": o.rank_delta,
+            "success": o.success_flag,
+            "confidence": o.learning_confidence,
+        })
+
+    # 8. 成效統計摘要（按 action_type 分組）
+    outcome_stats = {}
+    for o in recent_outcomes:
+        at = o.action_type
+        if at not in outcome_stats:
+            outcome_stats[at] = {"total": 0, "improved": 0, "declined": 0, "stable": 0}
+        outcome_stats[at]["total"] += 1
+        if o.success_flag in outcome_stats[at]:
+            outcome_stats[at][o.success_flag] += 1
+
     return {
         "today": today.isoformat(),
         "calendar_items": calendar_items,
@@ -204,6 +240,8 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
             "reviewing": reviewing_count,
             "published": published_count,
         },
+        "action_outcome_history": outcome_summary[:10],
+        "action_outcome_stats": outcome_stats,
     }
 
 
@@ -231,6 +269,13 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 - 如果有很多待審閱文章（≥5），提醒人工優先處理
 - 參考上次執行摘要，避免重複工作
 
+## 因果學習（重要）：
+- 數據中包含 `action_outcome_history`，記錄過去動作的實際成效
+- `action_outcome_stats` 顯示各類動作（generate/refresh）的成功率統計
+- **優先安排成功率高的動作類型**
+- 如果某類動作 declined 比例高，降低其優先級並在 summary 中說明原因
+- 如果沒有 outcome 數據（系統初期），按照基本規則決策即可
+
 ## 輸出格式（嚴格 JSON）：
 ```json
 {
@@ -239,7 +284,8 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
     {"action": "refresh", "article_id": 3, "reason": "排名從 8 掉到 15，屬於 B→C 群", "priority": 2},
     {"action": "alert", "message": "有 6 篇文章待審閱，建議今日優先處理", "priority": 0}
   ],
-  "summary": "今日計畫：產出 1 篇新文、Refresh 1 篇排名下滑文章。6 篇待審閱需儘快處理。"
+  "summary": "今日計畫：產出 1 篇新文、Refresh 1 篇排名下滑文章。6 篇待審閱需儘快處理。",
+  "outcome_insight": "過去 refresh 動作成功率 75%，generate 成功率 60%，本次優先安排 refresh。"
 }
 ```
 
@@ -247,23 +293,21 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 
 
 async def _call_strategic_llm(context_snapshot: dict) -> dict:
-    """呼叫 LLM 產出執行計畫。"""
-    from openai import AsyncOpenAI
+    """呼叫 LLM 產出執行計畫，自帶 provider failover。"""
+    from ..llm_client import achat
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
     user_msg = f"以下是今日的專案數據，請產出今日執行計畫：\n\n```json\n{json.dumps(context_snapshot, ensure_ascii=False, indent=2)}\n```"
 
-    response = await client.chat.completions.create(
-        model=settings.llm_lite_model or "gpt-4o-mini",
+    content = await achat(
         messages=[
             {"role": "system", "content": STRATEGIC_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
+        model=settings.llm_lite_model or "gpt-4o-mini",
         temperature=0.3,
         response_format={"type": "json_object"},
     )
-    content = response.choices[0].message.content or "{}"
-    return json.loads(content)
+    return json.loads(content or "{}")
 
 
 # ── 公開介面 ──────────────────────────────────────────────────
@@ -505,6 +549,17 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
             session.commit()
 
+        # 記錄 ActionOutcome（因果追蹤基線）
+        from ..scheduler import record_action_outcome
+        record_action_outcome(
+            project_id=project_id,
+            article_id=art_id,
+            run_id=run_id,
+            strategic_plan_id=plan_id,
+            action_type="generate",
+            primary_keyword=art_kw,
+        )
+
         logger.info(f"[StrategicExecutor/generate] ✅ '{art_title}' 完成")
     except Exception as e:
         with SessionLocal() as session:
@@ -574,6 +629,17 @@ async def _execute_refresh(action: dict, project_id: int, *, plan_id: int | None
                 if art:
                     art.last_refresh_date = datetime.now(timezone.utc)
                     session.commit()
+
+            # 記錄 ActionOutcome（因果追蹤基線）
+            from ..scheduler import record_action_outcome
+            record_action_outcome(
+                project_id=project_id,
+                article_id=article.id,
+                strategic_plan_id=plan_id,
+                action_type="refresh",
+                primary_keyword=article.primary_keyword or article.title,
+            )
+
     except Exception as e:
         logger.error(f"[StrategicExecutor/refresh] '{art_title}' 失敗：{e}")
 

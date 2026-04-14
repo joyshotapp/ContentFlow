@@ -373,24 +373,22 @@ REFLECTION_PROMPTS = {
 
 
 async def _call_reflection_llm(context: dict, reflection_type: str) -> dict:
-    """呼叫 LLM 進行反思分析。"""
-    from openai import AsyncOpenAI
+    """呼叫 LLM 進行反思分析，自帶 provider failover。"""
+    from ..llm_client import achat
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
     system = REFLECTION_PROMPTS.get(reflection_type, REFLECTION_PROMPTS["post_pipeline"])
     user_msg = f"以下是需要反思的數據：\n\n```json\n{json.dumps(context, ensure_ascii=False, indent=2)}\n```"
 
-    response = await client.chat.completions.create(
-        model=settings.llm_lite_model or "gpt-4o-mini",
+    content = await achat(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_msg},
         ],
+        model=settings.llm_lite_model or "gpt-4o-mini",
         temperature=0.3,
         response_format={"type": "json_object"},
     )
-    content = response.choices[0].message.content or "{}"
-    return json.loads(content)
+    return json.loads(content or "{}")
 
 
 def _fallback_reflection(context: dict) -> dict:
