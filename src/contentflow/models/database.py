@@ -198,7 +198,8 @@ class Article(Base):
 
     calendar_entry = relationship("ContentCalendar", back_populates="article", uselist=False)
     project = relationship("Project", back_populates="articles")
-    author = relationship("Author", back_populates="articles")
+    author = relationship("Author", foreign_keys="[Article.author_id]", back_populates="articles")
+    reviewer = relationship("Author", foreign_keys="[Article.reviewer_id]")
 
     def __repr__(self):
         return f"<Article #{self.seqno} '{self.title[:30]}'>"
@@ -460,7 +461,7 @@ class Author(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="authors")
-    articles = relationship("Article", back_populates="author")
+    articles = relationship("Article", foreign_keys="[Article.author_id]", back_populates="author")
 
     def __repr__(self):
         return f"<Author '{self.name}' ({self.title})>"
