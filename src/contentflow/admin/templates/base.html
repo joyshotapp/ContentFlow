@@ -71,6 +71,12 @@
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
     ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
+    /* Sidebar scrollbar — 深色背景上更明顯 */
+    .sidebar-nav::-webkit-scrollbar { width: 6px; }
+    .sidebar-nav::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); }
+    .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 999px; }
+    .sidebar-nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
     /* ── Layout ─────────────────────────────────────────────── */
     body { background: var(--cf-surface); font-family: 'Inter', 'Noto Sans TC', sans-serif; -webkit-font-smoothing: antialiased; }
     .layout { display: flex; min-height: 100vh; }
@@ -99,19 +105,19 @@
     .sidebar-brand-name { color: #fff; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
     .sidebar-brand-version { color: rgba(255,255,255,0.3); font-size: 10px; margin-top: 1px; }
 
-    .sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+    .sidebar-nav { flex: 1; padding: 8px 10px; overflow-y: auto; min-height: 0; }
 
     .nav-section-label {
-      padding: 16px 8px 4px;
+      padding: 12px 8px 2px;
       font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em;
       text-transform: uppercase; color: rgba(255,255,255,0.25);
     }
-    .nav-section-label:first-child { padding-top: 4px; }
+    .nav-section-label:first-child { padding-top: 2px; }
 
     .nav-link {
       display: flex; align-items: center; gap: 9px;
-      padding: 7px 10px; border-radius: 7px; margin: 1px 0;
-      font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.5);
+      padding: 6px 10px; border-radius: 7px; margin: 1px 0;
+      font-size: 12.5px; font-weight: 500; color: rgba(255,255,255,0.5);
       text-decoration: none; cursor: pointer;
       transition: all 0.15s ease; position: relative; overflow: hidden;
     }
@@ -412,13 +418,80 @@
     .sys-pill-warn  { background: rgba(245,158,11,0.08);  color: #d97706; border-color: rgba(245,158,11,0.2);  }
     .sys-pill-error { background: rgba(239,68,68,0.08);   color: #dc2626; border-color: rgba(239,68,68,0.2);   }
 
+    /* ── Mobile hamburger ────────────────────────────────────── */
+    .mobile-menu-btn { display: none; }
+
+    /* ── RWD ─────────────────────────────────────────────────── */
+
+    /* Tablet: ≤ 1024px — 收窄 sidebar */
+    @media (max-width: 1024px) {
+      :root { --cf-sidebar-w: 200px; }
+      .page-body { padding: 16px 18px; }
+      .topbar { padding: 0 18px; }
+    }
+
+    /* Mobile: ≤ 768px — sidebar 收為 overlay */
+    @media (max-width: 768px) {
+      :root { --cf-sidebar-w: 260px; }
+
+      .mobile-menu-btn {
+        display: flex; align-items: center; justify-content: center;
+        width: 36px; height: 36px; border-radius: 8px;
+        background: transparent; border: 1px solid var(--cf-border);
+        cursor: pointer; flex-shrink: 0; color: var(--cf-text);
+      }
+      .mobile-menu-btn:hover { background: #f1f5f9; }
+
+      .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.25s cubic-bezier(.4,0,.2,1);
+        z-index: 50;
+      }
+      .sidebar.open { transform: translateX(0); }
+
+      .sidebar-backdrop {
+        position: fixed; inset: 0; z-index: 45;
+        background: rgba(0,0,0,0.4);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+      }
+
+      .main { margin-left: 0; }
+      .topbar { padding: 0 14px; }
+      .page-body { padding: 14px; }
+
+      /* Stat cards: 2-col on mobile */
+      .stat-grid-mobile { grid-template-columns: repeat(2, 1fr) !important; }
+    }
+
+    /* Small mobile: ≤ 480px */
+    @media (max-width: 480px) {
+      .topbar-left h1 { font-size: 14px; }
+      .topbar-left p { font-size: 11px; }
+      .topbar-clock { display: none; }
+      .topbar-avatar { width: 28px; height: 28px; font-size: 10px; }
+      .cf-card-p { padding: 14px; }
+    }
+
   </style>
 </head>
 <body>
-<div class="layout">
+<div class="layout" x-data="{ sidebarOpen: false }">
+
+  <!-- Sidebar backdrop (mobile) -->
+  <div class="sidebar-backdrop"
+       x-cloak
+       @click="sidebarOpen = false"
+       x-show="sidebarOpen"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"></div>
 
   <!-- ═══════════════ SIDEBAR ═══════════════ -->
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'open': sidebarOpen }">
     <div class="sidebar-brand">
       <div class="sidebar-brand-icon">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -551,7 +624,11 @@
 
     <!-- Top bar -->
     <header class="topbar">
-      <div class="topbar-left">
+      <!-- Hamburger (mobile only) -->
+      <button class="mobile-menu-btn" @click="sidebarOpen = !sidebarOpen" aria-label="選單">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="topbar-left" style="min-width:0;">
         <h1>{% block page_title %}Dashboard{% endblock %}</h1>
         <p>{% block page_subtitle %}{% endblock %}</p>
       </div>

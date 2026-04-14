@@ -750,8 +750,7 @@ async def calendar_page(request: Request, month: int = 0):
     db = _db()
     try:
         now = datetime.now(timezone.utc)
-        if month == 0:
-            month = now.month
+        # month=0 表示顯示所有月份（預設）
 
         all_entries = (
             db.query(ContentCalendar)
@@ -787,7 +786,7 @@ async def calendar_page(request: Request, month: int = 0):
         for item in enriched:
             m = item["month"]
             if m == 0: continue
-            if month and m != month: continue
+            if month != 0 and m != month: continue
             if m not in months_map:
                 months_map[m] = {}
             w = item["week"]

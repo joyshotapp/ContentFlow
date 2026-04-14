@@ -13,12 +13,30 @@
 
 {% block content %}
 
+<style>
+/* Calendar RWD */
+@media (max-width: 768px) {
+  .stat-grid-mobile { grid-template-columns: repeat(2, 1fr) !important; }
+  .form-grid-rwd { grid-template-columns: 1fr !important; }
+  .form-grid-rwd .form-group[style*="grid-column:span"],
+  .form-grid-rwd .form-span-full { grid-column: span 1 !important; }
+  .cal-item {
+    flex-wrap: wrap !important; gap: 6px !important; padding: 10px 14px !important;
+  }
+  .cal-item .cal-date { display: none; }
+  .cal-item .cal-delete-form { margin-left: auto; }
+}
+@media (max-width: 480px) {
+  .stat-grid-mobile { grid-template-columns: 1fr !important; }
+}
+</style>
+
 <!-- ── Add Calendar Entry Panel ──────────────────────────────── -->
 <div id="add-cal-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
   <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;">📅 新增排程文章</div>
   <form method="post" action="/admin/calendar/new">
     <input type="hidden" name="project_id" value="{{ project_id }}">
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" class="form-grid-rwd">
       <div class="form-group" style="grid-column:span 2;">
         <label class="form-label">文章標題 *</label>
         <input class="form-input" type="text" name="title" placeholder="例：膝蓋退化性關節炎：症狀、成因與治療完整指南" required>
@@ -52,7 +70,7 @@
         <label class="form-label">目標關鍵字</label>
         <input class="form-input" type="text" name="keywords" placeholder="例：膝蓋退化性關節炎">
       </div>
-      <div class="form-group" style="grid-column:span 3;">
+      <div class="form-group form-span-full" style="grid-column:span 3;">
         <label class="form-label">搜尋意圖 / 目標受眾</label>
         <input class="form-input" type="text" name="search_intent" placeholder="例：資訊型，50歲以上有膝彎困難的患者">
       </div>
@@ -77,8 +95,16 @@
   </form>
 </div>
 
+<!-- ── Month filter tabs ─────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+  <a href="/admin/calendar?month=0" class="tab-item {% if current_month == 0 %}active{% endif %}" style="font-size:12px;">全部</a>
+  {% for m in months_with_data %}
+  <a href="/admin/calendar?month={{ m }}" class="tab-item {% if current_month == m %}active{% endif %}" style="font-size:12px;">{{ m }}月</a>
+  {% endfor %}
+</div>
+
 <!-- ── Month stats ──────────────────────────────────────────── -->
-<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;" class="stat-grid-mobile">
   {% set statuses = [("published","已發佈","stat-icon-emerald"),("reviewing","審閱中","stat-icon-violet"),("writing","撰寫中","stat-icon-amber"),("researching","研究中","stat-icon-sky"),("planned","規劃中","stat-icon-slate"),("completed","已完成","stat-icon-emerald")] %}
   {% for st, label, icon_cls in statuses %}
   <div class="cf-card cf-card-p cf-card-hover animate-up">
@@ -112,7 +138,7 @@
       <span style="font-size:11px;color:#cbd5e1;margin-left:8px;">{{ week.date_range }}</span>
     </div>
     {% for item in week.items %}
-    <div style="
+    <div class="cal-item" style="
         display:flex;align-items:center;gap:12px;padding:12px 20px;
         border-bottom:1px solid rgba(226,232,240,0.3);transition:background 0.1s;"
         onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
@@ -120,7 +146,7 @@
         <span class="dot dot-{{ STATUS_COLORS.get(item.status, 'neutral') }}"></span>
 
         <!-- Date -->
-        <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:72px;">
+        <div class="cal-date" style="font-size:12px;color:#94a3b8;flex-shrink:0;width:72px;">
           {{ item.scheduled_date.strftime('%m/%d') if item.scheduled_date else '未排程' }}
         </div>
 
@@ -147,7 +173,7 @@
         </span>
 
         <!-- Delete -->
-        <form method="post" action="/admin/calendar/{{ item.cal_id }}/delete" onsubmit="return confirm('刪除排程「{{ item.title }}」？')">
+        <form class="cal-delete-form" method="post" action="/admin/calendar/{{ item.cal_id }}/delete" onsubmit="return confirm('刪除排程「{{ item.title }}」？')">
           <input type="hidden" name="month" value="{{ month }}">
           <button type="submit" class="btn btn-ghost btn-sm" style="color:#ef4444;font-size:11px;padding:3px 7px;">🗑</button>
         </form>
