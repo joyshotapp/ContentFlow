@@ -33,7 +33,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 from pathlib import Path
-from sqlalchemy import func, desc
+from sqlalchemy import desc, func, inspect, literal
 
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -1364,50 +1364,89 @@ async def seo_page(request: Request, days: int = 30):
         return RedirectResponse("/admin/login", status_code=303)
     db = _db()
     try:
+        existing_ranking_cols = {
+            col["name"] for col in inspect(db.get_bind()).get_columns(SEORanking.__tablename__)
+        }
+        has_clicks = "clicks" in existing_ranking_cols
+        has_impressions = "impressions" in existing_ranking_cols
+        has_ctr = "ctr" in existing_ranking_cols
+
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
 
+        daily_selects = [
+            SEORanking.tracked_date,
+            func.avg(SEORanking.position).label("avg_pos"),
+        ]
+        if has_clicks:
+            daily_selects.insert(1, func.sum(SEORanking.clicks).label("clicks"))
+        else:
+            daily_selects.insert(1, literal(0).label("clicks"))
+        if has_impressions:
+            daily_selects.insert(2, func.sum(SEORanking.impressions).label("impressions"))
+        else:
+            daily_selects.insert(2, literal(0).label("impressions"))
+
         daily = (
-            db.query(
-                SEORanking.tracked_date,
-                func.sum(SEORanking.clicks).label("clicks"),
-                func.sum(SEORanking.impressions).label("impressions"),
-                func.avg(SEORanking.position).label("avg_pos"),
-            )
+            db.query(*daily_selects)
             .filter(SEORanking.tracked_date >= cutoff)
             .group_by(SEORanking.tracked_date)
             .order_by(SEORanking.tracked_date)
             .all()
         )
 
+        top_selects = [
+            SEORanking.keyword,
+            func.avg(SEORanking.position).label("avg_position"),
+        ]
+        if has_clicks:
+            top_selects.append(func.sum(SEORanking.clicks).label("total_clicks"))
+        else:
+            top_selects.append(literal(0).label("total_clicks"))
+        if has_impressions:
+            top_selects.append(func.sum(SEORanking.impressions).label("total_impressions"))
+        else:
+            top_selects.append(literal(0).label("total_impressions"))
+        if has_ctr:
+            top_selects.append(func.avg(SEORanking.ctr).label("avg_ctr"))
+        else:
+            top_selects.append(literal(0).label("avg_ctr"))
+
         top_keywords = (
-            db.query(
-                SEORanking.keyword,
-                func.sum(SEORanking.clicks).label("total_clicks"),
-                func.sum(SEORanking.impressions).label("total_impressions"),
-                func.avg(SEORanking.position).label("avg_position"),
-                func.avg(SEORanking.ctr).label("avg_ctr"),
-            )
+            db.query(*top_selects)
             .group_by(SEORanking.keyword)
             .order_by(desc("total_clicks"))
             .limit(20).all()
         )
 
-        opportunities_raw = (
-            db.query(SEORanking)
-            .filter(SEORanking.position >= 3, SEORanking.position <= 15, SEORanking.impressions > 0)
-            .order_by(desc(SEORanking.impressions))
-            .limit(15).all()
-        )
-        # Normalise field names for template
-        opportunity_kws = [SimpleNamespace(
-            query=r.keyword, position=r.position or 0,
-            impressions=r.impressions or 0, page=r.landing_page,
-        ) for r in opportunities_raw]
+        if has_impressions:
+            opportunities_raw = (
+                db.query(SEORanking)
+                .filter(SEORanking.position >= 3, SEORanking.position <= 15, SEORanking.impressions > 0)
+                .order_by(desc(SEORanking.impressions))
+                .limit(15).all()
+            )
+            opportunity_kws = [SimpleNamespace(
+                query=r.keyword, position=r.position or 0,
+                impressions=r.impressions or 0, page=r.landing_page,
+                clicks=r.clicks or 0 if has_clicks else 0,
+            ) for r in opportunities_raw]
+        else:
+            opportunity_kws = []
 
         # Recent individual GSC rows for the table
+        gsc_selects = [
+            SEORanking.keyword.label("keyword"),
+            SEORanking.landing_page.label("landing_page"),
+            SEORanking.tracked_date.label("tracked_date"),
+            SEORanking.position.label("position"),
+        ]
+        gsc_selects.append(SEORanking.clicks.label("clicks") if has_clicks else literal(0).label("clicks"))
+        gsc_selects.append(SEORanking.impressions.label("impressions") if has_impressions else literal(0).label("impressions"))
+        gsc_selects.append(SEORanking.ctr.label("ctr") if has_ctr else literal(0).label("ctr"))
+
         gsc_raw = (
-            db.query(SEORanking)
-            .order_by(desc(SEORanking.tracked_date), desc(SEORanking.clicks))
+            db.query(*gsc_selects)
+            .order_by(desc(SEORanking.tracked_date), desc(SEORanking.position))
             .limit(30).all()
         )
         gsc_data = [SimpleNamespace(
@@ -1422,10 +1461,10 @@ async def seo_page(request: Request, days: int = 30):
             "avg_pos": round(float(d.avg_pos), 1) if d.avg_pos else 0,
         } for d in daily])
 
-        total_clicks_sum = db.query(func.sum(SEORanking.clicks)).scalar() or 0
-        total_impressions_sum = db.query(func.sum(SEORanking.impressions)).scalar() or 0
+        total_clicks_sum = (db.query(func.sum(SEORanking.clicks)).scalar() or 0) if has_clicks else 0
+        total_impressions_sum = (db.query(func.sum(SEORanking.impressions)).scalar() or 0) if has_impressions else 0
         avg_pos_overall = db.query(func.avg(SEORanking.position)).scalar() or 0
-        avg_ctr_overall = db.query(func.avg(SEORanking.ctr)).scalar() or 0
+        avg_ctr_overall = (db.query(func.avg(SEORanking.ctr)).scalar() or 0) if has_ctr else 0
 
         # ── A-F 等級分布 ───────────────────────────────────────────
         # 取最近一筆各 keyword 的 position + ctr
@@ -1437,8 +1476,13 @@ async def seo_page(request: Request, days: int = 30):
             .group_by(SEORanking.keyword)
             .subquery()
         )
+        latest_cols = [SEORanking.keyword, SEORanking.position]
+        if has_ctr:
+            latest_cols.append(SEORanking.ctr)
+        else:
+            latest_cols.append(literal(0).label("ctr"))
         latest_rows = (
-            db.query(SEORanking.keyword, SEORanking.position, SEORanking.ctr)
+            db.query(*latest_cols)
             .join(latest_subq, (SEORanking.keyword == latest_subq.c.keyword) & (SEORanking.tracked_date == latest_subq.c.max_date))
             .all()
         )
@@ -2308,11 +2352,31 @@ async def tech_seo_page(request: Request, project_id: int = 0):
             # 嘗試呼叫 TechSEO checker
             if project and project.brand_url:
                 try:
-                    from contentflow.tools.tech_seo import TechSEOHealthDashboard
-                    dashboard = TechSEOHealthDashboard(project.brand_url)
-                    tech_report = await asyncio.get_event_loop().run_in_executor(None, dashboard.run_full_check)
-                    tech_issues = tech_report.get("issues", []) if isinstance(tech_report, dict) else []
-                    cwv_summary = tech_report.get("cwv", {}) if isinstance(tech_report, dict) else {}
+                    from contentflow.tools.tech_seo import (
+                        CoreWebVitalsMonitor,
+                        TechSEOHealthDashboard,
+                    )
+                    cwv_monitor = CoreWebVitalsMonitor()
+                    cwv_data = await cwv_monitor.fetch(project.brand_url, strategy="mobile")
+
+                    if not cwv_data.error:
+                        cwv_summary = {
+                            "lcp": f"{cwv_data.lcp:.2f}s" if cwv_data.lcp is not None else None,
+                            "fid": f"{cwv_data.inp:.0f}ms" if cwv_data.inp is not None else None,
+                            "cls": f"{cwv_data.cls:.3f}" if cwv_data.cls is not None else None,
+                            "lcp_score": cwv_data.performance_score or "—",
+                        }
+
+                    dashboard = TechSEOHealthDashboard()
+                    health = dashboard.calculate(cwv=cwv_data if not cwv_data.error else None)
+
+                    for rec in health.recommendations:
+                        tech_issues.append({
+                            "severity": "warning",
+                            "title": rec,
+                            "description": "",
+                            "affected_urls": [],
+                        })
                 except Exception as e:
                     logger.warning(f"[TechSEO] check error: {e}")
 
