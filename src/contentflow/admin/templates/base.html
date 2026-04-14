@@ -85,6 +85,8 @@
     .sidebar {
       position: fixed; inset-y: 0; left: 0; z-index: 40;
       width: var(--cf-sidebar-w);
+      height: 100vh;
+      height: 100dvh;
       background: var(--cf-sidebar-bg);
       display: flex; flex-direction: column;
       border-right: 1px solid rgba(255,255,255,0.04);
@@ -105,7 +107,14 @@
     .sidebar-brand-name { color: #fff; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
     .sidebar-brand-version { color: rgba(255,255,255,0.3); font-size: 10px; margin-top: 1px; }
 
-    .sidebar-nav { flex: 1; padding: 8px 10px; overflow-y: auto; min-height: 0; }
+    .sidebar-nav {
+      flex: 1;
+      min-height: 0;
+      padding: 8px 10px 16px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
 
     .nav-section-label {
       padding: 12px 8px 2px;
