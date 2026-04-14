@@ -123,6 +123,37 @@
     }
     .nav-section-label:first-child { padding-top: 2px; }
 
+    .nav-section-toggle {
+      width: 100%;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 8px 4px;
+      border: 0; background: transparent;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: rgba(255,255,255,0.4);
+      cursor: pointer;
+    }
+    .nav-section-toggle:hover { color: rgba(255,255,255,0.7); }
+    .nav-toggle-icon {
+      width: 12px; height: 12px;
+      transition: transform 0.18s ease;
+      opacity: 0.8;
+    }
+    .nav-toggle-icon.open { transform: rotate(180deg); }
+
+    .nav-stat-badge {
+      margin-left: auto;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.16);
+      color: rgba(203, 213, 225, 0.95);
+      font-size: 10px;
+      line-height: 16px;
+      text-align: center;
+      font-weight: 700;
+    }
+
     .nav-link {
       display: flex; align-items: center; gap: 9px;
       padding: 6px 10px; border-radius: 7px; margin: 1px 0;
@@ -508,7 +539,14 @@
   </style>
 </head>
 <body>
-<div class="layout" x-data="{ sidebarOpen: false }">
+<div class="layout" x-data="{
+  sidebarOpen: false,
+  navOpen: {
+    strategy: {{ 'true' if page in ['clusters', 'competitors', 'seo', 'content-health', 'tech-seo'] else 'false' }},
+    learn: {{ 'true' if page in ['strategic_plans', 'reflections', 'knowledge'] else 'false' }},
+    system: {{ 'true' if page in ['authors', 'scheduler', 'health', 'settings'] else 'false' }}
+  }
+}">
 
   <!-- Sidebar backdrop (mobile) -->
   <div class="sidebar-backdrop"
@@ -538,34 +576,13 @@
 
     <nav class="sidebar-nav">
 
-      <!-- Dashboard -->
+      <!-- 核心操作（高頻） -->
+      <div class="nav-section-label">核心操作</div>
+
       <a href="/admin/" class="nav-link {% if page == 'dashboard' %}active{% endif %}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         儀表板
       </a>
-
-      <!-- ① 策略規劃 — PLAN (Phase 0-3) -->
-      <div class="nav-section-label">① 策略規劃</div>
-
-      <a href="/admin/competitors" class="nav-link {% if page == 'competitors' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-        競品追蹤
-      </a>
-      <a href="/admin/keywords" class="nav-link {% if page == 'keywords' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
-        關鍵字庫
-      </a>
-      <a href="/admin/clusters" class="nav-link {% if page == 'clusters' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.636 5.636l2.122 2.122m8.485 8.485l2.121 2.121M5.636 18.364l2.122-2.122m8.485-8.485l2.121-2.121"/></svg>
-        主題叢集
-      </a>
-      <a href="/admin/calendar" class="nav-link {% if page == 'calendar' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-        內容日曆
-      </a>
-
-      <!-- ② 內容生產 — CREATE + REVIEW + PUBLISH (Phase 4-5) -->
-      <div class="nav-section-label">② 內容生產</div>
 
       <a href="/admin/agents" class="nav-link {% if page == 'agents' %}active{% endif %}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
@@ -575,72 +592,111 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         文章管理
       </a>
-      <a href="/admin/authors" class="nav-link {% if page == 'authors' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
-        作者管理
+      <a href="/admin/calendar" class="nav-link {% if page == 'calendar' %}active{% endif %}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        內容日曆
       </a>
 
-      <!-- ③ 數據洞察 — LISTEN + ANALYSE (Phase 6) -->
-      <div class="nav-section-label">③ 數據洞察</div>
-
-      <a href="/admin/seo" class="nav-link {% if page == 'seo' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zm9.75-4.5c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zm-6.375 6a1.125 1.125 0 011.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v5.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-5.25zm15-1.5c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v6.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-6.75z"/></svg>
-        GSC 績效
-      </a>
-      <a href="/admin/content-health" class="nav-link {% if page == 'content-health' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-9 3 18 3-9 3 0"/></svg>
-        內容健康度
-      </a>
-      <a href="/admin/tech-seo" class="nav-link {% if page == 'tech-seo' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>
-        Tech SEO
+      <a href="/admin/keywords" class="nav-link {% if page == 'keywords' %}active{% endif %}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+        關鍵字庫
       </a>
 
-      <!-- ④ 學習閉環 — LEARN (Phase 7) -->
-      <div class="nav-section-label">④ 學習閉環</div>
-
-      <a href="/admin/knowledge" class="nav-link {% if page == 'knowledge' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/></svg>
-        知識庫
-      </a>
-      <a href="/admin/reports" class="nav-link {% if page == 'reports' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-        報告中心
-      </a>
       <a href="/admin/pipeline-runs" class="nav-link {% if page == 'pipeline_runs' %}active{% endif %}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3 12.193 3.1 11.94a1.5 1.5 0 01.915-.915C4.268 10.875 4.58 10.875 5.2 10.875h13.6c.62 0 .93 0 1.185.15a1.5 1.5 0 01.915.915c.1.255.1.565.1 1.185v5.25c0 .62 0 .93-.1 1.185a1.5 1.5 0 01-.915.915c-.255.1-.565.1-1.185.1H5.2c-.62 0-.93 0-1.185-.1a1.5 1.5 0 01-.915-.915C3 19.305 3 18.993 3 18.375v-5.25z"/><path d="M6 10.875V7.5a3 3 0 013-3h6a3 3 0 013 3v3.375"/></svg>
         Pipeline 紀錄
       </a>
-      <a href="/admin/strategic-plans" class="nav-link {% if page == 'strategic_plans' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5"/></svg>
-        Strategic 計畫
-      </a>
-      <a href="/admin/reflections" class="nav-link {% if page == 'reflections' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 9v-.75A2.25 2.25 0 0012 6v0a2.25 2.25 0 00-2.25 2.25V9m4.5 0H9.75"/></svg>
-        反思日誌
+
+      <a href="/admin/reports" class="nav-link {% if page == 'reports' %}active{% endif %}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+        報告中心
       </a>
 
-      <!-- 系統 -->
-      <div class="nav-section-label">系統</div>
+      <!-- 策略與優化（可折疊） -->
+      <button type="button" class="nav-section-toggle" @click="navOpen.strategy = !navOpen.strategy">
+        <span>策略與優化</span>
+        <svg class="nav-toggle-icon" :class="{ 'open': navOpen.strategy }" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8l4 4 4-4"/></svg>
+      </button>
 
-      <a href="/admin/scheduler" class="nav-link {% if page == 'scheduler' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        排程監控
-      </a>
-      <a href="/admin/health" class="nav-link {% if page == 'health' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-9 3 18 3-9 3 0"/></svg>
-        系統健康
-      </a>
-      <a href="https://app.agentops.ai" target="_blank" rel="noopener" class="nav-link" style="color:rgba(139,92,246,0.75);"
-        onmouseover="this.style.color='#8b5cf6'" onmouseout="this.style.color='rgba(139,92,246,0.75)'">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
-        AgentOps 追蹤
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-left:auto;opacity:0.5;"><path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-      </a>
-      <a href="/admin/settings" class="nav-link {% if page == 'settings' %}active{% endif %}">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-        專案設定
-      </a>
+      <div x-show="navOpen.strategy" x-transition.opacity.duration.150ms>
+        <a href="/admin/clusters" class="nav-link {% if page == 'clusters' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.636 5.636l2.122 2.122m8.485 8.485l2.121 2.121M5.636 18.364l2.122-2.122m8.485-8.485l2.121-2.121"/></svg>
+          主題叢集
+          <span id="badge-clusters" class="nav-stat-badge" style="display:none;">0</span>
+        </a>
+
+        <a href="/admin/competitors" class="nav-link {% if page == 'competitors' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          競品追蹤
+          <span id="badge-competitors" class="nav-stat-badge" style="display:none;">0</span>
+        </a>
+
+        <a href="/admin/seo" class="nav-link {% if page == 'seo' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zm9.75-4.5c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zm-6.375 6a1.125 1.125 0 011.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v5.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-5.25zm15-1.5c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v6.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-6.75z"/></svg>
+          GSC 績效
+        </a>
+        <a href="/admin/content-health" class="nav-link {% if page == 'content-health' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-9 3 18 3-9 3 0"/></svg>
+          內容健康度
+        </a>
+        <a href="/admin/tech-seo" class="nav-link {% if page == 'tech-seo' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>
+          Tech SEO
+        </a>
+      </div>
+
+      <!-- 學習閉環（可折疊） -->
+      <button type="button" class="nav-section-toggle" @click="navOpen.learn = !navOpen.learn">
+        <span>學習閉環</span>
+        <svg class="nav-toggle-icon" :class="{ 'open': navOpen.learn }" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8l4 4 4-4"/></svg>
+      </button>
+
+      <div x-show="navOpen.learn" x-transition.opacity.duration.150ms>
+        <a href="/admin/strategic-plans" class="nav-link {% if page == 'strategic_plans' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5"/></svg>
+          Strategic 計畫
+        </a>
+        <a href="/admin/reflections" class="nav-link {% if page == 'reflections' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 9v-.75A2.25 2.25 0 0012 6v0a2.25 2.25 0 00-2.25 2.25V9m4.5 0H9.75"/></svg>
+          反思日誌
+        </a>
+        <a href="/admin/knowledge" class="nav-link {% if page == 'knowledge' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/></svg>
+          知識庫
+        </a>
+      </div>
+
+      <!-- 系統管理（可折疊） -->
+      <button type="button" class="nav-section-toggle" @click="navOpen.system = !navOpen.system">
+        <span>系統管理</span>
+        <svg class="nav-toggle-icon" :class="{ 'open': navOpen.system }" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8l4 4 4-4"/></svg>
+      </button>
+
+      <div x-show="navOpen.system" x-transition.opacity.duration.150ms>
+        <a href="/admin/authors" class="nav-link {% if page == 'authors' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+          作者管理
+        </a>
+
+        <a href="/admin/scheduler" class="nav-link {% if page == 'scheduler' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          排程監控
+        </a>
+        <a href="/admin/health" class="nav-link {% if page == 'health' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l3-9 3 18 3-9 3 0"/></svg>
+          系統健康
+        </a>
+        <a href="/admin/settings" class="nav-link {% if page == 'settings' %}active{% endif %}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          專案設定
+        </a>
+        <a href="https://app.agentops.ai" target="_blank" rel="noopener" class="nav-link" style="color:rgba(139,92,246,0.75);"
+          onmouseover="this.style.color='#8b5cf6'" onmouseout="this.style.color='rgba(139,92,246,0.75)'">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+          AgentOps 追蹤
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-left:auto;opacity:0.5;"><path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -684,6 +740,29 @@
 </div>
 
 {% block extra_body %}{% endblock %}
+<script>
+  (async function () {
+    try {
+      const res = await fetch('/admin/api/stats', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const badgeClusters = document.getElementById('badge-clusters');
+      if (badgeClusters && typeof data.clusters === 'number') {
+        badgeClusters.textContent = String(data.clusters);
+        badgeClusters.style.display = 'inline-block';
+      }
+
+      const badgeCompetitors = document.getElementById('badge-competitors');
+      if (badgeCompetitors && typeof data.competitors === 'number') {
+        badgeCompetitors.textContent = String(data.competitors);
+        badgeCompetitors.style.display = 'inline-block';
+      }
+    } catch (_) {
+      // Non-blocking for nav UX.
+    }
+  })();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -2901,6 +2901,7 @@ async def api_stats(request: Request):
             "published":       db.query(Article).filter(Article.status == "published").count(),
             "keywords":        db.query(Keyword).count(),
             "clusters":        db.query(TopicCluster).count(),
+            "competitors":     db.query(Competitor).count(),
             "knowledge":       db.query(KnowledgeEntry).filter(KnowledgeEntry.is_active == True).count(),
             "scheduler_errors":db.query(SchedulerLog).filter(SchedulerLog.status == "failed").count(),
             "pipeline_runs":   db.query(func.count(func.distinct(AgentDecisionLog.run_id))).scalar() or 0,
