@@ -7,12 +7,12 @@
 
 {% if request.query_params.get('triggered') %}
 <div style="padding:10px 16px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;margin-bottom:16px;font-size:13px;color:#065f46;">
-  ✅ 已成功觸發任務：<strong>{{ request.query_params.get('triggered') }}</strong>
+  ✅ 已成功觸發任務：<strong>{{ request.query_params.get('triggered') | e }}</strong>
 </div>
 {% endif %}
 {% if request.query_params.get('error') %}
 <div style="padding:10px 16px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;margin-bottom:16px;font-size:13px;color:#991b1b;">
-  ❌ 觸發失敗：<strong>{{ request.query_params.get('error') }}</strong>
+  ❌ 觸發失敗：<strong>{{ request.query_params.get('error') | e }}</strong>
 </div>
 {% endif %}
 

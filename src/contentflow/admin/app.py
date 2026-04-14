@@ -728,8 +728,11 @@ async def trigger_article_refresh(request: Request, article_id: int):
         return RedirectResponse(f"/admin/articles/{article_id}?{qs}", status_code=303)
     except Exception as e:
         logger.error(f"[Refresh] article={article_id} 失敗: {e}")
+        db.rollback()
+        import urllib.parse as _up
+        safe_err = _up.quote(str(e)[:100], safe="")
         return RedirectResponse(
-            f"/admin/articles/{article_id}?refresh_error={str(e)[:100]}",
+            f"/admin/articles/{article_id}?refresh_error={safe_err}",
             status_code=303,
         )
     finally:
@@ -1498,7 +1501,7 @@ async def seo_page(request: Request, days: int = 30):
             opportunity_kws = [SimpleNamespace(
                 query=r.keyword, position=r.position or 0,
                 impressions=r.impressions or 0, page=r.landing_page,
-                clicks=r.clicks or 0 if has_clicks else 0,
+                clicks=(r.clicks or 0) if has_clicks else 0,
             ) for r in opportunities_raw]
         else:
             opportunity_kws = []
@@ -2733,7 +2736,7 @@ async def reports_page(request: Request, project_id: int = 0, period: str = "wee
             # 取得 strategic runs 對應的文章標題與 SEO score
             sp_run_details = []
             for r in all_strategic_runs:
-                art = db.query(Article).get(r.article_id) if r.article_id else None
+                art = db.get(Article, r.article_id) if r.article_id else None
                 sp_run_details.append({
                     "run_id": r.run_id[:8],
                     "article_title": art.title if art else "—",
