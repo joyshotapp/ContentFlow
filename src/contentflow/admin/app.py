@@ -2140,7 +2140,7 @@ async def scheduler_page(request: Request):
             {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00",        "icon": "📊"},
             {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30",        "icon": "📈"},
             {"id": "run_auto_pipeline",         "name": "自動 AI Pipeline", "schedule": "每日 08:00",        "icon": "🤖"},
-            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:00",      "icon": "🔍"},
+            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:30",      "icon": "🔍"},
             {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00",      "icon": "🧮"},
             {"id": "check_refresh_triggers",    "name": "內容更新檢查",    "schedule": "每週二 04:00",      "icon": "🔄"},
             {"id": "check_ranking_drops",       "name": "排名掉落偵測",    "schedule": "每週三 06:00",      "icon": "📉"},
@@ -2148,6 +2148,7 @@ async def scheduler_page(request: Request):
             {"id": "send_weekly_report",        "name": "週報推送",        "schedule": "每週日 09:00",      "icon": "📬"},
             {"id": "run_l1_pattern_analysis",   "name": "L1 模式學習",      "schedule": "每月 1 號 06:00",   "icon": "🔬"},
             {"id": "run_l2_roi_analysis",       "name": "L2 ROI 分析",      "schedule": "每月 1 號 07:00",   "icon": "💰"},
+            {"id": "backfill_action_outcomes",  "name": "行動成效回填",    "schedule": "每日 04:00",        "icon": "🎯"},
         ]
         for j in known_jobs:
             j["latest"] = job_latest.get(j["id"])
