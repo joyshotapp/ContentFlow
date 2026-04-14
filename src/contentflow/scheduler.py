@@ -835,6 +835,7 @@ def schedule_all_jobs() -> None:
         fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         _scheduler_lock_fd.write(str(os.getpid()))
         _scheduler_lock_fd.flush()
+        os.fsync(_scheduler_lock_fd.fileno())
     except (IOError, OSError):
         logger.info("[Scheduler] 另一個 worker 已持有排程鎖，跳過")
         return
@@ -853,4 +854,7 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
 
     scheduler.start()
-    logger.info(f"[Scheduler] 已啟動 {len(scheduler.get_jobs())} 個排程任務")
+    # 寫入獨立的心跳檔案（繞過 flock 的 overlay fs 問題）
+    with open("/tmp/contentflow_scheduler.pid", "w") as pf:
+        pf.write(str(os.getpid()))
+    logger.info(f"[Scheduler] 已啟動 {len(scheduler.get_jobs())} 個排程任務 (PID={os.getpid()})")

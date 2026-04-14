@@ -232,7 +232,41 @@ async def _shutdown():
 
 @site_app.get("/health")
 async def health():
-    return {"status": "ok", "service": "reference-site"}
+    """健康檢查：驗證 DB 連線 + 排程器運行狀態。"""
+    import os
+    from pathlib import Path
+
+    checks: dict = {"service": "reference-site"}
+
+    # DB 連線
+    try:
+        db = SessionLocal()
+        db.execute(func.now())
+        db.close()
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"error: {e}"
+
+    # 排程器 — 多 worker 下只有 1 個 worker 持有鎖，透過 PID 檔案檢查
+    pid_path = Path("/tmp/contentflow_scheduler.pid")
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text().strip())
+            # 檢查該 PID 是否仍存活
+            os.kill(pid, 0)
+            checks["scheduler"] = "running"
+            checks["scheduler_pid"] = pid
+        except (ValueError, ProcessLookupError, PermissionError):
+            checks["scheduler"] = "stale_pid"
+    else:
+        checks["scheduler"] = "no_pid_file"
+
+    ok = checks["db"] == "ok" and checks["scheduler"] == "running"
+    checks["status"] = "ok" if ok else "degraded"
+
+    status_code = 200 if ok else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=checks, status_code=status_code)
 
 
 # ─── Homepage ─────────────────────────────────────────────────
