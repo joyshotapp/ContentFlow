@@ -182,6 +182,7 @@ class Article(Base):
     seo_score = Column(Integer, nullable=True)      # 最近一次 SEO 檢查分數
     # Phase 5/21 — E-E-A-T & 優化迭代
     author_id = Column(Integer, ForeignKey("authors.id"), nullable=True)
+    reviewer_id = Column(Integer, ForeignKey("authors.id"), nullable=True)  # 醫療審閱者
     eeat_score = Column(Integer, nullable=True)     # E-E-A-T 綜合評分 0-100
     last_refresh_date = Column(DateTime, nullable=True)  # 最近一次 Content Refresh
     factcheck_flags_json = Column(Text, default="[]")    # FactCheck 高風險標記

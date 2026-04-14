@@ -666,6 +666,23 @@ async def set_article_author(request: Request, article_id: int, author_id: int =
         db.close()
 
 
+@admin_app.post("/articles/{article_id}/set-reviewer")
+async def set_article_reviewer(request: Request, article_id: int, reviewer_id: int = Form(0)):
+    """設定文章醫療審閱者（E-E-A-T）。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        art = db.query(Article).filter(Article.id == article_id).first()
+        if art:
+            art.reviewer_id = reviewer_id if reviewer_id else None
+            art.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        return RedirectResponse(f"/admin/articles/{article_id}", status_code=303)
+    finally:
+        db.close()
+
+
 @admin_app.post("/articles/{article_id}/refresh")
 async def trigger_article_refresh(request: Request, article_id: int):
     """手動觸發單篇文章 Refresh Pipeline（分析模式，不自動發布）。"""
