@@ -460,6 +460,22 @@
       .topbar { padding: 0 14px; }
       .page-body { padding: 14px; }
 
+      /* ── Global grid overrides (inline styles) ────────── */
+      /* 4-5 col grids → 2 col */
+      [style*="grid-template-columns:repeat(4"] { grid-template-columns: repeat(2, 1fr) !important; }
+      [style*="grid-template-columns:repeat(5"] { grid-template-columns: repeat(2, 1fr) !important; }
+      /* 3 col grids → 2 col */
+      [style*="grid-template-columns:repeat(3"] { grid-template-columns: repeat(2, 1fr) !important; }
+      /* 2fr 1fr / 1fr 380px → stack */
+      [style*="grid-template-columns:2fr 1fr"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns:1fr 380px"] { grid-template-columns: 1fr !important; }
+      /* 1fr 1fr 1fr → stack */
+      [style*="grid-template-columns:1fr 1fr 1fr"] { grid-template-columns: 1fr !important; }
+
+      /* ── Tables: horizontal scroll on mobile ──────────── */
+      .cf-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .cf-table { min-width: 600px; }
+
       /* Stat cards: 2-col on mobile */
       .stat-grid-mobile { grid-template-columns: repeat(2, 1fr) !important; }
     }
@@ -471,6 +487,13 @@
       .topbar-clock { display: none; }
       .topbar-avatar { width: 28px; height: 28px; font-size: 10px; }
       .cf-card-p { padding: 14px; }
+
+      /* ≤480: everything single column */
+      [style*="grid-template-columns:repeat(2"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns:repeat(3"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns:repeat(4"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns:repeat(5"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
     }
 
   </style>
