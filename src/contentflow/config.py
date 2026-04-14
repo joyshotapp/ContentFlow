@@ -30,13 +30,27 @@ class Settings(BaseSettings):
     serper_api_key: str = Field(default="", alias="SERPER_API_KEY")
     serpapi_key: str = Field(default="", alias="SERPAPI_KEY")
 
+    # DataForSEO
+    dataforseo_login: str = Field(default="", alias="DATAFORSEO_LOGIN")
+    dataforseo_password: str = Field(default="", alias="DATAFORSEO_PASSWORD")
+
     # Google
     google_service_account_file: str = Field(
         default="credentials/google-service-account.json",
         alias="GOOGLE_SERVICE_ACCOUNT_FILE",
     )
+    # alias for code that references the old name
+    @property
+    def google_service_account_json(self) -> str:
+        return self.google_service_account_file
+
     google_sheets_schedule_id: str = Field(
         default="", alias="GOOGLE_SHEETS_SCHEDULE_ID"
+    )
+    ga4_property_id: str = Field(
+        default="",
+        alias="GA4_PROPERTY_ID",
+        description="GA4 Property ID (numeric, e.g. 388856613)",
     )
 
     # WordPress
@@ -56,6 +70,9 @@ class Settings(BaseSettings):
 
     # API 認證
     api_secret_key: str = Field(default="", alias="API_SECRET_KEY")
+
+    # AgentOps
+    agentops_api_key: str = Field(default="", alias="AGENTOPS_API_KEY")
 
     # ForgeBase
     forgebase_api_base_url: str = Field(default="", alias="FORGEBASE_API_BASE_URL")

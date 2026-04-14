@@ -20,11 +20,34 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
+from typing_extensions import TypedDict
 
 from loguru import logger
+import agentops
 
 from ..config import settings
+
+
+def _init_agentops() -> bool:
+    """初始化 AgentOps（若未設定 API Key 則靜默跳過）。"""
+    key = settings.agentops_api_key
+    if not key:
+        return False
+    try:
+        agentops.init(
+            api_key=key,
+            default_tags=["contentflow", "langgraph"],
+            instrument_llm_calls=True,
+        )
+        logger.info("[AgentOps] 初始化成功")
+        return True
+    except Exception as e:
+        logger.warning(f"[AgentOps] 初始化失敗（繼續執行）：{e}")
+        return False
+
+
+_agentops_enabled: bool = _init_agentops()
 from ..models import ArticleTask, ArticleStatus
 from ..project_context import load_project_context, project_uses_pubmed
 from .research_agent import run_research_agent
@@ -34,6 +57,28 @@ from .seo_qa_agent import run_seo_qa_agent
 from .seo_check_agent import run_seo_check_agent
 from .factcheck_agent import run_factcheck_agent
 from .budget_guard import budget_guard_node, budget_gate
+
+
+class PipelineState(TypedDict, total=False):
+    """LangGraph StateGraph 狀態定義（用 TypedDict 避免字典鍵分散問題）"""
+    task: Any
+    project_context: Any
+    article_type: str
+    use_pubmed: bool
+    strategy_context: Optional[dict]
+    research_report: Any
+    draft: Any
+    seo_score: int
+    seo_retry_count: int
+    _seo_checks: list
+    agent_decisions: list
+    total_cost: float
+    total_llm_calls: int
+    _budget_exceeded: bool
+    run_id: str
+    article_id: Optional[int]
+    primary_kw: str
+    secondary_kws: list
 
 
 SEO_PASS_THRESHOLD = 85
@@ -335,7 +380,7 @@ def _build_graph():
     """建構並編譯 LangGraph StateGraph（LangGraph 未安裝時返回 None）"""
     try:
         from langgraph.graph import StateGraph, END
-        graph = StateGraph(dict)
+        graph = StateGraph(PipelineState)
         graph.add_node("research", research_node)
         graph.add_node("strategy", strategy_node)
         graph.add_node("write", writing_node)
@@ -376,6 +421,81 @@ def _get_agent():
     if _agent is None:
         _agent = _build_graph()
     return _agent
+
+
+# ── Pipeline Checkpoint helper ──────────────────────────────────────────────
+
+def _checkpoint(
+    run_id: str,
+    project_id: int | None,
+    article_id: int | None,
+    current_step: str,
+    status: str,
+    error: str | None = None,
+    llm_calls: int = 0,
+    cost: float = 0.0,
+    seo_score: int | None = None,
+) -> None:
+    """將 pipeline 進度寫入 PipelineRun 表（best-effort）。"""
+    try:
+        from ..db import SessionLocal
+        from ..models.database import PipelineRun
+        with SessionLocal() as session:
+            pr = session.query(PipelineRun).filter(PipelineRun.run_id == run_id).first()
+            if pr:
+                pr.current_step = current_step
+                pr.status = status
+                if error:
+                    pr.error_message = error[:500]
+                if llm_calls:
+                    pr.total_llm_calls = llm_calls
+                if cost:
+                    pr.total_cost = cost
+                if seo_score is not None:
+                    pr.seo_score = seo_score
+                if status in ("completed", "failed"):
+                    pr.finished_at = datetime.now(timezone.utc)
+            else:
+                # 首次 checkpoint（非 strategic_agent 觸發的 run）
+                session.add(PipelineRun(
+                    run_id=run_id,
+                    project_id=project_id,
+                    article_id=article_id,
+                    trigger="manual",
+                    current_step=current_step,
+                    status=status,
+                    error_message=error[:500] if error else None,
+                    total_llm_calls=llm_calls,
+                    total_cost=cost,
+                    seo_score=seo_score,
+                ))
+            session.commit()
+    except Exception as e:
+        logger.warning(f"[Orchestrator] checkpoint 寫入失敗：{e}")
+
+
+def _schedule_reflection(run_id: str, project_id: int | None, article_id: int | None) -> None:
+    """排程 post-pipeline 反思（fire-and-forget，不阻塞 pipeline 回傳）。"""
+    import asyncio
+
+    if not project_id:
+        return
+
+    async def _do_reflect():
+        try:
+            from .reflective_agent import reflect_on_pipeline
+            await reflect_on_pipeline(run_id, project_id, article_id)
+        except Exception as e:
+            logger.warning(f"[Orchestrator] post-pipeline 反思失敗：{e}")
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_do_reflect())
+        else:
+            asyncio.run(_do_reflect())
+    except RuntimeError:
+        logger.debug("[Orchestrator] 無可用 event loop，跳過反思")
 
 
 # ── 內部連結建議（best-effort）───────────────────────────────────────────
@@ -431,8 +551,6 @@ async def run_orchestrator(
     """
     端到端文章生產流程（LangGraph StateGraph 版）。
 
-    與舊版保持相同對外介面。若 LangGraph 未安裝，自動 fallback 到線性 pipeline。
-
     Args:
         task:              文章任務（含標題、關鍵字等）
         project_id:        專案 DB ID（擇一提供）
@@ -452,8 +570,9 @@ async def run_orchestrator(
     agent = _get_agent()
 
     if agent is None:
-        return await _run_legacy_pipeline(
-            task, project_id, project_slug, article_type, strategy_context, use_pubmed
+        raise ImportError(
+            "LangGraph 未安裝或建構失敗，無法執行 pipeline。"
+            "請執行: pip install langgraph"
         )
 
     ctx = load_project_context(project_id=project_id, project_slug=project_slug)
@@ -483,13 +602,30 @@ async def run_orchestrator(
         "secondary_kws": task.keywords[1:] if len(task.keywords) > 1 else [],
     }
 
+    # Pipeline checkpoint：記錄啟動
+    _checkpoint(run_id, project_id, article_id, "research", "running")
+
+    # AgentOps trace（若未設定 API Key 則 session 為 None，不影響主流程）
+    _ao_session = None
+    if _agentops_enabled:
+        try:
+            _ao_session = agentops.start_session(
+                tags=["contentflow", task.title[:50]],
+            )
+        except Exception:
+            pass
+
     try:
         final_state: dict = await agent.ainvoke(initial_state)
     except Exception as e:
-        logger.error(f"[Orchestrator] Graph 執行失敗，fallback 到 legacy pipeline：{e}")
-        return await _run_legacy_pipeline(
-            task, project_id, project_slug, article_type, strategy_context, use_pubmed
-        )
+        logger.error(f"[Orchestrator] Graph 執行失敗：{e}")
+        _checkpoint(run_id, project_id, article_id, "failed", "failed", error=str(e))
+        if _ao_session:
+            try:
+                agentops.end_session("Fail", session=_ao_session)
+            except Exception:
+                pass
+        raise
 
     draft = final_state.get("draft")
     decisions = final_state.get("agent_decisions", [])
@@ -508,6 +644,25 @@ async def run_orchestrator(
     elapsed = time.time() - t0
     calls = final_state.get("total_llm_calls", 0)
     cost = final_state.get("total_cost", 0.0)
+
+    # Pipeline checkpoint：記錄完成
+    _checkpoint(
+        run_id, project_id, article_id, "completed",
+        "completed" if task.status != ArticleStatus.FAILED else "failed",
+        llm_calls=calls, cost=cost,
+        seo_score=final_state.get("seo_score"),
+    )
+
+    # AgentOps：結束 session
+    if _ao_session:
+        try:
+            ao_status = "Success" if task.status != ArticleStatus.FAILED else "Fail"
+            agentops.end_session(ao_status, session=_ao_session)
+        except Exception:
+            pass
+
+    # Reflective Loop：post-pipeline 反思（best-effort，非同步不阻塞）
+    _schedule_reflection(run_id, project_id, article_id)
     review_count = sum(1 for i in (draft.fact_check_items or []) if i.needs_review) if draft else 0
 
     logger.info(
@@ -515,101 +670,5 @@ async def run_orchestrator(
         f"狀態: {task.status.value} | "
         f"LLM calls: {calls} | cost: ${cost:.3f} | "
         f"需審核: {review_count} 項 | 決策日誌: {len(decisions)} 條"
-    )
-    return task
-
-
-# ── Legacy Pipeline（Fallback）──────────────────────────────────────────
-
-async def _run_legacy_pipeline(
-    task: ArticleTask,
-    project_id: int | None,
-    project_slug: str | None,
-    article_type: str,
-    strategy_context: dict | None,
-    use_pubmed: bool | None,
-) -> ArticleTask:
-    """LangGraph 不可用時的 fallback 線性 pipeline（保留舊版行為）"""
-    logger.info("[Orchestrator] 使用 Legacy Pipeline")
-    t0 = time.time()
-
-    ctx = load_project_context(project_id=project_id, project_slug=project_slug)
-    use_pubmed = project_uses_pubmed(ctx) if use_pubmed is None else use_pubmed
-    task.status = ArticleStatus.RESEARCHING
-
-    primary_kw = task.keywords[0] if task.keywords else task.title
-    secondary_kws = task.keywords[1:] if len(task.keywords) > 1 else []
-
-    logger.info("[Legacy] Step 1/5: 選題研究")
-    report = await run_research_agent(
-        article_title=task.title,
-        search_keywords=task.keywords or [task.title],
-        serp_gl=ctx.serp_gl,
-        serp_hl=ctx.serp_hl,
-        use_pubmed=use_pubmed,
-    )
-    task.research_report = report
-
-    if not strategy_context:
-        logger.info("[Legacy] Step 2/5: AI 策略分析")
-        strategy_report = await run_strategy_agent(
-            keyword=primary_kw,
-            secondary_keywords=secondary_kws,
-            serp=report.serp_analysis,
-            paa_questions=report.paa_questions,
-            project_id=ctx.project_id,
-        )
-        strategy_context = strategy_report.to_strategy_context()
-    else:
-        logger.info("[Legacy] Step 2/5: 使用人工策略指引")
-
-    logger.info("[Legacy] Step 3/5: AI 撰文")
-    task.status = ArticleStatus.WRITING
-    draft = await run_writing_agent(
-        report=report,
-        strategy_context=strategy_context,
-        target_word_count=task.target_word_count,
-        project_id=ctx.project_id,
-    )
-
-    logger.info("[Legacy] Step 4/5: SEO 品質優化")
-    pre_seo = run_seo_check_agent(
-        draft=draft, primary_keyword=primary_kw, secondary_keywords=secondary_kws
-    )
-    failed_checks = [c for c in pre_seo["checks"] if not c["passed"]]
-    logger.info(f"[Legacy] SEO 初檢：{pre_seo['score']}/100（{len(failed_checks)} 項待修）")
-
-    draft = await run_seo_qa_agent(
-        draft=draft,
-        report=report,
-        primary_keyword=primary_kw,
-        secondary_keywords=secondary_kws,
-        failed_checks=failed_checks,
-        project_id=ctx.project_id,
-    )
-
-    seo_result = run_seo_check_agent(
-        draft=draft, primary_keyword=primary_kw, secondary_keywords=secondary_kws
-    )
-    logger.info(f"[Legacy] SEO 複檢：{pre_seo['score']} → {seo_result['score']}/100")
-
-    _add_internal_links(draft, task, ctx)
-
-    logger.info("[Legacy] Step 5/5: 事實查核")
-    task.status = ArticleStatus.FACT_CHECKING
-    draft = await run_factcheck_agent(
-        draft=draft, report=report,
-        project_id=ctx.project_id, article_type=article_type
-    )
-
-    task.draft = draft
-    task.status = draft.status
-    task.updated_at = datetime.now(timezone.utc)
-
-    elapsed = time.time() - t0
-    review_count = sum(1 for i in (draft.fact_check_items or []) if i.needs_review)
-    logger.info(
-        f"[Legacy] 完成！耗時 {elapsed:.1f}s | "
-        f"狀態: {task.status.value} | 需審核: {review_count} 項"
     )
     return task

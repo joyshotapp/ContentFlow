@@ -244,6 +244,58 @@
         {% endfor %}
       </div>
     </div>
+
+    <!-- ── AgentOps 可觀測性儀表板 ──────────────────────────────── -->
+    <div class="cf-card cf-card-p" style="margin-top:16px;border:1.5px solid rgba(99,102,241,0.2);background:linear-gradient(135deg,rgba(99,102,241,0.03) 0%,rgba(139,92,246,0.03) 100%);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+              <path d="M18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
+            </svg>
+          </div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#0f172a;">AgentOps 可觀測性儀表板</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;max-width:420px;line-height:1.5;">
+              即時追蹤每次 Pipeline 執行的 LLM Token 用量、成本與延遲。每篇文章生成均自動記錄一個 Session。
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              {% for env in env_vars %}{% if env.name == 'AGENTOPS_API_KEY' %}
+              {% if env.set %}
+              <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);padding:3px 8px;border-radius:99px;">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                API Key 已設定 · 追蹤啟用中
+              </span>
+              {% else %}
+              <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#f59e0b;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);padding:3px 8px;border-radius:99px;">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                AGENTOPS_API_KEY 未設定 · 追蹤停用
+              </span>
+              {% endif %}
+              {% endif %}{% endfor %}
+              <span style="font-size:11px;color:#94a3b8;">v0.4.21 · instrument_llm_calls=True</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+          <a href="https://docs.agentops.ai" target="_blank" rel="noopener"
+            style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border:1px solid #e2e8f0;border-radius:8px;font-size:12.5px;font-weight:600;color:#475569;text-decoration:none;background:#fff;transition:all .15s;"
+            onmouseover="this.style.background='#f8fafc';this.style.borderColor='#cbd5e1'"
+            onmouseout="this.style.background='#fff';this.style.borderColor='#e2e8f0'">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            文件
+          </a>
+          <a href="https://app.agentops.ai" target="_blank" rel="noopener"
+            style="display:inline-flex;align-items:center;gap:5px;padding:7px 16px;border-radius:8px;font-size:12.5px;font-weight:600;color:#fff;text-decoration:none;background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 2px 8px rgba(99,102,241,0.3);transition:all .15s;"
+            onmouseover="this.style.boxShadow='0 4px 16px rgba(99,102,241,0.4)';this.style.transform='translateY(-1px)'"
+            onmouseout="this.style.boxShadow='0 2px 8px rgba(99,102,241,0.3)';this.style.transform='translateY(0)'">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            開啟 AgentOps →
+          </a>
+        </div>
+      </div>
+    </div>
   </div>
 
 </div>

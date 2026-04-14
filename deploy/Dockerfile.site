@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY src/ ./src/
 
-# 安裝網站 + AI pipeline 所需依賴（排除 chromadb 等向量 DB）
+# 安裝網站 + AI pipeline 所需依賴
 RUN pip install --no-cache-dir \
     fastapi "uvicorn[standard]" \
     jinja2 markdown \
@@ -20,9 +20,13 @@ RUN pip install --no-cache-dir \
     "python-multipart>=0.0.9" itsdangerous \
     langgraph langchain "langchain-openai>=0.2.0" "langchain-anthropic>=0.3.0" \
     openai anthropic \
-    httpx aiohttp \
+    httpx aiohttp requests \
     openpyxl beautifulsoup4 lxml \
     apscheduler \
+    "google-api-python-client>=2.140.0" google-auth-httplib2 google-auth-oauthlib \
+    "google-analytics-data>=0.18.0" \
+    chromadb \
+    agentops==0.4.21 \
     && pip install --no-cache-dir -e . --no-deps
 
 COPY data/ ./data/

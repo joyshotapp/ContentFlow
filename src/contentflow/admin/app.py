@@ -51,10 +51,13 @@ from contentflow.models.database import (
     KnowledgeAuditLog,
     Keyword,
     LegalTerm,
+    PipelineRun,
     Product,
     Project,
+    ReflectionLog,
     SchedulerLog,
     SEORanking,
+    StrategicPlan,
     TopicCluster,
     ClusterMember,
     WritingRule,
@@ -73,10 +76,77 @@ _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
 # Add custom Jinja2 filters
 templates.env.filters["fromjson"] = json.loads
+# Global variables available in all templates
+templates.env.globals["site_url"] = settings.site_url
 
 
 def _db():
     return SessionLocal()
+
+
+def _get_agent_cost_metrics(db):
+    """回傳 Agent 真實成本彙總；AgentDecisionLog 無資料時 fallback 至 PipelineRun.total_cost。"""
+    run_costs: dict = {}
+    total_cost_raw = None
+    monthly_cost_raw = None
+    avg_run_cost = None
+
+    cost_col = getattr(AgentDecisionLog, "cost_usd", None)
+    if cost_col is not None:
+        valid_filters = [cost_col.isnot(None), cost_col > 0]
+        run_cost_rows = (
+            db.query(
+                AgentDecisionLog.run_id,
+                func.sum(cost_col).label("run_cost"),
+            )
+            .filter(*valid_filters)
+            .group_by(AgentDecisionLog.run_id)
+            .all()
+        )
+        run_costs = {
+            run_id: round(float(run_cost), 4)
+            for run_id, run_cost in run_cost_rows
+            if run_cost
+        }
+        total_cost_raw = (
+            db.query(func.sum(cost_col))
+            .filter(*valid_filters)
+            .scalar()
+        )
+        monthly_cost_raw = (
+            db.query(func.sum(cost_col))
+            .filter(
+                *valid_filters,
+                AgentDecisionLog.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
+            )
+            .scalar()
+        )
+        if run_costs:
+            avg_run_cost = round(sum(run_costs.values()) / len(run_costs), 4)
+
+    # ── Fallback to PipelineRun.total_cost when AgentDecisionLog has no cost data ──
+    if not run_costs and total_cost_raw is None:
+        pr_total = db.query(func.sum(PipelineRun.total_cost)).filter(
+            PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0
+        ).scalar()
+        if pr_total:
+            total_cost_raw = pr_total
+            pr_run_rows = db.query(PipelineRun.run_id, PipelineRun.total_cost).filter(
+                PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0
+            ).all()
+            run_costs = {r.run_id: round(float(r.total_cost), 4) for r in pr_run_rows if r.total_cost}
+            avg_run_cost = round(sum(run_costs.values()) / len(run_costs), 4) if run_costs else None
+            monthly_cost_raw = db.query(func.sum(PipelineRun.total_cost)).filter(
+                PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0,
+                PipelineRun.started_at >= datetime.now(timezone.utc) - timedelta(days=30),
+            ).scalar()
+
+    return {
+        "avg_run_cost": avg_run_cost,
+        "monthly_cost": round(float(monthly_cost_raw), 2) if monthly_cost_raw else None,
+        "total_cost": round(float(total_cost_raw), 2) if total_cost_raw else None,
+        "run_costs": run_costs,
+    }
 
 
 def _check_login(request: Request) -> bool:
@@ -91,10 +161,10 @@ def _get_env_var_status() -> list:
         ("GOOGLE_API_KEY",       "Google Gemini LLM",                    bool(settings.google_api_key if hasattr(settings, 'google_api_key') else None)),
         ("SERPER_API_KEY",       "Serper.dev SERP 搜尋",                  bool(settings.serper_api_key if hasattr(settings, 'serper_api_key') else None)),
         ("SERPAPI_KEY",          "SerpAPI 搜尋（備用）",                   bool(settings.serpapi_key if hasattr(settings, 'serpapi_key') else None)),
-        ("GSC_SITE_URL",         "Google Search Console",                 bool(settings.gsc_site_url if hasattr(settings, 'gsc_site_url') else None)),
-        ("GA4_PROPERTY_ID",      "Google Analytics 4",                    bool(settings.ga4_property_id if hasattr(settings, 'ga4_property_id') else None)),
-        ("WP_API_URL",           "WordPress 自動發佈",                     bool(settings.wp_api_url if hasattr(settings, 'wp_api_url') else None)),
-        ("FORGEBASE_URL",        "ForgeBase 發佈",                        bool(settings.forgebase_url if hasattr(settings, 'forgebase_url') else None)),
+        ("GOOGLE_SERVICE_ACCOUNT", "Google Search Console",               bool(settings.google_service_account_file)),
+        ("GA4_PROPERTY_ID",      "Google Analytics 4",                    bool(settings.ga4_property_id)),
+        ("AGENTOPS_API_KEY",     "AgentOps 可觀測性追蹤",                  bool(settings.agentops_api_key if hasattr(settings, 'agentops_api_key') else None)),
+        ("FORGEBASE_API_TOKEN",  "ForgeBase 發佈",                        bool(settings.forgebase_api_token)),
         ("SLACK_WEBHOOK_URL",    "Slack 告警通知",                        bool(settings.slack_webhook_url if hasattr(settings, 'slack_webhook_url') else None)),
         ("DATABASE_URL",         "PostgreSQL 資料庫",                    True),  # if app is running, DB is connected
     ]
@@ -104,18 +174,32 @@ def _get_env_var_status() -> list:
 # ── Label / color maps ────────────────────────────────────────
 
 STATUS_LABELS = {
+    "pending": "排程中",
     "planned": "規劃中",
     "researching": "研究中",
     "writing": "撰寫中",
+    "fact_checking": "事實查核中",
+    "generating_images": "生成圖片中",
+    "review_required": "待審閱",
     "reviewing": "審閱中",
+    "approved": "已核准",
     "published": "已發佈",
+    "completed": "已完成",
+    "failed": "失敗",
 }
 STATUS_COLORS = {
+    "pending": "neutral",
     "planned": "neutral",
     "researching": "info",
     "writing": "warning",
+    "fact_checking": "purple",
+    "generating_images": "sky",
+    "review_required": "amber",
     "reviewing": "purple",
+    "approved": "success",
     "published": "success",
+    "completed": "success",
+    "failed": "danger",
 }
 CONFIDENCE_LABELS = {
     "unverified": "未驗證", "verified": "已驗證", "universal": "通用規則",
@@ -224,7 +308,7 @@ async def dashboard(request: Request):
             })
 
         total_runs = db.query(func.count(func.distinct(AgentDecisionLog.run_id))).scalar() or 0
-        est_cost = total_runs * 0.15
+        cost_metrics = _get_agent_cost_metrics(db)
 
         # Pending review
         pending_review = (
@@ -236,7 +320,7 @@ async def dashboard(request: Request):
         cm = now.month
         cal_total = db.query(ContentCalendar).filter(ContentCalendar.month == cm).count()
         cal_done  = db.query(ContentCalendar).filter(
-            ContentCalendar.month == cm, ContentCalendar.status == "published"
+            ContentCalendar.month == cm, ContentCalendar.status.in_(["published", "completed"])
         ).count()
 
         # Recent scheduler
@@ -250,7 +334,7 @@ async def dashboard(request: Request):
             "total_kw": total_kw, "total_clusters": total_clusters, "knowledge_count": knowledge_count,
             "status_counts": json.dumps(status_counts),
             "avg_position": avg_position, "total_clicks": total_clicks, "total_impressions": total_impressions,
-            "pipeline_runs": pipeline_runs, "total_runs": total_runs, "est_cost": est_cost,
+            "pipeline_runs": pipeline_runs, "total_runs": total_runs, "total_cost": cost_metrics["total_cost"],
             "pending_review": pending_review,
             "cal_total": cal_total, "cal_done": cal_done, "cal_month": cm,
             "sched_success": sched_success, "sched_fail": sched_fail, "recent_sched": recent_sched,
@@ -443,7 +527,15 @@ async def update_article_status(request: Request, article_id: int, status: str =
         if art:
             art.status = status
             art.updated_at = datetime.now(timezone.utc)
-            db.commit()
+            # 發布到 goodbone.com.tw 時，記錄 publish_url 並提交 Google Indexing API
+            if status == "published" and art.slug:
+                publish_url = f"https://goodbone.com.tw/blog/{art.slug}"
+                art.publish_url = publish_url
+                art.publish_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                db.commit()
+                asyncio.create_task(_submit_to_google_indexing(publish_url))
+            else:
+                db.commit()
         return RedirectResponse(f"/admin/articles/{article_id}", status_code=303)
     finally:
         db.close()
@@ -527,7 +619,7 @@ async def _submit_to_google_indexing(url: str) -> None:
     try:
         import httpx
         from contentflow.config import settings
-        service_account_path = getattr(settings, "google_service_account_json", None)
+        service_account_path = settings.google_service_account_file
         if not service_account_path:
             return
         try:
@@ -719,6 +811,52 @@ async def delete_calendar_entry(request: Request, entry_id: int, month: int = Fo
     return RedirectResponse(f"/admin/calendar?month={month}", status_code=303)
 
 
+@admin_app.post("/calendar/{entry_id}/run")
+async def run_calendar_pipeline(request: Request, entry_id: int, background_tasks: BackgroundTasks):
+    """從內容日曆項目建立 Article 並觸發 AI Pipeline"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        entry = db.query(ContentCalendar).filter(ContentCalendar.id == entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Calendar entry not found")
+
+        # If already linked to an article, use it; otherwise create one
+        if entry.article_id:
+            article = db.query(Article).filter(Article.id == entry.article_id).first()
+        else:
+            article = None
+
+        if not article:
+            kw_list = [k.strip() for k in (entry.keywords or "").split(",") if k.strip()]
+            article = Article(
+                project_id=entry.project_id,
+                title=entry.title or (kw_list[0] if kw_list else ""),
+                primary_keyword=kw_list[0] if kw_list else "",
+                secondary_keywords=",".join(kw_list[1:]) if len(kw_list) > 1 else "",
+                article_type=entry.article_type or "",
+                status="planned",
+            )
+            db.add(article)
+            db.flush()
+            entry.article_id = article.id
+
+        entry.status = "researching"
+        db.commit()
+
+        article_id = article.id
+        project_id = entry.project_id
+        cal_month = entry.month or 0
+    finally:
+        db.close()
+
+    import uuid
+    run_id = str(uuid.uuid4())
+    background_tasks.add_task(_background_pipeline, run_id, article_id, project_id)
+    return RedirectResponse(f"/admin/calendar?month={cal_month}", status_code=303)
+
+
 # ═══════════════════════════════════════════════════════════════
 # KEYWORDS  /keywords
 # ═══════════════════════════════════════════════════════════════
@@ -860,7 +998,7 @@ async def suggest_keywords(
     project_id: int = Form(0),
 ):
     """
-    根據種子主題呼叫 Serper.dev，整合 PAA + 相關搜尋 + 競品標題，
+    根據種子主題呼叫 Serper.dev，整合 PAA + 相關搜尋，
     用 LLM 標記搜尋意圖，回傳批次候選關鍵字供用戶勾選匯入。
     """
     if not _check_login(request):
@@ -889,12 +1027,8 @@ async def suggest_keywords(
                 seen.add(kw)
                 candidates.append({"keyword": kw, "source": "關聯搜尋", "intent": ""})
 
-        # 3) 競品前10名的標題（拆解為可能的關鍵字角度）
-        for result in serp.top_results[:5]:
-            title = result.title.strip()
-            if title and title not in seen:
-                seen.add(title)
-                candidates.append({"keyword": title, "source": "競品標題", "intent": ""})
+        # 注意：競品文章標題（serp.top_results title）不作為關鍵字候選匯入，
+        # 因為標題是內容靈感而非可追蹤的 SEO 關鍵字，不應污染關鍵字庫。
 
     except Exception as e:
         error_msg = f"SERP 查詢失敗：{e}（請確認已設定 SERPER_API_KEY）"
@@ -991,6 +1125,129 @@ async def bulk_import_keywords(request: Request):
     finally:
         db.close()
     return JSONResponse({"imported": imported})
+
+
+@admin_app.post("/keywords/enrich-trends", response_class=JSONResponse)
+async def enrich_keywords_trends(request: Request):
+    """
+    為目前專案所有 trends_score 為 null 的關鍵字補充 Google Trends 相對熱度。
+    每個關鍵字消耗 1 次 SerpAPI 額度。
+    """
+    if not _check_login(request):
+        return JSONResponse({"error": "未登入"}, status_code=403)
+
+    body = await request.json()
+    project_id = body.get("project_id") or None
+    kw_ids = body.get("kw_ids") or []  # 若為空則對所有未補充的關鍵字操作
+
+    from contentflow.tools.serp import fetch_trends
+    import asyncio
+
+    db = _db()
+    try:
+        query = db.query(Keyword)
+        if project_id:
+            query = query.filter(Keyword.project_id == project_id)
+        if kw_ids:
+            query = query.filter(Keyword.id.in_(kw_ids))
+        else:
+            query = query.filter(Keyword.trends_score == None)  # noqa: E711
+        keywords = query.all()
+    finally:
+        db.close()
+
+    if not keywords:
+        return JSONResponse({"enriched": 0, "skipped": 0, "details": []})
+
+    results = []
+    enriched_count = 0
+    for kw in keywords:
+        try:
+            trend = await fetch_trends(kw.keyword)
+            db2 = _db()
+            try:
+                obj = db2.query(Keyword).filter(Keyword.id == kw.id).first()
+                if obj:
+                    obj.trends_score = trend["score"]
+                    obj.trend_direction = trend["direction"]
+                    db2.commit()
+                    enriched_count += 1
+                    results.append({
+                        "id": kw.id,
+                        "keyword": kw.keyword,
+                        "score": trend["score"],
+                        "direction": trend["direction"],
+                    })
+            finally:
+                db2.close()
+            await asyncio.sleep(0.3)  # 避免 API rate limit
+        except Exception as exc:
+            results.append({"id": kw.id, "keyword": kw.keyword, "error": str(exc)})
+
+    return JSONResponse({"enriched": enriched_count, "skipped": len(keywords) - enriched_count, "details": results})
+
+
+@admin_app.post("/keywords/enrich-volume", response_class=JSONResponse)
+async def enrich_keywords_volume(request: Request):
+    """
+    使用 DataForSEO 批次補充月搜尋量與競爭指數（search_volume / seo_difficulty）。
+    """
+    if not _check_login(request):
+        return JSONResponse({"error": "未登入"}, status_code=403)
+
+    body = await request.json()
+    project_id = body.get("project_id") or None
+    force = body.get("force", False)  # True 則覆蓋已有數據
+
+    from contentflow.tools.serp import fetch_search_volume
+
+    db = _db()
+    try:
+        query = db.query(Keyword)
+        if project_id:
+            query = query.filter(Keyword.project_id == project_id)
+        if not force:
+            query = query.filter(Keyword.search_volume == 0)
+        keywords = query.all()
+    finally:
+        db.close()
+
+    if not keywords:
+        return JSONResponse({"enriched": 0, "skipped": 0, "details": []})
+
+    kw_texts = [kw.keyword for kw in keywords]
+    try:
+        volume_map = await fetch_search_volume(kw_texts)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    enriched_count = 0
+    details = []
+    for kw in keywords:
+        data = volume_map.get(kw.keyword, {})
+        vol = data.get("search_volume")
+        comp = data.get("competition_index")
+        cpc = data.get("cpc")
+        if vol is not None or comp is not None:
+            db2 = _db()
+            try:
+                obj = db2.query(Keyword).filter(Keyword.id == kw.id).first()
+                if obj:
+                    if vol is not None:
+                        obj.search_volume = vol
+                    if comp is not None:
+                        obj.seo_difficulty = comp
+                    if cpc is not None:
+                        obj.cpc = cpc
+                    db2.commit()
+                    enriched_count += 1
+                    details.append({"id": kw.id, "keyword": kw.keyword, "volume": vol, "comp": comp})
+            finally:
+                db2.close()
+        else:
+            details.append({"id": kw.id, "keyword": kw.keyword, "volume": None, "comp": None})
+
+    return JSONResponse({"enriched": enriched_count, "skipped": len(keywords) - enriched_count, "details": details})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1402,6 +1659,8 @@ async def agents_page(request: Request, run_id: str = ""):
             .limit(20).all()
         )
 
+        cost_metrics = _get_agent_cost_metrics(db)
+        run_costs = cost_metrics["run_costs"]
         runs = []
         for r in runs_raw:
             art = db.query(Article).filter(Article.id == r.article_id).first() if r.article_id else None
@@ -1428,7 +1687,6 @@ async def agents_page(request: Request, run_id: str = ""):
             if r.started and r.ended and r.ended > r.started:
                 dur = (r.ended - r.started).total_seconds()
                 duration = f"{int(dur // 60)}m {int(dur % 60)}s"
-            est_run_cost = round(r.step_count * 0.01, 4)
             completed_step_names = [d["step"] for d in steps]
 
             runs.append({
@@ -1440,7 +1698,7 @@ async def agents_page(request: Request, run_id: str = ""):
                 "step_count": r.step_count, "duration": duration,
                 "is_complete": is_complete,
                 "over_budget": over_budget,
-                "est_cost": est_run_cost,
+                "cost": run_costs.get(r.run_id),
                 "completed_steps": completed_step_names,
                 "steps": steps,
             })
@@ -1470,7 +1728,7 @@ async def agents_page(request: Request, run_id: str = ""):
             "total_runs": total_runs,
             "success_runs": success_runs,
             "budget_exceeded": sum(1 for r in runs if r["over_budget"]),
-            "est_total_cost": round(total_runs * 0.15, 2),
+            "total_cost": cost_metrics["total_cost"],
             "step_counts_json": json.dumps(dict(step_counts.most_common(8))),
             "confidence_counts": dict(confidence_counts),
             "PIPELINE_STEPS": [step for step, _, _ in PIPELINE_STEPS],
@@ -1541,6 +1799,18 @@ async def _background_pipeline(run_id: str, article_id: int, project_id: int | N
                     article2.seo_score = draft.seo_score or None
                 article2.status = result.status or "reviewing"
                 article2.updated_at = datetime.now(timezone.utc)
+                # ── 同步更新 ContentCalendar 狀態 ──
+                _ARTICLE_TO_CAL_STATUS = {
+                    "published": "published",
+                    "review_required": "reviewing",
+                    "reviewing": "reviewing",
+                    "approved": "reviewing",
+                    "failed": "planned",
+                }
+                cal_new_status = _ARTICLE_TO_CAL_STATUS.get(article2.status, "reviewing")
+                cal_entry = db2.query(ContentCalendar).filter(ContentCalendar.article_id == article_id).first()
+                if cal_entry:
+                    cal_entry.status = cal_new_status
                 db2.commit()
         finally:
             db2.close()
@@ -1556,6 +1826,10 @@ async def _background_pipeline(run_id: str, article_id: int, project_id: int | N
             a3 = db3.query(Article).filter(Article.id == article_id).first()
             if a3:
                 a3.status = "failed"
+                db3.commit()
+            cal3 = db3.query(ContentCalendar).filter(ContentCalendar.article_id == article_id).first()
+            if cal3:
+                cal3.status = "planned"
                 db3.commit()
         finally:
             db3.close()
@@ -1716,14 +1990,17 @@ async def scheduler_page(request: Request):
                 job_latest[log.job_id] = log
 
         known_jobs = [
-            {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00",    "icon": "📊"},
-            {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30",    "icon": "📈"},
-            {"id": "auto_pipeline",             "name": "自動 AI Pipeline", "schedule": "每日 08:00",    "icon": "🤖"},
-            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:00",  "icon": "🔍"},
-            {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00",  "icon": "🧮"},
-            {"id": "check_refresh_triggers",    "name": "內容更新檢查",    "schedule": "每週二 04:00",  "icon": "🔄"},
-            {"id": "l1_learn",                  "name": "L1 模式學習",      "schedule": "每月 1 號 06:00","icon": "🧠"},
-            {"id": "l2_learn",                  "name": "L2 ROI 分析",      "schedule": "每月 1 號 07:00","icon": "💰"},
+            {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00",        "icon": "📊"},
+            {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30",        "icon": "📈"},
+            {"id": "run_auto_pipeline",         "name": "自動 AI Pipeline", "schedule": "每日 08:00",        "icon": "🤖"},
+            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:00",      "icon": "🔍"},
+            {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00",      "icon": "🧮"},
+            {"id": "check_refresh_triggers",    "name": "內容更新檢查",    "schedule": "每週二 04:00",      "icon": "🔄"},
+            {"id": "check_ranking_drops",       "name": "排名掉落偵測",    "schedule": "每週三 06:00",      "icon": "📉"},
+            {"id": "run_weekly_reflection",     "name": "週級反思學習",    "schedule": "每週日 08:00",      "icon": "🧠"},
+            {"id": "send_weekly_report",        "name": "週報推送",        "schedule": "每週日 09:00",      "icon": "📬"},
+            {"id": "run_l1_pattern_analysis",   "name": "L1 模式學習",      "schedule": "每月 1 號 06:00",   "icon": "🔬"},
+            {"id": "run_l2_roi_analysis",       "name": "L2 ROI 分析",      "schedule": "每月 1 號 07:00",   "icon": "💰"},
         ]
         for j in known_jobs:
             j["latest"] = job_latest.get(j["id"])
@@ -1774,7 +2051,10 @@ async def health_page(request: Request):
             ],
             "data": [
                 _svc("SerpAPI / Serper", bool(getattr(settings, "serper_api_key", None) or getattr(settings, "serpapi_key", None)), description="SERP 分析 + 競品追蹤"),
-                _svc("Google Search Console", bool(getattr(settings, "google_service_account_file", None)), description="每日 GSC 排名同步"),
+                _svc("Google Search Console", bool(
+                    getattr(settings, "google_service_account_file", None) and
+                    __import__("os").path.isfile(getattr(settings, "google_service_account_file", ""))
+                ), description="每日 GSC 排名同步"),
                 _svc("PubMed / NCBI", bool(getattr(settings, "ncbi_api_key", None)), description="Research Agent 學術佐證"),
             ],
             "publish": [
@@ -1806,9 +2086,10 @@ async def health_page(request: Request):
         monthly_runs = db.query(func.count(func.distinct(AgentDecisionLog.run_id))).filter(
             AgentDecisionLog.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
         ).scalar() or 0
-        avg_article_cost = 0.15  # placeholder
-        month_cost = round(monthly_runs * avg_article_cost, 2)
-        total_cost = round(total_runs * avg_article_cost, 2)
+        cost_metrics = _get_agent_cost_metrics(db)
+        avg_article_cost = cost_metrics["avg_run_cost"]
+        month_cost = cost_metrics["monthly_cost"]
+        total_cost = cost_metrics["total_cost"]
 
         recent_errors = db.query(SchedulerLog).filter(SchedulerLog.status == "failed").order_by(desc(SchedulerLog.started_at)).limit(5).all()
 
@@ -2383,5 +2664,172 @@ async def api_stats(request: Request):
             "scheduler_errors":db.query(SchedulerLog).filter(SchedulerLog.status == "failed").count(),
             "pipeline_runs":   db.query(func.count(func.distinct(AgentDecisionLog.run_id))).scalar() or 0,
         }
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# PIPELINE RUNS  /pipeline-runs  (Enhanced B)
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/pipeline-runs", response_class=HTMLResponse)
+async def pipeline_runs_page(request: Request, status: str = "", trigger: str = "", page: int = 1):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        q = db.query(PipelineRun).order_by(desc(PipelineRun.started_at))
+        if status:
+            q = q.filter(PipelineRun.status == status)
+        if trigger:
+            q = q.filter(PipelineRun.trigger == trigger)
+        all_runs = q.all()
+
+        per_page = 30
+        total = len(all_runs)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        runs = all_runs[(page - 1) * per_page : page * per_page]
+
+        # 統計
+        total_runs  = db.query(PipelineRun).count()
+        completed   = db.query(PipelineRun).filter(PipelineRun.status == "completed").count()
+        failed      = db.query(PipelineRun).filter(PipelineRun.status == "failed").count()
+        running_now = db.query(PipelineRun).filter(PipelineRun.status == "running").count()
+        avg_seo     = db.query(func.avg(PipelineRun.seo_score)).filter(PipelineRun.seo_score != None).scalar()
+        total_cost  = db.query(func.sum(PipelineRun.total_cost)).scalar() or 0.0
+
+        # 取得 article titles
+        article_ids = [r.article_id for r in runs if r.article_id]
+        articles_by_id = {}
+        if article_ids:
+            for a in db.query(Article).filter(Article.id.in_(article_ids)).all():
+                articles_by_id[a.id] = a.title
+
+        return templates.TemplateResponse(request, "pipeline_runs.html", {
+            "request": request, "page": "pipeline_runs",
+            "runs": runs, "articles_by_id": articles_by_id,
+            "status_filter": status, "trigger_filter": trigger,
+            "total": total, "page_num": page, "total_pages": total_pages,
+            "total_runs": total_runs, "completed": completed,
+            "failed": failed, "running_now": running_now,
+            "avg_seo": round(avg_seo, 1) if avg_seo else 0,
+            "total_cost": round(total_cost, 4),
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# STRATEGIC PLANS  /strategic-plans  (Enhanced B)
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/strategic-plans", response_class=HTMLResponse)
+async def strategic_plans_page(request: Request, page: int = 1):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        all_plans = db.query(StrategicPlan).order_by(desc(StrategicPlan.plan_date)).all()
+
+        per_page = 20
+        total = len(all_plans)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        plans = all_plans[(page - 1) * per_page : page * per_page]
+
+        # decode actions_json for display
+        plans_decoded = []
+        for p in plans:
+            try:
+                actions = json.loads(p.actions_json or "[]")
+            except Exception:
+                actions = []
+            try:
+                ctx = json.loads(p.context_snapshot or "{}")
+            except Exception:
+                ctx = {}
+            plans_decoded.append({
+                "plan": p,
+                "actions": actions,
+                "context": ctx,
+                "action_counts": {
+                    "generate": sum(1 for a in actions if a.get("action") == "generate"),
+                    "refresh":  sum(1 for a in actions if a.get("action") == "refresh"),
+                    "alert":    sum(1 for a in actions if a.get("action") == "alert"),
+                },
+            })
+
+        total_plans    = db.query(StrategicPlan).count()
+        completed_plans = db.query(StrategicPlan).filter(StrategicPlan.status == "completed").count()
+        pending_plans  = db.query(StrategicPlan).filter(StrategicPlan.status == "pending").count()
+
+        return templates.TemplateResponse(request, "strategic_plans.html", {
+            "request": request, "page": "strategic_plans",
+            "plans_decoded": plans_decoded,
+            "total": total, "page_num": page, "total_pages": total_pages,
+            "total_plans": total_plans,
+            "completed_plans": completed_plans, "pending_plans": pending_plans,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# REFLECTION LOGS  /reflections  (Enhanced B)
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/reflections", response_class=HTMLResponse)
+async def reflections_page(request: Request, reflection_type: str = "", page: int = 1):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        q = db.query(ReflectionLog).order_by(desc(ReflectionLog.created_at))
+        if reflection_type:
+            q = q.filter(ReflectionLog.reflection_type == reflection_type)
+        all_logs = q.all()
+
+        per_page = 20
+        total = len(all_logs)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        logs = all_logs[(page - 1) * per_page : page * per_page]
+
+        logs_decoded = []
+        for log in logs:
+            try:
+                insights = json.loads(log.insights_json or "[]")
+            except Exception:
+                insights = []
+            logs_decoded.append({"log": log, "insights": insights})
+
+        # 統計
+        total_logs  = db.query(ReflectionLog).count()
+        total_kb    = db.query(func.sum(ReflectionLog.knowledge_updates)).scalar() or 0
+        total_wr    = db.query(func.sum(ReflectionLog.writing_rule_updates)).scalar() or 0
+        type_counts = dict(
+            db.query(ReflectionLog.reflection_type, func.count())
+            .group_by(ReflectionLog.reflection_type).all()
+        )
+
+        # 取得 article titles
+        article_ids = [log.article_id for log in logs if log.article_id]
+        articles_by_id = {}
+        if article_ids:
+            for a in db.query(Article).filter(Article.id.in_(article_ids)).all():
+                articles_by_id[a.id] = a.title
+
+        return templates.TemplateResponse(request, "reflections.html", {
+            "request": request, "page": "reflections",
+            "logs_decoded": logs_decoded, "articles_by_id": articles_by_id,
+            "type_filter": reflection_type,
+            "total": total, "page_num": page, "total_pages": total_pages,
+            "total_logs": total_logs, "total_kb": total_kb, "total_wr": total_wr,
+            "type_counts": type_counts,
+            "now": datetime.now(timezone.utc),
+        })
     finally:
         db.close()
