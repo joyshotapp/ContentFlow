@@ -2020,6 +2020,36 @@ async def adopt_knowledge_as_writing_rule(request: Request, entry_id: int):
 # SCHEDULER  /scheduler
 # ═══════════════════════════════════════════════════════════════
 
+@admin_app.post("/scheduler/trigger/{job_id}")
+async def trigger_scheduler_job(request: Request, job_id: str):
+    """手動觸發排程任務（僅限已知 job）"""
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    from contentflow import scheduler as sched_mod
+    job_map = {
+        "sync_gsc_all_projects":    sched_mod.sync_gsc_all_projects,
+        "sync_ga4_all_projects":    sched_mod.sync_ga4_all_projects,
+        "run_auto_pipeline":        sched_mod.run_auto_pipeline,
+        "run_competitor_serp_check": sched_mod.run_competitor_serp_check,
+        "run_attribution_engine":   sched_mod.run_attribution_engine,
+        "check_refresh_triggers":   sched_mod.check_refresh_triggers,
+        "run_weekly_reflection":    sched_mod.run_weekly_reflection,
+        "send_weekly_report":       sched_mod.send_weekly_report,
+        "run_l1_pattern_analysis":  sched_mod.run_l1_pattern_analysis,
+        "run_l2_roi_analysis":      sched_mod.run_l2_roi_analysis,
+        "check_ranking_drops":      sched_mod.check_ranking_drops,
+    }
+    fn = job_map.get(job_id)
+    if not fn:
+        return RedirectResponse("/admin/scheduler?error=unknown_job", status_code=303)
+    try:
+        await fn()
+        return RedirectResponse(f"/admin/scheduler?triggered={job_id}", status_code=303)
+    except Exception as e:
+        logger.error(f"[Scheduler] Manual trigger {job_id} failed: {e}")
+        return RedirectResponse(f"/admin/scheduler?error={job_id}", status_code=303)
+
+
 @admin_app.get("/scheduler", response_class=HTMLResponse)
 async def scheduler_page(request: Request):
     if not _check_login(request):
