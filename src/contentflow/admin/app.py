@@ -666,6 +666,59 @@ async def set_article_author(request: Request, article_id: int, author_id: int =
         db.close()
 
 
+@admin_app.post("/articles/{article_id}/refresh")
+async def trigger_article_refresh(request: Request, article_id: int):
+    """手動觸發單篇文章 Refresh Pipeline（分析模式，不自動發布）。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        art = db.query(Article).filter(Article.id == article_id).first()
+        if not art:
+            raise HTTPException(status_code=404, detail="Article not found")
+
+        from contentflow.agents.refresh_agent import run_refresh_pipeline
+        result = await run_refresh_pipeline(
+            article=art,
+            keyword=art.primary_keyword or art.title,
+            session=db,
+            platform="url" if art.publish_url else "forgebase",
+            generate_content=False,
+            publish=False,
+        )
+        plan = result.get("plan")
+        fetched = result.get("fetched")
+        summary = {
+            "freshness_score": getattr(plan, "overall_freshness_score", None),
+            "recommendation": getattr(plan, "recommendation", "unknown"),
+            "gaps_count": len(getattr(plan, "gaps", [])),
+            "gaps": [
+                {"type": g.gap_type, "desc": g.description}
+                for g in getattr(plan, "gaps", [])
+            ],
+            "word_count": getattr(fetched, "word_count", 0),
+        }
+        # 回寫 last_refresh_date
+        art.last_refresh_date = datetime.now(timezone.utc)
+        db.commit()
+
+        import urllib.parse
+        qs = urllib.parse.urlencode({
+            "refresh_score": summary["freshness_score"],
+            "refresh_rec": summary["recommendation"],
+            "refresh_gaps": summary["gaps_count"],
+        })
+        return RedirectResponse(f"/admin/articles/{article_id}?{qs}", status_code=303)
+    except Exception as e:
+        logger.error(f"[Refresh] article={article_id} 失敗: {e}")
+        return RedirectResponse(
+            f"/admin/articles/{article_id}?refresh_error={str(e)[:100]}",
+            status_code=303,
+        )
+    finally:
+        db.close()
+
+
 # ═══════════════════════════════════════════════════════════════
 # CONTENT CALENDAR  /calendar
 # ═══════════════════════════════════════════════════════════════
