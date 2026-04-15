@@ -99,9 +99,9 @@ class WordPressPublisher(BasePublisher):
 
     # ── 公開介面 ──────────────────────────────────────────────
 
-    async def publish_draft(self, draft: ArticleDraft) -> PublishResult:
-        """建立 WordPress 草稿，回傳 post_id。"""
-        payload = self._build_post_payload(draft, status="draft")
+    async def _create_post(self, draft: ArticleDraft, status: str = "draft") -> PublishResult:
+        """內部通用方法：以指定狀態建立文章（draft / publish）。"""
+        payload = self._build_post_payload(draft, status=status)
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
@@ -113,21 +113,25 @@ class WordPressPublisher(BasePublisher):
             data = resp.json()
             post_id = str(data["id"])
             link = data.get("link", "")
-            logger.info(f"[WordPress] 草稿建立成功 post_id={post_id}")
+            logger.info(f"[WordPress] 文章建立成功 post_id={post_id} status={status}")
             return PublishResult(
                 success=True,
                 platform="wordpress",
                 post_id=post_id,
                 publish_url=link,
-                metadata={"slug": data.get("slug", "")},
+                metadata={"slug": data.get("slug", ""), "status": status},
             )
         except httpx.HTTPStatusError as exc:
             msg = f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-            logger.error(f"[WordPress] 草稿建立失敗：{msg}")
+            logger.error(f"[WordPress] 文章建立失敗：{msg}")
             return PublishResult(success=False, platform="wordpress", error=msg)
         except Exception as exc:
-            logger.error(f"[WordPress] 草稿建立異常：{exc}")
+            logger.error(f"[WordPress] 文章建立異常：{exc}")
             return PublishResult(success=False, platform="wordpress", error=str(exc))
+
+    async def publish_draft(self, draft: ArticleDraft) -> PublishResult:
+        """建立 WordPress 草稿，回傳 post_id。"""
+        return await self._create_post(draft, status="draft")
 
     async def update_post(self, post_id: str, draft: ArticleDraft) -> PublishResult:
         """更新既有 WordPress 文章（Content Refresh 用途）。"""

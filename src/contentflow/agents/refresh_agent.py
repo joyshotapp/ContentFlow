@@ -474,15 +474,14 @@ async def publish_refreshed_article(
     if platform is None:
         # 自動推斷平台
         _url = article.publish_url or ""
+        _site_base = settings.site_url.rstrip("/") if settings.site_url else ""
         if "wp-json" in _url or re.search(r"[?&]p=\d+", _url):
             platform = "wordpress"
-        elif (
-            settings.forgebase_api_base_url
-            and settings.forgebase_api_base_url.rstrip("/") in _url
-        ):
-            platform = "forgebase"
+        elif not _url or (_site_base and _url.startswith(_site_base)):
+            platform = "native"  # 原生 blog（無 URL 或 URL 屬於本站）
         else:
-            platform = "native"  # 原生 blog：只更新本地 DB
+            # 外部 URL：嘗試 ForgeBase（post_id 為空時函式內部會回傳 error）
+            platform = "forgebase"
 
     # 原生 blog：只更新本地 DB，無需推送外部 API
     if platform == "native":

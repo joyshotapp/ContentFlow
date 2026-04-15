@@ -226,6 +226,80 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         for c in planned_calendar
     ]
 
+    # 1b. 自動補充日曆：若 planned 排程 < 最低閾值，從關鍵字庫選高優先詞建立條目
+    #     條件：未有對應文章（無 published/planned 文章）+ 有搜尋量
+    MIN_CALENDAR_BUFFER = 5
+    if len(calendar_items) < MIN_CALENDAR_BUFFER:
+        from ..models.database import Keyword, Article as _Article
+        existing_kws = {
+            kw for kw in (
+                session.query(_Article.primary_keyword)
+                .filter(
+                    _Article.project_id == project_id,
+                    _Article.status.in_(["published", "planned", "draft", "review_required", "approved"]),
+                    _Article.primary_keyword.isnot(None),
+                )
+                .all()
+            )
+            if kw[0]
+        }
+        # 排序：搜尋量 desc + trend_direction = 'rising' 優先 + difficulty asc
+        candidate_keywords = (
+            session.query(Keyword)
+            .filter(
+                Keyword.project_id == project_id,
+                Keyword.search_volume > 0,
+            )
+            .order_by(
+                Keyword.search_volume.desc(),
+            )
+            .limit(50)
+            .all()
+        )
+        needed = MIN_CALENDAR_BUFFER - len(calendar_items)
+        added = 0
+        for kw_obj in candidate_keywords:
+            if added >= needed:
+                break
+            if kw_obj.keyword in existing_kws:
+                continue
+            # 建立 Article + ContentCalendar
+            new_art = _Article(
+                project_id=project_id,
+                title=kw_obj.keyword,
+                primary_keyword=kw_obj.keyword,
+                status="planned",
+            )
+            session.add(new_art)
+            session.flush()
+            new_cal = ContentCalendar(
+                project_id=project_id,
+                title=kw_obj.keyword,
+                keywords=kw_obj.keyword,
+                month=current_month,
+                week=current_week,
+                status="planned",
+                article_id=new_art.id,
+            )
+            session.add(new_cal)
+            session.flush()
+            calendar_items.append({
+                "calendar_id": new_cal.id,
+                "title": kw_obj.keyword,
+                "keywords": kw_obj.keyword,
+                "month": current_month,
+                "week": current_week,
+                "article_id": new_art.id,
+            })
+            existing_kws.add(kw_obj.keyword)
+            added += 1
+        if added > 0:
+            session.commit()
+            logger.info(
+                f"[StrategicAgent] 自動補充日曆：從關鍵字庫新增 {added} 個待產出排程，"
+                f"總 planned backlog = {len(calendar_items)}"
+            )
+
     # 2. 排名數據（近 7 天 vs 前 7 天比對）
     two_weeks_ago = today - timedelta(days=14)
     recent_rankings = (
@@ -797,6 +871,10 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
         # 回寫結果
         pub_url: str | None = None
+        _pub_platform: str | None = None
+        _pub_article_id: int = art_id
+        _pub_draft = None
+        _pub_slug: str = ""
         with SessionLocal() as session:
             article = session.get(Article, art_id)
             project = session.get(Project, project_id)
@@ -826,7 +904,10 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                         suffix += 1
                     article.slug = candidate
                 # 發布政策（L2-1）：
-                #   auto_publish_enabled=True 且 seo_score >= min_score → 立即發布（不等排程）
+                #   auto_publish_enabled=True 且 seo_score >= min_score → 立即發布
+                #     - 原生 blog（無 WordPress/ForgeBase 設定）：DB 直接標記 published
+                #     - WordPress：create post as "publish" 直接上線
+                #     - ForgeBase：create brief → page → publish 三步驟
                 #   有排程時間 → approved（等待 04:05 排程 job）
                 #   否則 → review_required（人工審核）
                 now_utc = datetime.now(timezone.utc)
@@ -836,20 +917,35 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                     and (article.seo_score or 0) >= (project.auto_publish_min_score or 85)
                 )
                 if auto_pub and article.slug:
-                    # 直接發布：pipeline 完成後即時上線，不等隔日 check_scheduled_publishes
-                    article.status = "published"
-                    article.published_at = now_utc
-                    article.publish_date = now_utc.strftime("%Y-%m-%d")
-                    pub_url = f"https://goodbone.com.tw/blog/{article.slug}"
-                    article.publish_url = pub_url
+                    # 決定發布平台：WordPress > ForgeBase > 原生 blog
+                    wp_configured = bool(
+                        settings.wordpress_site_url
+                        and settings.wordpress_username
+                        and settings.wordpress_app_password
+                    )
+                    fb_configured = bool(
+                        settings.forgebase_api_base_url
+                        and settings.forgebase_api_token
+                    )
+                    _pub_platform = (
+                        "wordpress" if wp_configured
+                        else "forgebase" if fb_configured
+                        else "native"
+                    )
+                    _pub_article_id = art_id
+                    _pub_draft = result.draft
+                    _pub_slug = article.slug
                 elif auto_pub:
                     # slug 尚未生成（罕見），fallback 到排程器
                     article.status = "approved"
                     article.scheduled_publish_at = article.scheduled_publish_at or now_utc
+                    _pub_platform = None
                 elif article.scheduled_publish_at:
                     article.status = "approved"
+                    _pub_platform = None
                 else:
                     article.status = result.status or "review_required"
+                    _pub_platform = None
                 article.updated_at = now_utc
 
             cal = session.get(ContentCalendar, calendar_id)
@@ -865,13 +961,114 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
             session.commit()
 
+        # 實際執行自動發布（session 已 commit 後再執行，避免 DB 鎖定）
+        if _pub_platform == "native":
+            # 原生 FastAPI blog：DB 直接標記已發布即可（/blog/{slug} 從 DB 讀取）
+            site_root = settings.site_url.rstrip("/")
+            pub_url = f"{site_root}/blog/{_pub_slug}"
+            with SessionLocal() as s2:
+                _art = s2.get(Article, _pub_article_id)
+                if _art:
+                    _art.status = "published"
+                    _art.published_at = now_utc
+                    _art.publish_date = now_utc.strftime("%Y-%m-%d")
+                    _art.publish_url = pub_url
+                    s2.commit()
+            logger.info(f"[StrategicExecutor] 原生發布完成：{pub_url}")
+
+        elif _pub_platform == "wordpress":
+            try:
+                from ..publishers.wordpress import WordPressPublisher
+                from contentflow.models.schemas import ArticleDraft as _Draft
+                wp_draft = _Draft(
+                    title=_pub_draft.title,
+                    meta_title=_pub_draft.meta_title or _pub_draft.title,
+                    meta_description=_pub_draft.meta_description or "",
+                    content_markdown=_pub_draft.content_markdown,
+                    slug=_pub_draft.slug or "",
+                    faq_schema_json=_pub_draft.faq_schema_json or "",
+                    article_schema_json=_pub_draft.article_schema_json or "",
+                )
+                wp_pub = WordPressPublisher()
+                # 直接以 publish 狀態建立（不走 draft → publish 兩步）
+                wp_result = await wp_pub._create_post(wp_draft, status="publish")
+                if wp_result.success:
+                    pub_url = wp_result.publish_url or ""
+                    with SessionLocal() as s2:
+                        _art = s2.get(Article, _pub_article_id)
+                        if _art:
+                            _art.status = "published"
+                            _art.published_at = now_utc
+                            _art.publish_date = now_utc.strftime("%Y-%m-%d")
+                            _art.publish_url = pub_url
+                            _art.wp_post_id = str(wp_result.post_id or "")
+                            s2.commit()
+                    logger.info(f"[StrategicExecutor] WordPress 發布完成：{pub_url}")
+                else:
+                    logger.error(f"[StrategicExecutor] WordPress 發布失敗：{wp_result.error}")
+                    with SessionLocal() as s2:
+                        _art = s2.get(Article, _pub_article_id)
+                        if _art:
+                            _art.status = "review_required"
+                            s2.commit()
+            except Exception as _wp_err:
+                logger.error(f"[StrategicExecutor] WordPress 自動發布異常：{_wp_err}")
+                with SessionLocal() as s2:
+                    _art = s2.get(Article, _pub_article_id)
+                    if _art:
+                        _art.status = "review_required"
+                        s2.commit()
+
+        elif _pub_platform == "forgebase":
+            try:
+                from ..publishers.forgebase import ForgeBasePublisher
+                fb_pub = ForgeBasePublisher()
+                # Step 1+2: create brief → page（草稿）
+                fb_result = await fb_pub.publish_draft(
+                    _pub_draft, primary_keyword=_pub_draft.title
+                )
+                if fb_result.success and fb_result.post_id:
+                    # Step 3: 立即發布
+                    fb_published = await fb_pub.publish_page(fb_result.post_id)
+                    pub_url = (fb_published.publish_url or "") if fb_published.success else ""
+                    with SessionLocal() as s2:
+                        _art = s2.get(Article, _pub_article_id)
+                        if _art:
+                            _art.status = "published" if fb_published.success else "review_required"
+                            if fb_published.success:
+                                _art.published_at = now_utc
+                                _art.publish_date = now_utc.strftime("%Y-%m-%d")
+                                _art.publish_url = pub_url
+                                _art.forgebase_id = fb_result.post_id
+                            s2.commit()
+                    if fb_published.success:
+                        logger.info(f"[StrategicExecutor] ForgeBase 發布完成：{pub_url}")
+                    else:
+                        logger.error(f"[StrategicExecutor] ForgeBase publish_page 失敗：{fb_published.error}")
+                else:
+                    logger.error(f"[StrategicExecutor] ForgeBase publish_draft 失敗：{fb_result.error}")
+                    with SessionLocal() as s2:
+                        _art = s2.get(Article, _pub_article_id)
+                        if _art:
+                            _art.status = "review_required"
+                            s2.commit()
+            except Exception as _fb_err:
+                logger.error(f"[StrategicExecutor] ForgeBase 自動發布異常：{_fb_err}")
+                with SessionLocal() as s2:
+                    _art = s2.get(Article, _pub_article_id)
+                    if _art:
+                        _art.status = "review_required"
+                        s2.commit()
+
         # Google Indexing API：加速 Googlebot 首次收錄（best-effort）
         if pub_url:
             try:
                 import asyncio as _asyncio
                 _asyncio.create_task(_submit_url_to_indexing(pub_url))
-            except Exception:
-                pass
+            except RuntimeError:
+                # 沒有 running loop（測試環境）：改用 ensure_future
+                import asyncio as _asyncio
+                _asyncio.ensure_future(_submit_url_to_indexing(pub_url))
 
         # 記錄 ActionOutcome（因果追蹤基線）
         from ..scheduler import record_action_outcome

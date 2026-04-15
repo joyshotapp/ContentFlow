@@ -819,7 +819,7 @@ async def check_ranking_drops() -> None:
     - 若發現批量關鍵字退步（≥5 個關鍵字退步 ≥5 名），視為 Core Update 訊號
     - 自動推送 Slack 預警，並建議執行 Content Refresh
     """
-    from contentflow.models.database import SEORanking
+    from contentflow.models.database import SEORanking, Project
     import httpx
 
     slack_url = getattr(settings, "slack_webhook_url", None)
@@ -828,35 +828,46 @@ async def check_ranking_drops() -> None:
     cutoff_prev = (now - timedelta(days=14)).date()
 
     with SessionLocal() as session:
-        curr_ranks = {
-            row.keyword: float(row.avg_pos)
-            for row in session.query(
-                SEORanking.keyword,
-                func.avg(SEORanking.position).label("avg_pos"),
-            ).filter(SEORanking.tracked_date >= cutoff_curr).group_by(SEORanking.keyword).all()
-            if row.avg_pos
-        }
+        project_ids = [p.id for p in session.query(Project).all()]
 
-        prev_ranks = {
-            row.keyword: float(row.avg_pos)
-            for row in session.query(
-                SEORanking.keyword,
-                func.avg(SEORanking.position).label("avg_pos"),
-            ).filter(
-                SEORanking.tracked_date >= cutoff_prev,
-                SEORanking.tracked_date < cutoff_curr,
-            ).group_by(SEORanking.keyword).all()
-            if row.avg_pos
-        }
+    all_drops: list[tuple] = []
+    for project_id in project_ids:
+        with SessionLocal() as session:
+            curr_ranks = {
+                row.keyword: float(row.avg_pos)
+                for row in session.query(
+                    SEORanking.keyword,
+                    func.avg(SEORanking.position).label("avg_pos"),
+                ).filter(
+                    SEORanking.project_id == project_id,
+                    SEORanking.tracked_date >= cutoff_curr,
+                ).group_by(SEORanking.keyword).all()
+                if row.avg_pos
+            }
 
-    drops = []
-    for kw, curr in curr_ranks.items():
-        if kw in prev_ranks:
-            delta = curr - prev_ranks[kw]
-            if delta >= 5:
-                drops.append((kw, round(prev_ranks[kw], 1), round(curr, 1), round(delta, 1)))
+            prev_ranks = {
+                row.keyword: float(row.avg_pos)
+                for row in session.query(
+                    SEORanking.keyword,
+                    func.avg(SEORanking.position).label("avg_pos"),
+                ).filter(
+                    SEORanking.project_id == project_id,
+                    SEORanking.tracked_date >= cutoff_prev,
+                    SEORanking.tracked_date < cutoff_curr,
+                ).group_by(SEORanking.keyword).all()
+                if row.avg_pos
+            }
 
-    drops.sort(key=lambda x: x[3], reverse=True)
+        drops_for_project = []
+        for kw, curr in curr_ranks.items():
+            if kw in prev_ranks:
+                delta = curr - prev_ranks[kw]
+                if delta >= 5:
+                    drops_for_project.append((kw, round(prev_ranks[kw], 1), round(curr, 1), round(delta, 1)))
+        all_drops.extend(drops_for_project)
+
+    all_drops.sort(key=lambda x: x[3], reverse=True)
+    drops = all_drops
     logger.info(f"[RankDrop] 偵測到 {len(drops)} 個關鍵字排名退步 ≥5 名")
 
     if len(drops) >= 5:
@@ -940,9 +951,36 @@ async def run_render_verification() -> None:
     logger.info(f"[RenderVerify] 完成，{failed_count}/{len(targets)} 篇有缺失")
 
 
+async def _notify_google_indexing(url: str) -> None:
+    """Google Indexing API 通知（best-effort，失敗不拋例外）。"""
+    import httpx
+    svc_file = settings.google_service_account_file
+    if not svc_file or not url:
+        return
+    try:
+        import google.oauth2.service_account as _sa
+        import google.auth.transport.requests as _gtr
+        _creds = _sa.Credentials.from_service_account_file(
+            svc_file, scopes=["https://www.googleapis.com/auth/indexing"]
+        )
+        _creds.refresh(_gtr.Request())
+        async with httpx.AsyncClient(timeout=20) as _hc:
+            _r = await _hc.post(
+                "https://indexing.googleapis.com/v3/urlNotifications:publish",
+                headers={"Authorization": f"Bearer {_creds.token}", "Content-Type": "application/json"},
+                json={"url": url, "type": "URL_UPDATED"},
+            )
+            if _r.status_code == 200:
+                logger.info(f"[IndexingAPI] ✅ 提交成功：{url}")
+            else:
+                logger.warning(f"[IndexingAPI] 非 200 回應 {_r.status_code}：{_r.text[:100]}")
+    except Exception as _ie:
+        logger.debug(f"[IndexingAPI] 略過（non-fatal）：{_ie}")
+
+
 @with_retry(max_retries=2)
 async def check_scheduled_publishes() -> None:
-    """每日 04:00 — 掃描已到期的排程發布文章，自動推送至各平台。
+    """每日 04:05 — 掃描已到期的排程發布文章，自動推送至各平台。
 
     條件：Article.scheduled_publish_at <= now()，Article.status == "approved"，
     且 wp_post_id 或 forgebase_id 不為空（代表草稿已推送）。
@@ -993,7 +1031,8 @@ async def check_scheduled_publishes() -> None:
                         art.status = "published"
                         art.published_at = now
                         if not art.publish_url:
-                            art.publish_url = f"https://goodbone.com.tw/blog/{art.slug}"
+                            _site_root = settings.site_url.rstrip("/")
+                            art.publish_url = f"{_site_root}/blog/{art.slug}"
                         if not art.publish_date:
                             art.publish_date = now.strftime("%Y-%m-%d")
                         session.commit()
@@ -1002,42 +1041,26 @@ async def check_scheduled_publishes() -> None:
                 logger.info(
                     f"[ScheduledPublish] ✅ 原生發布：'{article.title}' → {publish_url}"
                 )
-                # Google Indexing API：加速 Googlebot 收錄
-                try:
-                    import httpx as _httpx
-                    svc_file = settings.google_service_account_file
-                    if svc_file:
-                        import google.oauth2.service_account as _sa
-                        import google.auth.transport.requests as _gtr
-                        _creds = _sa.Credentials.from_service_account_file(
-                            svc_file, scopes=["https://www.googleapis.com/auth/indexing"]
-                        )
-                        _creds.refresh(_gtr.Request())
-                        async with _httpx.AsyncClient(timeout=20) as _hc:
-                            _r = await _hc.post(
-                                "https://indexing.googleapis.com/v3/urlNotifications:publish",
-                                headers={"Authorization": f"Bearer {_creds.token}", "Content-Type": "application/json"},
-                                json={"url": publish_url, "type": "URL_UPDATED"},
-                            )
-                            if _r.status_code == 200:
-                                logger.info(f"[IndexingAPI] ✅ 提交成功：{publish_url}")
-                except Exception as _ie:
-                    logger.debug(f"[IndexingAPI] 略過：{_ie}")
+                await _notify_google_indexing(publish_url)
                 continue
 
             if result and result.success:
+                _pub_url = result.publish_url or ""
                 with SessionLocal() as session:
                     art = session.get(Article, article.id)
                     if art:
                         art.status = "published"
                         art.published_at = now
-                        if result.publish_url:
-                            art.publish_url = result.publish_url
+                        if _pub_url:
+                            art.publish_url = _pub_url
                         session.commit()
                 published_count += 1
                 logger.info(
-                    f"[ScheduledPublish] ✅ 已發布：'{article.title}' → {result.publish_url}"
+                    f"[ScheduledPublish] ✅ 已發布：'{article.title}' → {_pub_url}"
                 )
+                # Google Indexing API：加速 Googlebot 收錄
+                if _pub_url:
+                    await _notify_google_indexing(_pub_url)
             else:
                 err = result.error if result else "未知錯誤"
                 logger.error(f"[ScheduledPublish] 文章 #{article.id} 發布失敗：{err}")
