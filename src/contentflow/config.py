@@ -114,7 +114,7 @@ class Settings(BaseSettings):
         alias="SITE_NAME",
     )
     site_description: str = Field(
-        default="以醫學文獻為基礎的骨科健康知識平台——AI 驅動的 SEO 內容引擎，幫助您了解骨骼健康、關節保護與骨科治療。",
+        default="以科學文獻為基礎的骨科健康知識平台，提供骨骼健康、關節保護與骨科治療的專業內容。",
         alias="SITE_DESCRIPTION",
     )
 
