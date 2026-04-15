@@ -624,13 +624,6 @@ def _inject_cta_blocks(
             if isinstance(value, str) and value.startswith(("http://", "https://")):
                 destination_url = value.strip()
                 break
-    if not destination_url and ctx.brand_url.startswith(("http://", "https://")):
-        destination_url = ctx.brand_url.rstrip("/")
-        tpl = {
-            "heading": "前往官方網站",
-            "text": "若想了解更多品牌資訊與服務內容，可直接前往官方網站查看。",
-            "link_text": "造訪官方網站",
-        }
     if not destination_url:
         return content_markdown
 
