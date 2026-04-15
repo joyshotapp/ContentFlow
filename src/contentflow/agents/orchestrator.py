@@ -635,6 +635,14 @@ async def run_orchestrator(
         task.draft = draft
         task.status = draft.status
         _add_internal_links(draft, task, ctx)
+        # Hero image 生成（best-effort，失敗不阻塞文章儲存）
+        try:
+            from .hero_image_agent import run_hero_image_agent
+            draft = await run_hero_image_agent(draft, article_type)
+            task.draft = draft
+            logger.info(f"[Orchestrator] Hero image: {draft.hero_image_url or '未生成'}")
+        except Exception as _hi_err:
+            logger.warning(f"[Orchestrator] Hero image 生成失敗（不影響文章）：{_hi_err}")
     else:
         task.status = ArticleStatus.ERROR
 

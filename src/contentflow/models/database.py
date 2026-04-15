@@ -197,6 +197,7 @@ class Article(Base):
     target_word_count = Column(Integer, nullable=True)       # Phase 3 任務定義的目標字數
     wp_post_id = Column(String, default="")         # WordPress post ID
     forgebase_id = Column(String, default="")       # ForgeBase page ID
+    hero_image_url = Column(String, default="")     # AI 生成 Hero 圖片（Cloudflare R2 URL）
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))

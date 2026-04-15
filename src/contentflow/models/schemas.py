@@ -119,6 +119,7 @@ class ArticleDraft(BaseModel):
     internal_link_suggestions: list[dict] = Field(default_factory=list)  # 內部連結建議
     fact_check_items: list[FactCheckItem] = Field(default_factory=list)
     image_prompts: list[str] = Field(default_factory=list)
+    hero_image_url: str = ""             # AI 生成 Hero 圖片（Cloudflare R2 URL）
     status: ArticleStatus = ArticleStatus.WRITING
     seo_score: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

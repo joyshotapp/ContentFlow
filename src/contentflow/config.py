@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     # LLM
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+
+    # Cloudflare R2
+    r2_access_key_id: str = Field(default="", alias="R2_ACCESS_KEY_ID")
+    r2_secret_access_key: str = Field(default="", alias="R2_SECRET_ACCESS_KEY")
+    r2_endpoint_url: str = Field(default="", alias="R2_ENDPOINT_URL")
+    r2_bucket_name: str = Field(default="contentflow-images", alias="R2_BUCKET_NAME")
+    r2_public_url: str = Field(default="", alias="R2_PUBLIC_URL")
     llm_writing_model: str = Field(default="claude-sonnet-4-5", alias="LLM_WRITING_MODEL")
     llm_lite_model: str = Field(default="gpt-4o-mini", alias="LLM_LITE_MODEL")
     llm_seo_qa_max_completion_tokens: int = Field(
