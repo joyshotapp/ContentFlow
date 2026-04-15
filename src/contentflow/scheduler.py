@@ -549,20 +549,48 @@ async def run_auto_pipeline() -> None:
 @with_retry(max_retries=1)
 async def run_weekly_reflection() -> None:
     """每週日 08:00 — 週級反思：L1/L2 跨文章學習，更新知識庫與寫作規範。"""
+    import httpx
     from contentflow.models.database import Project
     from contentflow.agents.reflective_agent import reflect_weekly
 
     with SessionLocal() as session:
         project_ids = [p.id for p in session.query(Project).all()]
 
+    total_wr_updates = 0
+    total_kb_updates = 0
+    failed_projects = []
+
     for project_id in project_ids:
         try:
-            await reflect_weekly(project_id)
-            logger.info(f"[WeeklyReflection] project={project_id} 完成")
+            log = await reflect_weekly(project_id)
+            if log:
+                total_wr_updates += log.writing_rule_updates or 0
+                total_kb_updates += log.knowledge_updates or 0
+            logger.info(f"[WeeklyReflection] project={project_id} 完成 WR+{log.writing_rule_updates if log else 0}")
         except Exception as exc:
             logger.warning(f"[WeeklyReflection] project={project_id} 失敗：{exc}")
+            failed_projects.append(project_id)
 
-    logger.info("[WeeklyReflection] 全部專案週級反思完成")
+    logger.info(
+        f"[WeeklyReflection] 全部完成 WR+{total_wr_updates} KB+{total_kb_updates}"
+        f" 失敗專案={failed_projects}"
+    )
+
+    # ── WritingRule 更新觀察：若本週完全無規範更新，發 Slack 警告 ──
+    slack_url = getattr(settings, "slack_webhook_url", None)
+    if slack_url and total_wr_updates == 0 and project_ids:
+        try:
+            msg = (
+                "⚠️ *[ContentFlow 學習閉環警告]*\n"
+                "本週週級反思完成，但 *0 條寫作規範* 被更新。\n"
+                "可能原因：LLM 反思未輸出 `writing_rule_updates` 陣列，或反思品質不足。\n"
+                f"請至 <{settings.admin_url}/admin/reflections|反思日誌> 確認 prompt 輸出。"
+            )
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(slack_url, json={"text": msg})
+            logger.warning("[WeeklyReflection] WritingRule 0 更新 — Slack 警告已發送")
+        except Exception as e:
+            logger.error(f"[WeeklyReflection] Slack 警告發送失敗：{e}")
 
 
 @with_retry(max_retries=1)
@@ -601,6 +629,14 @@ async def send_weekly_report() -> None:
         planned_count = session.query(Article).filter(Article.status == "planned").count()
         writing_count = session.query(Article).filter(Article.status == "writing").count()
 
+        # 本週反思 WritingRule 更新計數
+        from contentflow.models.database import ReflectionLog
+        wr_total = (
+            session.query(func.sum(ReflectionLog.writing_rule_updates))
+            .filter(ReflectionLog.created_at >= week_ago)
+            .scalar()
+        ) or 0
+
     report_lines = [
         f"*📊 ContentFlow 週報 — {now.strftime('%Y/%m/%d')}*",
         "",
@@ -609,6 +645,7 @@ async def send_weekly_report() -> None:
         f"• GSC 曝光數（7天）：*{total_imp:,}*",
         f"• 平均排名：*{avg_pos or '—'}*",
         f"• 待撰寫：{writing_count} 篇 | 待規劃：{planned_count} 篇",
+        f"• 寫作規範本週更新：*{wr_total}* 條{'  ⚠️ 學習閉環無更新' if wr_total == 0 else ''}",
         "",
         f"🔗 <{settings.admin_url}/admin/reports|查看完整報告>",
     ]
