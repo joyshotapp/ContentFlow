@@ -1,8 +1,15 @@
 # ContentFlow AI
 
-> SEO 文章全自動化 Agent 系統
+> SEO 自主優化閉環系統（Autonomous SEO Optimization Loop）
 
-ContentFlow AI 將「選題 → 學術研究 → 撰文 → SEO 審查 → 事實查核」整合為一條全自動 Pipeline，讓內容團隊從重複性產製工作中解放出來，專注於品牌策略與人工審閱。
+ContentFlow AI 是一套**全自動 SEO 閉環系統**，整合 AI 策略決策、內容生產、自動發布、數據回饋與持續學習，形成完整的自我優化迴路，無需人工介入即可持續提升搜尋排名。
+
+**核心閉環流程：**
+```
+資料分析（GSC/GA4）→ 策略規劃 → 研究 → 寫作 → SEO 審查 → 事實查核 → 自動發布
+       ↑                                                                    │
+       └────────── 學習反思（排名回饋 → 知識庫 → 下一輪優化）─────────────────┘
+```
 
 ---
 
@@ -29,9 +36,11 @@ ContentFlow AI 將「選題 → 學術研究 → 撰文 → SEO 審查 → 事�
 |------|---------|------|
 | Python | 3.11 | 建議使用 3.12+ |
 | 作業系統 | Windows 10 / macOS 12 / Ubuntu 20.04 | |
-| OpenAI API Key | — | GPT-4o-mini，主力推理用 |
-| Anthropic API Key | — | Claude Sonnet，文章撰寫用（可選） |
-| SerpAPI 或 Serper.dev Key | — | SERP 競品分析用（擇一） |
+| OpenAI API Key | — | GPT-4o-mini，研究/策略/SEO QA 用 |
+| Anthropic API Key | — | Claude Sonnet，文章撰寫用（可選，可 fallback 至 OpenAI）|
+| SerpAPI 或 Serper.dev Key | — | SERP 競品分析用（擇一）|
+| Google Service Account | — | GSC 排名同步 + GA4 頁面指標（可選）|
+| PostgreSQL | 14+ | 正式環境必備；開發可用 SQLite |
 
 ---
 
@@ -70,21 +79,25 @@ cp .env.example .env
 
 詳細說明見 [環境變數說明](#環境變數說明)。
 
-### 4. 初始化資料庫
+### 4. 啟動服務（Docker Compose 推薦）
 
 ```bash
-python scripts/verify_db.py
+docker-compose up -d
 ```
 
-執行後會在 `data/contentflow.db` 建立 SQLite 資料庫並確認所有資料表存在。
+服務啟動後：
+- **Admin 後台**：`http://localhost:8000/admin`（密碼：`API_SECRET_KEY`）
+- **Public 站台**：`http://localhost:8000/`
 
-### 5. （可選）匯入初始資料
+PostgreSQL 資料庫由 Docker Compose 自動建立，Alembic migrations 在容器啟動時自動執行。
 
-將關鍵字、寫作規範、產品資料等整理為 Excel 後，透過 Streamlit UI 的「設定」頁面匯入，或執行：
+### 4b. 本地開發（不使用 Docker）
 
 ```bash
-# 驗證 DB 健康狀態
-python scripts/verify_db.py
+source .venv/bin/activate
+pip install -e ".[dev]"
+# 確保 DATABASE_URL 指向本地 PostgreSQL 或 SQLite
+uvicorn contentflow.api:app --reload --port 8000
 ```
 
 ---
@@ -94,39 +107,73 @@ python scripts/verify_db.py
 在專案根目錄建立 `.env` 檔案（參考以下範本）：
 
 ```dotenv
-# ── LLM 金鑰 ──────────────────────────────────────────
+# ── LLM 金鑰（必填）────────────────────────────────────
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_API_KEY=...             # Hero Image 生圖（google-generativeai）
 
-# ── 搜尋 API（擇一填入）──────────────────────────────
-SERPAPI_KEY=...          # https://serpapi.com
-SERPER_API_KEY=...       # https://serper.dev（較便宜）
+# ── 搜尋 API（擇一填入）─────────────────────────────────
+SERPAPI_KEY=...                # https://serpapi.com
+SERPER_API_KEY=...             # https://serper.dev（較便宜）
 
-# ── 資料庫 ─────────────────────────────────────────────
-# 預設使用 SQLite，不需更改；切換 PostgreSQL 時填入完整 URL
-DATABASE_URL=sqlite:///data/contentflow.db
+# ── DataForSEO（排名追蹤 / SERP 補充，可選）──────────────
+DATAFORSEO_LOGIN=...
+DATAFORSEO_PASSWORD=...
+
+# ── 資料庫（正式環境必填）──────────────────────────────
+DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/contentflow
+# 本地 SQLite 開發：sqlite+aiosqlite:///data/contentflow.db
+
+# ── Google Service Account（GSC + Google Indexing API）──
+GOOGLE_SERVICE_ACCOUNT_FILE=/app/creds/google_service_account.json
+
+# ── Google Analytics 4 ─────────────────────────────────
+GA4_PROPERTY_ID=properties/XXXXXXXXX
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX
+
+# ── Cloudflare R2（Hero Image 上傳）──────────────────────
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
+R2_BUCKET_NAME=contentflow-images
+R2_PUBLIC_URL=https://images.yourdomain.com
+
+# ── ForgeBase / Headless CMS（自動發布）──────────────────
+FORGEBASE_API_BASE_URL=https://api.forgebase.io
+FORGEBASE_API_KEY=...
+FORGEBASE_SITE_ID=...
+
+# ── WordPress（自動發布）────────────────────────────────
+WORDPRESS_SITE_URL=https://yourdomain.com
+WORDPRESS_USERNAME=...
+WORDPRESS_APP_PASSWORD=...
+
+# ── PubMed NCBI API（學術文獻查詢）──────────────────────
+NCBI_API_KEY=...
+NCBI_EMAIL=your@email.com
+
+# ── ChromaDB 知識庫 ─────────────────────────────────────
+CHROMA_PERSIST_DIR=/app/data/chroma
 
 # ── LLM 模型選擇（可選，有預設值）──────────────────────
 LLM_LITE_MODEL=gpt-4o-mini          # 研究/策略/SEO QA 使用
 LLM_WRITING_MODEL=claude-sonnet-4-5 # 文章撰寫使用
 
-# ── Token 上限（可選，有預設值）─────────────────────────
+# ── 行為控制（可選）────────────────────────────────────
 LLM_SEO_QA_MAX_COMPLETION_TOKENS=4096
 MAX_ARTICLES_PER_RUN=5
 STRATEGIC_DAILY_GENERATE_LIMIT=5
+SCHEDULER_ENABLED=true
+SCHEDULER_TIMEZONE=Asia/Taipei
 
 # ── 後台 / 對外站點（建議正式環境設定）────────────────────
-API_SECRET_KEY=change-me
-ADMIN_URL=http://localhost:8000
-SITE_URL=http://localhost:8000/site
+API_SECRET_KEY=change-me-to-strong-secret
+ADMIN_URL=https://yourdomain.com
+SITE_URL=https://yourdomain.com
 
-# ── WordPress（尚未實作，留空即可）─────────────────────
-WORDPRESS_SITE_URL=
-WORDPRESS_USERNAME=
-WORDPRESS_APP_PASSWORD=
-
-# ── Google Sheets（尚未實作，留空即可）──────────────────
-GOOGLE_SHEETS_SCHEDULE_ID=
+# ── 監控 / 通知（可選）─────────────────────────────────
+AGENTOPS_API_KEY=...           # LLM 用量追蹤
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...  # 週報通知
 ```
 
 > **注意**：`.env` 檔案不應提交至 git。請確認 `.gitignore` 已包含 `.env`。
@@ -135,59 +182,69 @@ GOOGLE_SHEETS_SCHEDULE_ID=
 
 ## 啟動應用程式
 
+### 正式環境（Docker Compose — 推薦）
+
 ```bash
-# 確認已啟動 venv
-streamlit run app/Home.py
+# 複製設定檔
+cp .env.example .env
+# 填入 API 金鑰後啟動
+docker-compose up -d
 ```
 
-瀏覽器會自動開啟 `http://localhost:8501`。
+服務啟動後：
+- Admin 後台：`http://localhost:8000/admin`（登入密碼：`API_SECRET_KEY`）
+- Public 站台：`http://localhost:8000/`
 
-**頁面說明：**
+### 本地開發環境
 
-| 頁面 | 功能 |
-|------|------|
-| 🏠 Home | KPI 儀表板、文章狀態圓餅圖、內容日曆甘特圖、關鍵字 Top 10 |
-| 📝 文章管理 | 文章列表、狀態篩選、草稿內容查看與手動編輯 |
-| 🔑 關鍵字 | 關鍵字資料庫、搜尋量、CPC、優先度 |
-| 📅 內容日曆 | 月/週度內容排程規劃 |
-| 📜 撰寫規範 | 品牌寫作原則、禁止用語、語氣設定 |
-| 🏢 競品分析 | 競業市場研究與分析紀錄 |
-| 📦 產品資訊 | 產品系列、成分、適用症狀 |
-| ⚖️ 法規合規 | 食品廣告法規用詞（允許/禁止/注意）|
-| 🔬 AI 研究 | **主要操作入口** — 啟動 Pipeline、查看研究報告、SEO 評分、事實查核 |
-| ⚙️ 設定 | Excel 匯入、API 連線狀態、DB 統計 |
+```bash
+source .venv/bin/activate
+uvicorn contentflow.api:app --reload --port 8000
+```
+
+**Admin 後台頁面說明：**
+
+| 頁面路由 | 功能 |
+|---------|------|
+| `/admin` | KPI 儀表板、文章統計、快速操作入口 |
+| `/admin/articles` | 文章管理、狀態篩選、手動觸發 Pipeline |
+| `/admin/agents` | Agent Pipeline 執行紀錄、費用分析 |
+| `/admin/keywords` | 關鍵字庫、AI 挖掘、批次匯入 |
+| `/admin/calendar` | 月/週度內容排程規劃 |
+| `/admin/clusters` | Topic Cluster 主題叢集管理 |
+| `/admin/seo` | GSC 排名趨勢、關鍵字等級分布、機會詞 |
+| `/admin/content-health` | 關鍵字自蝕偵測、Refresh 待辦 |
+| `/admin/tech-seo` | Core Web Vitals、GA4 頁面指標 |
+| `/admin/knowledge` | 知識庫管理（AI 學習成果）|
+| `/admin/reports` | 週報/月報/季報中心 |
+| `/admin/scheduler` | 排程任務監控與手動觸發 |
+| `/admin/pipeline-runs` | Pipeline 執行歷史 |
+| `/admin/strategic-plans` | Strategic Agent 決策紀錄 |
+| `/admin/reflections` | 週反思學習日誌 |
+| `/admin/settings` | 專案設定、API 狀態、自動發布規則 |
+| `/admin/health` | 系統健康檢查 |
 
 ---
 
 ## SEO 閉環與後台
 
-除了 Streamlit 介面之外，系統也內建 FastAPI 後台與對外 SEO 驗證站點。
+系統由 FastAPI 驅動，分為三層：
 
-- Admin 後台入口：`/admin`
-- Public reference site：`/site`，正式部署時可直接掛在主網域
-- Admin 登入密碼：使用 `API_SECRET_KEY`；若未設定，開發環境 fallback 為 `admin`
+- **Admin 後台** `/admin`：完整管理介面，含 AI Pipeline 觸發、排程監控、SEO 報表
+- **Public Reference Site** `/`：SEO 驗證前端，支援 JSON-LD schema、BreadcrumbList、TOC、FAQ 手風琴、E-E-A-T 信號
+- **Scheduler**：APScheduler 驅動 15 個排程任務（GSC/GA4 同步、策略分析、自動發布、反思學習等）
 
-Public site 與 Admin 後台目前都不再依賴 Tailwind CDN。樣式由以下檔案在建置時產出：
+管理員登入：`API_SECRET_KEY`；未設定時開發 fallback 為 `admin`
 
-- `tailwind.site.config.js`
-- `src/contentflow/site/static/css/site.input.css`
-- `src/contentflow/admin/static/css/admin.input.css`
-- 輸出檔：`src/contentflow/site/static/css/site.css`
-- 輸出檔：`src/contentflow/admin/static/css/admin.css`
-
-正式部署站台時，`deploy/Dockerfile.site` 會先編譯 site/admin CSS，再把靜態檔打包進 image。`src/contentflow/site/static/og-default.png` 也作為文章頁 fallback og:image 使用。
-
-Technical SEO 監控中的 PageSpeed Insights 呼叫若遇到 Google API rate limit（HTTP 429），系統會將結果標記為 `rate_limited` 並回傳中性分數，不會把整個技術 SEO 流程視為 hard failure。
+**自動發布機制**：每個 Project 可獨立設定 `auto_publish_enabled` 與 `auto_publish_min_score`（預設 85 分）。Pipeline 完成後若分數達標，系統自動發布至 WordPress 或 ForgeBase，並呼叫 Google Indexing API 主動請求收錄。
 
 ### 目前實際部署現況
 
-以下是目前已在正式環境驗證過的狀態，和程式功能描述分開列出，方便快速對照現況：
-
 - 公網主站已部署在 `https://goodbone.com.tw/`
-- Admin 後台可從 `https://goodbone.com.tw/admin` 登入與操作
-- Public site 與 Admin 後台都使用本地編譯的靜態 CSS，不再依賴 Tailwind CDN
-- Scheduler 頁面的任務觸發已實測可用，包含 `backfill_action_outcomes`
-- 技術 SEO 的 PageSpeed 429 會被降級處理，不會中斷整體檢查流程
+- Admin 後台：`https://goodbone.com.tw/admin`
+- 資料庫：PostgreSQL 16（Docker）
+- Scheduler：已啟用，共 15 個排程任務
+- 自動發布：Project id=2「好骨科診所」已啟用，最低分數 85 分
 
 ---
 
@@ -257,113 +314,159 @@ ContentFlow/
 ├── .env                         # 本地環境變數（不提交 git）
 ├── .env.example                 # 環境變數範本
 ├── pyproject.toml               # 套件設定、依賴宣告、工具設定
+├── docker-compose.yml           # 正式環境容器編排（site + db）
+├── Dockerfile                   # 主服務映像
 ├── SYSTEM_OVERVIEW.md           # 進階系統技術文件
 │
-├── app/                         # Streamlit 前端
-│   ├── Home.py                  # 首頁儀表板
-│   ├── project_selector.py      # 全域 Sidebar 專案切換元件
-│   └── pages/                   # Streamlit 多頁面（依此順序顯示）
-│       ├── 1_📝_文章管理.py
-│       ├── 2_🔑_關鍵字.py
-│       ├── 3_📅_內容日曆.py
-│       ├── 4_📜_撰寫規範.py
-│       ├── 5_🏢_競品分析.py
-│       ├── 6_📦_產品資訊.py
-│       ├── 7_⚖️_法規合規.py
-│       ├── 8_🔬_AI研究.py       # 主操作入口
-│       └── 9_⚙️_設定.py
+├── app/                         # Streamlit 輔助介面（非主要入口）
+│   ├── Home.py
+│   └── pages/
 │
 ├── src/contentflow/             # 核心套件
 │   ├── config.py                # 全域設定（pydantic-settings，讀取 .env）
 │   ├── db.py                    # DB 引擎、Session、自動 schema 補丁
+│   ├── api.py                   # FastAPI 主應用（掛載 site + admin）
+│   ├── scheduler.py             # APScheduler — 15 個排程任務
 │   ├── project_context.py       # 載入品牌資訊並注入 Agent prompt
+│   ├── llm_client.py            # 多 Provider LLM（OpenAI → Anthropic failover）
 │   ├── cli.py                   # CLI 入口（contentflow 指令）
 │   │
 │   ├── agents/                  # 各 Agent 模組
-│   │   ├── orchestrator.py      # Pipeline 統一協調（呼叫以下各 agent）
+│   │   ├── orchestrator.py      # LangGraph StateGraph Pipeline 協調
 │   │   ├── research_agent.py    # SERP + PubMed → ResearchReport
 │   │   ├── strategy_agent.py    # SEO 策略分析 → StrategyReport
 │   │   ├── writing_agent.py     # 三階段撰文（大綱→段落→完整稿）
-│   │   ├── seo_qa_agent.py      # SEO LLM 微調（meta / 開頭段落）
 │   │   ├── seo_check_agent.py   # SEO 規則引擎評分（零 LLM 成本）
+│   │   ├── seo_qa_agent.py      # SEO LLM 微調（meta / 開頭段落）
 │   │   ├── factcheck_agent.py   # 事實查核 + 禁用詞比對
-│   │   └── image_agent.py       # 配圖 Prompt + DALL-E（預設關閉）
+│   │   ├── budget_guard.py      # 預算守門（LLM 呼叫次數 + 金額上限）
+│   │   ├── image_agent.py       # 配圖 Prompt + Alt Text + SEO 檔名
+│   │   ├── hero_image_agent.py  # Gemini 生成 Hero Banner → 上傳 R2
+│   │   ├── strategic_agent.py   # 每日策略決策（動態配額 + 自動觸發 Pipeline）
+│   │   ├── refresh_agent.py     # 舊文更新 Pipeline（分析 + 改寫 + 重新發布）
+│   │   ├── reflective_agent.py  # 文章完成後反思 → 更新知識庫 + 寫作規範
+│   │   ├── learning_agent.py    # L1/L2 週期學習（模式統計 + ROI 分析）
+│   │   ├── analytics_agent.py   # 排名歸因分析、關鍵字自蝕偵測、Refresh 觸發判斷
+│   │   ├── cluster_agent.py     # Topic Cluster 建置、缺口偵測
+│   │   └── planning_agent.py    # 基於數據的內容計畫推薦
 │   │
 │   ├── models/
-│   │   ├── database.py          # SQLAlchemy ORM（15 張資料表）
+│   │   ├── database.py          # SQLAlchemy ORM（25+ 張資料表）
 │   │   └── schemas.py           # Pydantic Schema（Agent I/O 驗證）
 │   │
 │   ├── tools/
-│   │   ├── serp.py              # Google SERP 搜尋工具
-│   │   ├── pubmed.py            # PubMed E-utilities 工具
-│   │   ├── keyword.py           # 關鍵字工具
-│   │   └── excel_importer.py    # Excel → SQLite 匯入
+│   │   ├── serp.py              # Google SERP（SerpAPI / Serper.dev + Google Trends + DataForSEO）
+│   │   ├── pubmed.py            # PubMed E-utilities 學術文獻查詢
+│   │   ├── gsc.py               # Google Search Console Data API
+│   │   ├── ga4.py               # Google Analytics 4 Data API
+│   │   ├── tech_seo.py          # Core Web Vitals + robots/sitemap 檢查
+│   │   ├── render_verify.py     # 前台 Render 驗證（检查實際渲染輸出）
+│   │   ├── knowledge_base.py    # ChromaDB 向量知識庫（embedding 搜尋）
+│   │   ├── keyword.py           # 關鍵字提取工具
+│   │   └── excel_importer.py    # Excel → DB 批次匯入
 │   │
-│   └── utils/
-│       └── report_renderer.py   # 研究報告 → Markdown 渲染
+│   ├── publishers/
+│   │   ├── wordpress.py         # WordPress REST API 自動發布
+│   │   └── forgebase.py         # ForgeBase API 自動發布
+│   │
+│   ├── admin/
+│   │   └── app.py               # FastAPI Admin 後台（3100+ 行，含全部路由）
+│   │
+│   └── site/
+│       └── app.py               # Public Reference Site（SEO 驗證前端）
 │
+├── migrations/                  # Alembic 資料庫遷移
 ├── scripts/
 │   ├── run_article_pipeline.py  # 完整 Pipeline CLI 腳本
 │   ├── migrate_add_projects.py  # 資料庫遷移腳本
+│   ├── migrate_sqlite_to_pg.py  # SQLite → PostgreSQL 遷移
 │   └── verify_db.py             # DB 健康檢查
 │
-├── data/
-│   ├── contentflow.db           # SQLite 資料庫（自動建立，不提交 git）
-│   └── templates/
-│       └── research_report_template.md
-│
-└── tests/                       # pytest 測試套件
+└── tests/                       # pytest 測試套件（126 個測試）
 ```
 
 ---
 
 ## Agent Pipeline 說明
 
-一篇文章從無到成稿，經過以下五個步驟：
+一篇文章從無到發布，經過以下步驟（由 LangGraph StateGraph 協調）：
 
 ```
-用戶觸發（UI 或 CLI）
+用戶觸發 / Scheduler 自動觸發
        │
        ▼
  [Step 1] Research Agent
-   ├── SERP API → 競品前 10 篇文章結構
-   ├── PubMed API → 學術文獻（依產業自動判斷是否啟用）
-   └── GPT-4o-mini → 彙整 ResearchReport
+   ├── SERP API → 競品前 10 篇文章結構 + PAA + 相關搜尋
+   ├── PubMed API → 學術文獻（健康/醫療類專案自動啟用）
+   └── GPT-4o-mini → 彙整 ResearchReport + 建議關鍵字
        │
        ▼
  [Step 2] Strategy Agent
-   └── GPT-4o-mini → 搜尋意圖 / 讀者痛點 / 文章架構建議 / FAQ
+   └── GPT-4o-mini + 知識庫（ChromaDB）→ 搜尋意圖 / 讀者痛點 / 架構 / FAQ 建議
        │
        ▼
  [Step 3] Writing Agent
-   └── Claude Sonnet（可設定）→ 大綱 → 段落 → 完整 Markdown
+   └── Claude Sonnet（或 OpenAI fallback）→ 大綱 → 段落 → 完整 Markdown
+       含：FAQ schema / HowTo schema / Article schema JSON-LD
        │
        ▼
- [Step 4] SEO Check + SEO QA Agent
+ [Step 4] SEO Check + SEO QA（最多 3 次迴圈）
    ├── SEO Check（純規則引擎，零 LLM 成本）→ 評分 + 缺失清單
-   └── SEO QA（LLM）→ 針對缺失微調 → 重新評分確認
+   └── SEO QA（LLM）→ 針對缺失微調 → 重新評分
+       分數 ≥ 85 → PASS；< 85 + 重試 < 3 → RETRY；≥ 3 次 → FORCE_OUTPUT
        │
        ▼
  [Step 5] FactCheck Agent
-   └── GPT-4o-mini → 禁用詞比對 + 事實核對 → FactCheckItem[]
+   └── 禁用詞比對（product 模式嚴格；educational 模式降級處理）
+       └── GPT-4o-mini 對照 PubMed 摘要核實聲明
        │
        ▼
-   存入 SQLite（draft_content + seo_score + factcheck_flags）
+ [Step 6] Budget Guard
+   └── 檢查 LLM 呼叫次數（≤15）+ 金額（≤$2.00）
+       超限時標記 _budget_exceeded=True，但保留草稿不棄稿
        │
        ▼
-   Streamlit UI 人工審閱 → 發布
+ [Step 7] 最佳努力後處理（Pipeline 主流程完成後非同步執行）
+   ├── Hero Image Agent → Gemini 生圖 → 上傳 Cloudflare R2
+   ├── Image Agent → 各段落配圖 Prompt + Alt Text + WebP 檔名
+   └── 站內連結建議（比對同站已發布文章）
+       │
+       ▼
+ [Step 8] 反思學習（fire-and-forget，不阻塞主流程）
+   └── Reflective Agent → 分析本次產出 → 更新知識庫 + 寫作規範
+       │
+       ▼
+   存入 DB（draft_content + seo_score + factcheck_flags + schemas）
+       │
+       ▼
+   ┌─ 自動發布（seo_score ≥ auto_publish_min_score）→ WordPress / ForgeBase
+   │       └── Google Indexing API 主動送交收錄
+   └─ 人工審閱（Admin 後台）→ 手動發布
 ```
 
-**專案上下文注入**：每個 Agent 在呼叫 LLM 前，都會透過 `project_context.py` 載入該專案的品牌名稱、撰寫原則、法規詞庫等，確保輸出符合品牌調性。
+### Scheduler 排程任務（共 15 個）
 
-**Strategic Agent 動態產能控制**：每日自動管線仍固定排程執行，但「今天要產出幾篇」不再是寫死常數。系統會根據以下訊號先算出當日 generate quota，再由 LLM 計畫與 fallback 規則共同服從這個 quota：
+| 任務 | 排程 | 說明 |
+|------|------|------|
+| `sync_gsc_all_projects` | 每日 03:00 | 同步 Google Search Console 排名 |
+| `sync_ga4_all_projects` | 每日 03:30 | 同步 GA4 頁面指標（含分頁，上限 500 筆）|
+| `sync_keyword_trends` | 每月 1 號 03:45 | 更新關鍵字 Google Trends 熱度分數 |
+| `backfill_action_outcomes` | 每日 04:00 | 歸因分析：回填文章行動成效 |
+| `check_scheduled_publishes` | 每日 04:05 | 定時發布排程文章 |
+| `run_auto_pipeline` | 每日 08:00 | Strategic Agent → 每日自動 AI Pipeline |
+| `run_render_verification` | 每日 10:00 | 驗證前台實際渲染輸出（schema/meta/cws） |
+| `run_competitor_serp_check` | 每週一 04:30 | 追蹤競品 SERP 排名 |
+| `run_attribution_engine` | 每週一 05:00 | 計算文章 ROI + 推薦行動 |
+| `check_refresh_triggers` | 每週二 04:00 | 偵測需更新的文章（排名下滑/陳舊/低 CTR）|
+| `check_ranking_drops` | 每週三 06:00 | 偵測7日內排名下滑 > 5 位的關鍵字，寫知識庫 |
+| `run_weekly_reflection` | 每週日 08:00 | 週級反思：彙整學習成果，更新寫作規範 |
+| `send_weekly_report` | 每週日 09:00 | 產出 Slack 週報摘要 |
+| `run_l1_pattern_analysis` | 每月 1 號 06:00 | L1 學習：統計高分文章格式模式 |
+| `run_l2_roi_analysis` | 每月 1 號 07:00 | L2 學習：ROI 分析，更新策略偏好 |
 
-- `content_calendar` backlog 多寡
-- 待審稿文章數量
-- `ActionOutcome` 中 generate 的近 28 天成效
-- 嚴重排名下滑帶來的 refresh 壓力
+**專案上下文注入**：每個 Agent 均透過 `project_context.py` 載入品牌名稱、撰寫原則、法規詞庫、ChromaDB 知識庫，確保輸出符合品牌調性。
 
-換句話說，系統現在會依回饋自動調整每日產能，但 scheduler 本身的執行節奏仍是固定排程，不是動態改變一天跑幾次。
+**LLM Provider Failover**：`llm_client.py` 實作三層 failover — OpenAI（主）→ Anthropic（備）→ OpenAI fallback model，任一 Provider rate limit 後自動 60 秒 cooldown 並切換。
 
 **SEO Check 評分項目（11 項規則引擎）**：
 
@@ -385,28 +488,39 @@ ContentFlow/
 
 ## 資料庫設計
 
-- 預設使用 **SQLite**，資料庫存放於 `data/contentflow.db`
+- 正式部署使用 **PostgreSQL 16**（Docker Compose 內建服務），`DATABASE_URL` 設定為 `postgresql+asyncpg://`
 - 所有資料表均有 `project_id` 欄位，支援多個品牌/客戶共用同一資料庫
-- **自動 schema 補丁**：`db.py` 在每次啟動時自動偵測缺少的欄位並執行 `ALTER TABLE`，確保向下相容
+- **Schema migrations** 由 Alembic 管理（`migrations/` 目錄）
+- 本地開發可使用 SQLite：`sqlite+aiosqlite:///data/contentflow.db`
 
-### 主要資料表
+### 主要資料表（共 25+ 張）
 
 | 資料表 | 說明 |
 |--------|------|
-| `projects` | 多租戶根節點，品牌資訊與寫作原則 |
-| `articles` | 文章主表，含完整生命週期（planned → published） |
-| `keywords` | 關鍵字庫（搜尋量、CPC、SEO 難度） |
+| `projects` | 多租戶根節點，品牌資訊、寫作原則、自動發布規則 |
+| `articles` | 文章主表，含完整生命週期（planned → draft → published）、seo_score、slug |
+| `keywords` | 關鍵字庫（搜尋量、CPC、SEO 難度、Trends 熱度、cluster 分組） |
 | `content_calendar` | 月/週度內容排程 |
-| `writing_rules` | 品牌撰寫規範 |
-| `legal_terms` | 食品廣告法規用詞 |
+| `writing_rules` | AI 學習更新的品牌撰寫規範 |
+| `legal_terms` | 食品廣告法規用詞（禁用詞 / 替換建議） |
 | `competitors` | 競品研究資料 |
-| `products` | 產品系列資料 |
-
-切換至 PostgreSQL 只需更改 `.env`：
-
-```dotenv
-DATABASE_URL=postgresql://user:password@localhost:5432/contentflow
-```
+| `competitor_snapshots` | 競品 SERP 排名快照（每週追蹤） |
+| `products` | 產品系列資料（成分、功效、禁忌） |
+| `seo_rankings` | GSC 關鍵字排名歷史（每日同步） |
+| `ga_page_metrics` | GA4 頁面指標（點擊率、工作階段、跳出率） |
+| `pipeline_runs` | Pipeline 執行紀錄（per-article，含 token 用量與費用） |
+| `agent_decision_logs` | 每個 Agent 節點的決策過程日誌（AgentDecisionLog ORM） |
+| `knowledge_entries` | ChromaDB 向量知識庫的結構化版本 |
+| `knowledge_audit_logs` | 知識庫新增/修改稽核記錄 |
+| `reflection_logs` | 週級 / post-pipeline 反思學習日誌 |
+| `strategic_plans` | Strategic Agent 每日計畫決策（quota、行動清單） |
+| `action_outcomes` | ROI 分析：行動 → 成效歸因 |
+| `scheduler_logs` | 排程任務執行記錄（成功/失敗/耗時） |
+| `topic_clusters` | Topic Cluster 主題叢集（pillar + cluster） |
+| `cluster_members` | 叢集成員（article ↔ cluster 關係） |
+| `authors` | 作者 E-E-A-T 資訊（用於 JSON-LD） |
+| `category_seos` | 分類頁 SEO 設定（title / description / schema） |
+| `changelogs` | 系統重要事件日誌 |
 
 ---
 
@@ -416,41 +530,37 @@ DATABASE_URL=postgresql://user:password@localhost:5432/contentflow
 
 ---
 
-### ⚠️ TD-01：LangGraph 引入但未實際使用
+### ✅ TD-01：LangGraph StateGraph 已實作（已解決）
 
-**現況：** `pyproject.toml` 依賴清單中已引入 `langgraph`，但 `orchestrator.py` 的 Pipeline 仍是純順序函式呼叫，與 LangGraph 的 Graph 節點架構無關。
+**解決時間：** 本 session
 
-**風險：** 若需要加入條件分支（例如：研究失敗時跳過撰文）或回退重試邏輯，目前架構無法優雅支援。
+**現況：** `orchestrator.py` 已完整使用 `StateGraph`，Pipeline 共 7 個節點（research → strategy → write → seo_check → seo_qa → factcheck → budget_guard），SEO QA 條件邊實作 ≤3 次重試邏輯，Budget Guard 在費用超限時保護系統但不棄稿。完整支援條件分支、回退重試與狀態共享。
 
-**建議做法：** 將 `orchestrator.py` 重構為 `StateGraph`，每個 Agent 為一個節點，失敗條件觸發特定邊（edge）。參考：[LangGraph 官方文件](https://langchain-ai.github.io/langgraph/)
-
-**影響評估：** 中高。需完整重寫 `orchestrator.py` 並同步更新相關測試 `test_orchestrator.py`。
+**此項技術債已解決，無需進一步行動。**
 
 ---
 
-### ⚠️ TD-02：同步 SQLAlchemy Session 與非同步 Agent 並存
+### ⚠️ TD-02：部分非同步 DB Session 尚未統一
 
-**現況：** `db.py` 中的 `get_db()` 回傳同步 `Session`，而所有 Agent 函式均為 `async def`。Streamlit 頁面透過同步方式存取 DB，Agent 呼叫時以 `asyncio.run()` 或 await 驅動。
+**現況：** `db.py` 核心已遷移至 `AsyncSession` + `asyncpg`（PostgreSQL）；`async_sessionmaker` 供 API / Agent 使用。但 `app/` 目錄下的 Streamlit 頁面仍部分使用舊同步介面，透過 `asyncio.run()` 橋接。
 
-**風險：** 高並發情境下同步 Session 會阻塞事件迴圈，導致效能瓶頸。目前單機低並發下無明顯問題。
+**風險：** Streamlit 側尚未完整清除的同步橋接若在高並發下執行，可能阻塞事件迴圈。目前 Streamlit 作為輔助工具使用，與 FastAPI 隔離執行，風險可控。
 
-**建議做法：** 遷移至 `AsyncSession` + `aiosqlite`（SQLite）或 `asyncpg`（PostgreSQL）。`db.py` 需改為 `async_sessionmaker`。
+**建議做法：** 若 Streamlit 的使用比重增加，逐步將 `app/pages/*.py` 改為呼叫 FastAPI REST API，而非直接存取 DB。
 
-**影響評估：** 高。需改動 `db.py`、所有使用 `get_db()` 的頁面，以及 Agent 內部的 DB 操作。
+**影響評估：** 中。FastAPI 側已無問題，僅 Streamlit 頁面需後續清理。
 
 ---
 
-### ⚠️ TD-03：WordPress / Google Sheets 整合未實作
+### ✅ TD-03：WordPress 自動發布已實作（已解決）
 
-**現況：** `config.py` 中已定義 `WORDPRESS_SITE_URL`、`WORDPRESS_USERNAME`、`WORDPRESS_APP_PASSWORD`、`GOOGLE_SHEETS_SCHEDULE_ID` 等設定欄位，且 `pyproject.toml` 已引入 Google API 相關套件，但沒有任何程式碼實作對應功能。
+**解決時間：** 本 session
 
-**風險：** 設定欄位存在但無對應功能，容易讓接手工程師誤以為功能已完成。
+**現況：** `publishers/wordpress.py` 已完整實作 WordPress REST API 發布（`POST /wp/v2/posts`），含 Retry、Auth Header 設定、slug/categories 支援，並接入 Google Indexing API 主動送交收錄。`orchestrator.py` 在 Pipeline 完成且 `seo_score ≥ auto_publish_min_score` 時自動觸發。
 
-**建議做法：**
-- WordPress：透過 [WordPress REST API](https://developer.wordpress.org/rest-api/) 實作 `POST /wp/v2/posts`，在文章審閱通過後自動發布。
-- Google Sheets：透過 `google-api-python-client` 讀寫 `GOOGLE_SHEETS_SCHEDULE_ID` 指定的試算表，作為內容日曆的資料來源。
+**尚未實作：** Google Sheets 整合（Google Sheets 作為資料來源的需求已於 content_calendar DB 表取代，此需求已降低優先度）。
 
-**影響評估：** 中。屬於新增功能，不影響現有 Pipeline。需新增 `tools/wordpress.py`、`tools/google_sheets.py` 並整合至 UI。
+**此項技術債（WordPress 部分）已解決。Google Sheets 整合已降低優先度，可視情況移除此 TD。**
 
 ---
 
@@ -470,22 +580,13 @@ DATABASE_URL=postgresql://user:password@localhost:5432/contentflow
 
 ---
 
-### ⚠️ TD-05：SQLite 不適合多用戶正式部署
+### ✅ TD-05：PostgreSQL 正式部署已完成（已解決）
 
-**現況：** 預設資料庫為 `data/contentflow.db`（SQLite），適合單機開發與小型內部使用。
+**解決時間：** 本 session
 
-**風險：** SQLite 在多個 writer 同時寫入時會發生 locked 錯誤。若多名編輯同時使用 Streamlit UI，可能出現競態條件。此外 SQLite 不支援完整的備份/還原策略。
+**現況：** 正式部署已使用 PostgreSQL 16（Docker Compose 內建服務），`DATABASE_URL` 使用 `postgresql+asyncpg://`。Alembic 管理 schema migrations（`migrations/` 目錄）。SQLite 的 `_ensure_sqlite_columns()` 補丁已移除。
 
-**建議做法：** 正式部署改用 PostgreSQL。切換方式：
-
-```dotenv
-# .env
-DATABASE_URL=postgresql://user:password@host:5432/contentflow
-```
-
-同時需安裝 `psycopg2-binary` 或 `asyncpg`（若同步推進 TD-02）。
-
-**影響評估：** 低到中。切換 URL 即可運作（SQLAlchemy 負責抽象層），但需注意 SQLite 特有的 schema 補丁邏輯（`_ensure_sqlite_columns()`）在 PostgreSQL 需改為正式 migration 工具（如 [Alembic](https://alembic.sqlalchemy.org/)）。
+**此項技術債已解決，無需進一步行動。**
 
 ---
 
@@ -541,11 +642,14 @@ LLM_WRITING_MODEL=gpt-4o-mini
 
 ---
 
-**Q: 執行 `streamlit run app/Home.py` 後頁面空白或報錯？**
+**Q: 如何啟動服務？**
 
-1. 確認 `.env` 已建立且 `OPENAI_API_KEY` 已填入
-2. 確認已執行 `python scripts/verify_db.py` 完成 DB 初始化
-3. 確認虛擬環境已啟動（`pip install -e ".[dev]"` 已執行）
+```bash
+cp .env.example .env  # 填入金鑰
+docker-compose up -d
+```
+
+Admin 後台：`http://localhost:8000/admin`，Password = `API_SECRET_KEY` 環境變數。
 
 ---
 
@@ -557,13 +661,31 @@ LLM_WRITING_MODEL=gpt-4o-mini
 
 **Q: 如何新增一個品牌/客戶（Project）？**
 
-在 Streamlit UI 的 Home 頁面，點擊 Sidebar 的「新增專案」按鈕，填入品牌名稱與產業後儲存。所有後續資料（關鍵字、文章、規範）都會自動綁定該專案。
+在 Admin 後台 `/admin/settings` 新增專案，填入品牌名稱、產業、寫作原則。所有後續資料（關鍵字、文章、規範）自動綁定該專案。多個專案共用同一 PostgreSQL 資料庫（透過 `project_id` 隔離）。
+
+---
+
+**Q: 自動發布如何設定？**
+
+在 Admin → 設定 → 自動發布規則，設定 `auto_publish_min_score`（建議 85+）與目標 Publisher（WordPress / ForgeBase）。Pipeline 完成且 SEO 分數達標後自動發布並呼叫 Google Indexing API。
+
+---
+
+**Q: Scheduler 排程如何開啟？**
+
+`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Admin → 排程管理頁可查看所有 15 個任務的執行狀態，並可手動觸發個別任務。
 
 ---
 
 **Q: Pipeline 費用大概多少？**
 
-以 GPT-4o-mini 為主力，一篇約 1,500 字的文章（含研究、策略、SEO QA）約 **$0.02–0.05 USD**。若 Writing Agent 設定為 Claude Sonnet，寫作階段額外約 **$0.05–0.15 USD**。
+以 GPT-4o-mini 為主力，一篇約 1,500 字的文章（含研究、策略、SEO QA）約 **$0.02–0.05 USD**。若 Writing Agent 設定為 Claude Sonnet，寫作階段額外約 **$0.05–0.15 USD**。Budget Guard 設定上限為每次 Pipeline 15 次 LLM 呼叫 / $2.00，超限時保留草稿不強制棄稿。
+
+---
+
+**Q: 如何查看 AI 的學習成果？**
+
+Admin → 知識庫（`/admin/knowledge`）可查看 Reflective Agent 自動整理的寫作洞見、失敗原因分析、最佳實踐。知識庫同時以 ChromaDB 向量形式儲存，供 Strategy Agent 在規劃時自動引用。
 
 ---
 
