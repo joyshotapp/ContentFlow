@@ -562,7 +562,20 @@ async def save_article(request: Request, article_id: int):
         if "meta_description" in data:
             art.meta_description = data["meta_description"]
         if "slug" in data:
-            art.slug = data["slug"]
+            new_slug = (data["slug"] or "").strip()
+            if new_slug and new_slug != art.slug:
+                # 檢查 slug 是否已被其他文章使用
+                duplicate = db.query(Article).filter(
+                    Article.slug == new_slug,
+                    Article.id != article_id,
+                ).first()
+                if duplicate:
+                    return JSONResponse(
+                        {"ok": False, "message": f"Slug「{new_slug}」已被文章 id={duplicate.id} 使用"},
+                        status_code=409,
+                    )
+            if new_slug:
+                art.slug = new_slug
         if "title" in data:
             art.title = data["title"]
         art.updated_at = datetime.now(timezone.utc)
@@ -2078,15 +2091,14 @@ async def adopt_knowledge_as_writing_rule(request: Request, entry_id: int):
         # Check if a rule with identical content already exists
         existing = db.query(WritingRule).filter(
             WritingRule.project_id == entry.project_id,
-            WritingRule.rule_content == entry.pattern,
+            WritingRule.content == entry.pattern,
         ).first()
         if not existing:
             rule = WritingRule(
                 project_id=entry.project_id,
                 rule_type="style",
-                rule_content=entry.pattern,
-                source="knowledge_adoption",
-                is_active=True,
+                name=entry.category or "知識庫採納",
+                content=entry.pattern,
             )
             db.add(rule)
             db.add(KnowledgeAuditLog(

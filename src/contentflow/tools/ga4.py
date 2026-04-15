@@ -122,4 +122,4 @@ class GA4Client:
                 offset += row_limit
             return all_results
 
-        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+        return await asyncio.get_running_loop().run_in_executor(None, _fetch)

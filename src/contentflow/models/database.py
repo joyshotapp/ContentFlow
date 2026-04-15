@@ -383,6 +383,8 @@ class AgentDecisionLog(Base):
     metadata_json = Column(Text, default="{}")   # 額外資訊（JSON）
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    project = relationship("Project", foreign_keys=[project_id])
+
     def __repr__(self):
         return f"<AgentDecisionLog run={self.run_id[:8]} step={self.step}>"
 

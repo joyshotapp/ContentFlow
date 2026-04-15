@@ -117,7 +117,7 @@ class GSCClient:
                 start_row += row_limit
             return all_rows
 
-        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+        return await asyncio.get_running_loop().run_in_executor(None, _fetch)
 
     async def get_keyword_rankings(
         self,
@@ -161,6 +161,11 @@ class GSCClient:
 
         written = 0
         with SessionLocal() as session:
+            # 同一天的數據先刪除（避免排程重跑或重試時產生重複列）
+            session.query(SEORanking).filter(
+                SEORanking.project_id == project_id,
+                SEORanking.tracked_date == today,
+            ).delete()
             for row in rows:
                 ranking = SEORanking(
                     project_id=project_id,
