@@ -476,8 +476,20 @@ async def publish_refreshed_article(
         _url = article.publish_url or ""
         if "wp-json" in _url or re.search(r"[?&]p=\d+", _url):
             platform = "wordpress"
-        else:
+        elif (
+            settings.forgebase_api_base_url
+            and settings.forgebase_api_base_url.rstrip("/") in _url
+        ):
             platform = "forgebase"
+        else:
+            platform = "native"  # 原生 blog：只更新本地 DB
+
+    # 原生 blog：只更新本地 DB，無需推送外部 API
+    if platform == "native":
+        article.draft_content = patched_content
+        session.commit()
+        logger.info(f"[RefreshPublish] article={article.id} 原生 blog 更新 DB 成功")
+        return {"success": True, "url": article.publish_url or "", "error": None}
 
     try:
         if platform == "wordpress":

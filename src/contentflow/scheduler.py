@@ -811,6 +811,7 @@ def record_action_outcome(
         )
 
 
+@with_retry(max_retries=2)
 async def check_ranking_drops() -> None:
     """每週三 06:00 — 核心演算法更新偵測：比對排名 7天 vs 前7天，退步 ≥5 名發送 Slack 警報。
 
@@ -1126,7 +1127,7 @@ async def run_index_coverage_check() -> None:
     for project_id, brand_url in project_data:
         site_url = _to_gsc_site_url(brand_url)
         try:
-            report = monitor.get_coverage_report(site_url, start_date, end_date)
+            report = await monitor.get_coverage_report(site_url, start_date, end_date)
             if report.error:
                 logger.warning(f"[IndexCoverage] project={project_id} GSC 錯誤：{report.error}")
                 continue
