@@ -29,6 +29,7 @@ def _ensure_sqlite_columns(conn) -> None:
             "faq_schema_json": 'ALTER TABLE articles ADD COLUMN faq_schema_json TEXT DEFAULT ""',
             "article_schema_json": 'ALTER TABLE articles ADD COLUMN article_schema_json TEXT DEFAULT ""',
             "seo_score": 'ALTER TABLE articles ADD COLUMN seo_score INTEGER',
+            "old_slugs": 'ALTER TABLE articles ADD COLUMN old_slugs TEXT DEFAULT "[]"',
         },
         "seo_rankings": {
             "keyword": 'ALTER TABLE seo_rankings ADD COLUMN keyword VARCHAR DEFAULT ""',

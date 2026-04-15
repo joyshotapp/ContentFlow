@@ -643,6 +643,14 @@ async def run_orchestrator(
             logger.info(f"[Orchestrator] Hero image: {draft.hero_image_url or '未生成'}")
         except Exception as _hi_err:
             logger.warning(f"[Orchestrator] Hero image 生成失敗（不影響文章）：{_hi_err}")
+        # 段落配圖 alt text / SEO 檔名（best-effort，失敗不阻塞文章儲存）
+        try:
+            from .image_agent import run_image_agent
+            draft = await run_image_agent(draft)
+            task.draft = draft
+            logger.info(f"[Orchestrator] 段落配圖 alt text 產生完成（{len(draft.image_prompts)} 項 prompt）")
+        except Exception as _img_err:
+            logger.warning(f"[Orchestrator] 段落配圖生成失敗（不影響文章）：{_img_err}")
     else:
         task.status = ArticleStatus.ERROR
 

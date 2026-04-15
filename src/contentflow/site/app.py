@@ -352,6 +352,18 @@ async def blog_list(request: Request, db: DBDep, page: int = 1, type: str | None
 async def blog_post(slug: str, request: Request, db: DBDep):
     article = db.query(Article).filter(Article.slug == slug, Article.status == _PUBLISHED).first()
     if not article:
+        # 若反查 old_slugs（曾用過的 slug），符合則 301 永久轉址
+        import json as _json_r
+        from fastapi.responses import RedirectResponse
+        candidate = (
+            db.query(Article)
+            .filter(Article.old_slugs.contains(slug), Article.status == _PUBLISHED)
+            .first()
+        )
+        if candidate and candidate.slug:
+            old_slugs_list = _json_r.loads(candidate.old_slugs or "[]")
+            if slug in old_slugs_list:
+                return RedirectResponse(url=f"/blog/{candidate.slug}", status_code=301)
         raise HTTPException(status_code=404, detail="Article not found")
 
     content_html = _to_html(article.draft_content)

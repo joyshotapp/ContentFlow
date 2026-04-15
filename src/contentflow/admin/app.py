@@ -1620,6 +1620,15 @@ async def seo_page(request: Request, days: int = 30):
             .all()
         )
 
+        # ── Index Coverage 最新一筆 ───────────────────────────────
+        index_coverage_alerts = (
+            db.query(KnowledgeEntry)
+            .filter(KnowledgeEntry.category == "index_coverage")
+            .order_by(desc(KnowledgeEntry.created_at))
+            .limit(6)
+            .all()
+        )
+
         return templates.TemplateResponse(request, "seo.html", {
             "request": request, "page": "seo", "now": datetime.now(timezone.utc), "days": days,
             "top_keywords": enhanced_keywords, "opportunity_kws": opportunity_kws,
@@ -1637,6 +1646,7 @@ async def seo_page(request: Request, days: int = 30):
             "grade_json":        json.dumps(grade_counts),
             "cannibal_alerts":   cannibal_alerts,
             "refresh_queue":     refresh_queue,
+            "index_coverage_alerts": index_coverage_alerts,
         })
     finally:
         db.close()

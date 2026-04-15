@@ -256,6 +256,50 @@
   </div>
 </div>
 
+<!-- ── Index Coverage 卡片 ─────────────────────────────────── -->
+{% if index_coverage_alerts %}
+<div class="cf-card animate-up" style="margin-bottom:20px;">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);display:flex;align-items:center;gap:8px;">
+    <span style="font-size:16px;">🔍</span>
+    <div class="section-title">索引涵蓋分析（Index Coverage）</div>
+    <span style="font-size:11px;color:#94a3b8;margin-left:auto;">每週五自動更新</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="cf-table">
+      <thead>
+        <tr>
+          <th>摘要</th>
+          <th>已索引</th>
+          <th>未索引</th>
+          <th>新失索</th>
+          <th>偵測日期</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in index_coverage_alerts %}
+        {% set meta = item.metadata_json | default('{}') | fromjson %}
+        <tr>
+          <td style="font-size:12.5px;color:#0f172a;">{{ item.pattern }}</td>
+          <td style="font-weight:700;color:#059669;">{{ meta.total_indexed or '—' }}</td>
+          <td style="color:#ef4444;">{{ meta.total_not_indexed or '—' }}</td>
+          <td>
+            {% if item.evidence_count > 0 %}
+            <span style="background:rgba(239,68,68,0.1);color:#ef4444;font-size:11px;font-weight:700;padding:2px 8px;border-radius:9999px;">⚠️ {{ item.evidence_count }}</span>
+            {% else %}
+            <span style="color:#059669;font-size:12px;">✓ 無</span>
+            {% endif %}
+          </td>
+          <td style="color:#94a3b8;font-size:12px;">{{ item.created_at.strftime('%Y/%m/%d') if item.created_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">🔍</div><p>尚無 Index Coverage 資料</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block scripts %}

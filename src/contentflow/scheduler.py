@@ -284,6 +284,38 @@ async def run_competitor_serp_check() -> None:
                     session.commit()
                     snapshots_added += 1
 
+                    # CompetitorThreatDetector：偵測競品威脅並寫入知識庫
+                    try:
+                        from contentflow.agents.refresh_agent import CompetitorThreatDetector
+                        from contentflow.models.database import KnowledgeEntry
+                        import json as _json_ct
+                        threat_detector = CompetitorThreatDetector()
+                        threat_report = threat_detector.detect(
+                            project_id, keyword, session, brand_url=our_domain
+                        )
+                        if threat_report.threats:
+                            existing_threat = session.query(KnowledgeEntry).filter(
+                                KnowledgeEntry.project_id == project_id,
+                                KnowledgeEntry.category == "competitor_threat",
+                                KnowledgeEntry.pattern.contains(keyword),
+                            ).first()
+                            if not existing_threat:
+                                session.add(KnowledgeEntry(
+                                    project_id=project_id,
+                                    category="competitor_threat",
+                                    pattern=f"關鍵字「{keyword}」有 {len(threat_report.threats)} 個競品威脅（排名快速上升）",
+                                    evidence_count=len(threat_report.threats),
+                                    confidence_level="verified",
+                                    metadata_json=_json_ct.dumps({
+                                        "keyword": keyword,
+                                        "threats": threat_report.threats,
+                                        "defense_suggestions": threat_report.defense_suggestions,
+                                    }),
+                                ))
+                                session.commit()
+                    except Exception as _ct_err:
+                        logger.warning(f"[CompetitorSERP] CompetitorThreatDetector 失敗 kw='{keyword}'：{_ct_err}")
+
                 await asyncio.sleep(1)  # 避免 SERP API 過度請求
             except Exception as exc:
                 logger.warning(f"[CompetitorSERP] kw='{keyword}' comp='{brand_name}' 失敗：{exc}")
@@ -387,6 +419,45 @@ async def check_refresh_triggers() -> None:
                         ))
                 session.commit()
                 total_cannibal += len(pairs)
+
+                # Featured Snippet 偵測（取排名前 5 關鍵字）
+                try:
+                    from contentflow.agents.refresh_agent import FeaturedSnippetDetector
+                    from contentflow.models.database import SEORanking
+                    from sqlalchemy import func as _sqlfunc
+                    snippet_detector = FeaturedSnippetDetector()
+                    top_kws = (
+                        session.query(SEORanking.keyword)
+                        .filter(SEORanking.project_id == project_id, SEORanking.position <= 10)
+                        .group_by(SEORanking.keyword)
+                        .order_by(_sqlfunc.avg(SEORanking.position))
+                        .limit(5)
+                        .all()
+                    )
+                    for (kw,) in top_kws:
+                        threat = snippet_detector.detect(project_id, kw, session)
+                        if threat.featured_snippet_seized:
+                            existing_fs = session.query(KnowledgeEntry).filter(
+                                KnowledgeEntry.project_id == project_id,
+                                KnowledgeEntry.category == "featured_snippet_lost",
+                                KnowledgeEntry.pattern.contains(kw),
+                            ).first()
+                            if not existing_fs:
+                                import json as _json2
+                                session.add(KnowledgeEntry(
+                                    project_id=project_id,
+                                    category="featured_snippet_lost",
+                                    pattern=f"關鍵字「{kw}」的 Featured Snippet 可能被競品搶走",
+                                    evidence_count=1,
+                                    confidence_level="unverified",
+                                    metadata_json=_json2.dumps({
+                                        "keyword": kw,
+                                        "suggestions": threat.featured_snippet_suggestions,
+                                    }),
+                                ))
+                    session.commit()
+                except Exception as _fs_err:
+                    logger.warning(f"[RefreshCheck] FeaturedSnippet 偵測失敗 project={project_id}：{_fs_err}")
 
                 logger.info(f"[RefreshCheck] project={project_id}：{len(recommendations)} Refresh 建議，{len(pairs)} 自蝕偵測")
         except Exception as exc:
@@ -993,6 +1064,63 @@ async def sync_keyword_trends() -> None:
 
 # ── 排程設定進入點 ────────────────────────────────────────────
 
+@with_retry(max_retries=2)
+async def run_index_coverage_check() -> None:
+    """每週五 05:00 — Index Coverage 掃描，偵測新失索頁面並寫入知識庫。"""
+    from contentflow.tools.tech_seo import GSCIndexCoverageMonitor
+    from contentflow.models.database import Project, KnowledgeEntry
+    import json as _json_ic
+
+    with SessionLocal() as session:
+        projects = session.query(Project).filter(Project.brand_url != "").all()
+        project_data = [(p.id, p.brand_url) for p in projects]
+
+    if not project_data:
+        logger.info("[IndexCoverage] 無可掃描的專案")
+        return
+
+    monitor = GSCIndexCoverageMonitor()
+    now = datetime.now(timezone.utc)
+    end_date = now.date().isoformat()
+    start_date = (now - timedelta(days=28)).date().isoformat()
+
+    for project_id, brand_url in project_data:
+        site_url = _to_gsc_site_url(brand_url)
+        try:
+            report = monitor.get_coverage_report(site_url, start_date, end_date)
+            if report.error:
+                logger.warning(f"[IndexCoverage] project={project_id} GSC 錯誤：{report.error}")
+                continue
+
+            summary = (
+                f"已索引 {report.total_indexed} 頁"
+                f"，未索引 {report.total_not_indexed} 頁"
+                f"，新失索 {len(report.newly_unindexed)} 頁"
+            )
+            logger.info(f"[IndexCoverage] project={project_id} {summary}")
+
+            with SessionLocal() as session:
+                session.add(KnowledgeEntry(
+                    project_id=project_id,
+                    category="index_coverage",
+                    pattern=summary,
+                    evidence_count=len(report.newly_unindexed),
+                    confidence_level="verified",
+                    metadata_json=_json_ic.dumps({
+                        "site_url": site_url,
+                        "total_indexed": report.total_indexed,
+                        "total_not_indexed": report.total_not_indexed,
+                        "newly_unindexed": report.newly_unindexed[:20],  # 最多記 20 筆
+                        "date_range": f"{start_date}~{end_date}",
+                    }),
+                ))
+                session.commit()
+        except Exception as exc:
+            logger.warning(f"[IndexCoverage] project={project_id} 失敗：{exc}")
+
+    logger.info("[IndexCoverage] Index Coverage 掃描完成")
+
+
 def schedule_all_jobs() -> None:
     """註冊全部排程任務。由 site_app startup 呼叫。"""
     global _scheduler_lock_fd
@@ -1027,6 +1155,7 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(run_weekly_reflection,        CronTrigger(day_of_week="sun", hour=8, minute=0),            id="weekly_reflection", replace_existing=True)
     scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
     scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
+    scheduler.add_job(run_index_coverage_check,    CronTrigger(day_of_week="fri", hour=5, minute=0),            id="index_coverage",  replace_existing=True)
 
     scheduler.start()
     # 寫入獨立的心跳檔案（繞過 flock 的 overlay fs 問題）

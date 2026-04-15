@@ -167,13 +167,27 @@ streamlit run app/Home.py
 - Public reference site：`/site`，正式部署時可直接掛在主網域
 - Admin 登入密碼：使用 `API_SECRET_KEY`；若未設定，開發環境 fallback 為 `admin`
 
-Public site 目前不再依賴 Tailwind CDN。樣式由以下檔案在建置時產出：
+Public site 與 Admin 後台目前都不再依賴 Tailwind CDN。樣式由以下檔案在建置時產出：
 
 - `tailwind.site.config.js`
 - `src/contentflow/site/static/css/site.input.css`
+- `src/contentflow/admin/static/css/admin.input.css`
 - 輸出檔：`src/contentflow/site/static/css/site.css`
+- 輸出檔：`src/contentflow/admin/static/css/admin.css`
 
-正式部署站台時，`deploy/Dockerfile.site` 會先編譯 CSS，再把靜態檔打包進 image。`src/contentflow/site/static/og-default.png` 也作為文章頁 fallback og:image 使用。
+正式部署站台時，`deploy/Dockerfile.site` 會先編譯 site/admin CSS，再把靜態檔打包進 image。`src/contentflow/site/static/og-default.png` 也作為文章頁 fallback og:image 使用。
+
+Technical SEO 監控中的 PageSpeed Insights 呼叫若遇到 Google API rate limit（HTTP 429），系統會將結果標記為 `rate_limited` 並回傳中性分數，不會把整個技術 SEO 流程視為 hard failure。
+
+### 目前實際部署現況
+
+以下是目前已在正式環境驗證過的狀態，和程式功能描述分開列出，方便快速對照現況：
+
+- 公網主站已部署在 `https://goodbone.com.tw/`
+- Admin 後台可從 `https://goodbone.com.tw/admin` 登入與操作
+- Public site 與 Admin 後台都使用本地編譯的靜態 CSS，不再依賴 Tailwind CDN
+- Scheduler 頁面的任務觸發已實測可用，包含 `backfill_action_outcomes`
+- 技術 SEO 的 PageSpeed 429 會被降級處理，不會中斷整體檢查流程
 
 ---
 

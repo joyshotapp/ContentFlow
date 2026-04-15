@@ -85,29 +85,37 @@ class GSCClient:
 
         def _fetch() -> list[PagePerformance]:
             service = self._get_service()
-            request = {
-                "startDate": start,
-                "endDate": end,
-                "dimensions": ["query", "page"],
-                "rowLimit": row_limit,
-            }
-            resp = (
-                service.searchanalytics()
-                .query(siteUrl=site_url, body=request)
-                .execute()
-            )
-            rows = resp.get("rows", [])
-            return [
-                PagePerformance(
-                    query=r["keys"][0],
-                    page=r["keys"][1],
-                    clicks=int(r.get("clicks", 0)),
-                    impressions=int(r.get("impressions", 0)),
-                    ctr=float(r.get("ctr", 0.0)),
-                    position=float(r.get("position", 0.0)),
+            all_rows: list[PagePerformance] = []
+            start_row = 0
+            while True:
+                request = {
+                    "startDate": start,
+                    "endDate": end,
+                    "dimensions": ["query", "page"],
+                    "rowLimit": row_limit,
+                    "startRow": start_row,
+                }
+                resp = (
+                    service.searchanalytics()
+                    .query(siteUrl=site_url, body=request)
+                    .execute()
                 )
-                for r in rows
-            ]
+                rows = resp.get("rows", [])
+                all_rows.extend([
+                    PagePerformance(
+                        query=r["keys"][0],
+                        page=r["keys"][1],
+                        clicks=int(r.get("clicks", 0)),
+                        impressions=int(r.get("impressions", 0)),
+                        ctr=float(r.get("ctr", 0.0)),
+                        position=float(r.get("position", 0.0)),
+                    )
+                    for r in rows
+                ])
+                if len(rows) < row_limit:
+                    break
+                start_row += row_limit
+            return all_rows
 
         return await asyncio.get_event_loop().run_in_executor(None, _fetch)
 
