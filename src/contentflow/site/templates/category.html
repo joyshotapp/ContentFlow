@@ -53,9 +53,6 @@
           {% if article.primary_keyword %}
           <span class="truncate">{{ article.primary_keyword }}</span>
           {% endif %}
-          {% if article.seo_score %}
-          <span class="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700 font-medium">{{ article.seo_score }}</span>
-          {% endif %}
           {% if article.updated_at %}
           <time datetime="{{ article.updated_at.isoformat() }}" class="ml-auto">{{ article.updated_at.strftime('%Y-%m-%d') }}</time>
           {% endif %}

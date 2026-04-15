@@ -26,7 +26,7 @@
   <div class="absolute inset-0 bg-gradient-to-b from-brand-50/60 to-white pointer-events-none"></div>
   <div class="relative max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-12">
     <div class="max-w-3xl">
-      <p class="text-sm font-semibold text-brand-600 tracking-wide mb-4">AI-Powered Health Knowledge Platform</p>
+      <p class="text-sm font-semibold text-brand-600 tracking-wide mb-4">專業骨科健康知識平台</p>
       <h1 class="font-serif text-display text-gray-900 mb-6">
         以科學為基礎的<br>健康知識平台
       </h1>
@@ -50,10 +50,12 @@
         <p class="text-3xl font-bold text-gray-900">{{ total_articles }}</p>
         <p class="text-sm text-gray-500 mt-0.5">已發佈文章</p>
       </div>
+      {% if clusters | length > 0 %}
       <div>
         <p class="text-3xl font-bold text-gray-900">{{ clusters | length }}</p>
         <p class="text-sm text-gray-500 mt-0.5">主題叢集</p>
       </div>
+      {% endif %}
       <div>
         <p class="text-3xl font-bold text-gray-900">{{ type_counts | length }}</p>
         <p class="text-sm text-gray-500 mt-0.5">內容分類</p>
@@ -105,9 +107,7 @@
           {% if article.article_type and article.article_type in article_type_map %}
           <span class="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand-700">{{ article_type_map[article.article_type].label }}</span>
           {% endif %}
-          {% if article.seo_score %}
-          <span class="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">SEO {{ article.seo_score }}</span>
-          {% endif %}
+
         </div>
         <!-- Title -->
         <h3 class="font-semibold text-gray-900 group-hover:text-brand-700 transition-colors leading-snug mb-2 line-clamp-2">
@@ -139,7 +139,7 @@
       </svg>
     </div>
     <p class="text-gray-600 font-medium text-lg">尚無已發佈文章</p>
-    <p class="text-gray-400 text-sm mt-2 max-w-md mx-auto">ContentFlow AI 正在為您打造高品質內容。一旦文章通過 SEO 審核並發佈，將自動出現在此處。</p>
+    <p class="text-gray-400 text-sm mt-2 max-w-md mx-auto">我們正在持續創作高品質的健康知識內容，請稍後再來查看。</p>
   </div>
   {% endif %}
 </section>
