@@ -1,5 +1,8 @@
 module.exports = {
-  content: ["./src/contentflow/site/templates/**/*.html"],
+  content: [
+    "./src/contentflow/site/templates/**/*.html",
+    "./src/contentflow/admin/templates/**/*.html",
+  ],
   theme: {
     extend: {
       fontFamily: {

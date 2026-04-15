@@ -114,6 +114,13 @@ class CoreWebVitalsMonitor:
     def __init__(self, api_key: str = ""):
         self._api_key = api_key
 
+    @staticmethod
+    def _format_rate_limit_error(exc: httpx.HTTPStatusError) -> str:
+        retry_after = exc.response.headers.get("Retry-After")
+        if retry_after:
+            return f"rate_limited_retry_after_{retry_after}s"
+        return "rate_limited"
+
     async def fetch(
         self,
         url: str,
@@ -162,6 +169,13 @@ class CoreWebVitalsMonitor:
                 strategy=strategy,
             )
 
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                error = self._format_rate_limit_error(e)
+                logger.warning(f"[CWV] fetch {url} 遭遇 PSI rate limit: {error}")
+                return CoreWebVitals(url=url, strategy=strategy, error=error)
+            logger.error(f"[CWV] fetch {url} 失敗：{e}")
+            return CoreWebVitals(url=url, strategy=strategy, error=str(e))
         except Exception as e:
             logger.error(f"[CWV] fetch {url} 失敗：{e}")
             return CoreWebVitals(url=url, strategy=strategy, error=str(e))

@@ -3,6 +3,8 @@ FROM node:22-slim AS site-assets
 WORKDIR /app
 
 COPY tailwind.site.config.js ./
+COPY src/contentflow/admin/templates ./src/contentflow/admin/templates
+COPY src/contentflow/admin/static/css/admin.input.css ./src/contentflow/admin/static/css/admin.input.css
 COPY src/contentflow/site/templates ./src/contentflow/site/templates
 COPY src/contentflow/site/static/css/site.input.css ./src/contentflow/site/static/css/site.input.css
 
@@ -10,6 +12,12 @@ RUN npx --yes tailwindcss@3.4.17 \
     -c tailwind.site.config.js \
     -i ./src/contentflow/site/static/css/site.input.css \
     -o ./src/contentflow/site/static/css/site.css \
+    --minify
+
+RUN npx --yes tailwindcss@3.4.17 \
+    -c tailwind.site.config.js \
+    -i ./src/contentflow/admin/static/css/admin.input.css \
+    -o ./src/contentflow/admin/static/css/admin.css \
     --minify
 
 FROM python:3.11-slim
@@ -22,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml .
 COPY src/ ./src/
+COPY --from=site-assets /app/src/contentflow/admin/static/css/admin.css ./src/contentflow/admin/static/css/admin.css
 COPY --from=site-assets /app/src/contentflow/site/static/css/site.css ./src/contentflow/site/static/css/site.css
 
 # 安裝網站 + AI pipeline 所需依賴

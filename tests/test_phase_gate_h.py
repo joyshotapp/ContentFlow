@@ -15,6 +15,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 
 from contentflow.tools.tech_seo import (
     CoreWebVitals,
@@ -95,6 +96,31 @@ class TestCoreWebVitalsMonitor:
             )
 
         assert result.error is not None
+
+    def test_fetch_rate_limited_returns_neutral_error(self):
+        """FB-01: PSI API 429 → 降級為 rate_limited，而非拋出例外"""
+        monitor = CoreWebVitalsMonitor()
+
+        request = httpx.Request("GET", monitor.PSI_API)
+        response = httpx.Response(429, request=request, headers={"Retry-After": "120"})
+        rate_limit_error = httpx.HTTPStatusError(
+            "Too Many Requests",
+            request=request,
+            response=response,
+        )
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=rate_limit_error)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            result = asyncio.get_event_loop().run_until_complete(
+                monitor.fetch("https://example.com")
+            )
+
+        assert result.error == "rate_limited_retry_after_120s"
 
     def test_assess_cwv_good(self):
         """FB-01: 優秀指標 → 全部 good"""

@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from loguru import logger
@@ -73,6 +74,8 @@ admin_app.add_middleware(
 )
 
 _here = Path(__file__).resolve().parent
+_static_dir = _here / "static"
+admin_app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 templates = Jinja2Templates(directory=str(_here / "templates"))
 # Add custom Jinja2 filters
 templates.env.filters["fromjson"] = json.loads
