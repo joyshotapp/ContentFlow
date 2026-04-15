@@ -19,22 +19,28 @@ def _col_exists(table: str, column: str) -> bool:
     return column in {c["name"] for c in insp.get_columns(table)}
 
 
+def _is_sqlite() -> bool:
+    return op.get_bind().dialect.name == "sqlite"
+
+
 def upgrade() -> None:
     if not _col_exists("articles", "reviewer_id"):
         op.add_column(
             "articles",
             sa.Column("reviewer_id", sa.Integer(), nullable=True),
         )
-        op.create_foreign_key(
-            "fk_articles_reviewer_id",
-            "articles",
-            "authors",
-            ["reviewer_id"],
-            ["id"],
-        )
+        if not _is_sqlite():
+            op.create_foreign_key(
+                "fk_articles_reviewer_id",
+                "articles",
+                "authors",
+                ["reviewer_id"],
+                ["id"],
+            )
 
 
 def downgrade() -> None:
     if _col_exists("articles", "reviewer_id"):
-        op.drop_constraint("fk_articles_reviewer_id", "articles", type_="foreignkey")
+        if not _is_sqlite():
+            op.drop_constraint("fk_articles_reviewer_id", "articles", type_="foreignkey")
         op.drop_column("articles", "reviewer_id")

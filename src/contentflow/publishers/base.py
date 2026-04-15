@@ -40,3 +40,8 @@ class BasePublisher(ABC):
     async def get_post_url(self, post_id: str) -> str:
         """取得指定 post 的公開 URL。"""
         ...
+
+    @abstractmethod
+    async def publish_post(self, post_id: str) -> PublishResult:
+        """將草稿正式發布（draft → published）。"""
+        ...

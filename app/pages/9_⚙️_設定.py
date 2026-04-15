@@ -25,6 +25,7 @@ from contentflow.models.database import (
     Keyword,
     LegalTerm,
     Product,
+    Project,
     SEORanking,
     WritingRule,
 )
@@ -181,3 +182,43 @@ with col2:
                 st.rerun()
             finally:
                 session.close()
+
+st.divider()
+
+# ── 自動發布設定 ──
+st.subheader("🚀 自動發布政策")
+st.caption("設定本專案的文章自動發布條件。SEO 分數達標且已到排程時間時自動發布。")
+
+_pub_session = get_db()
+try:
+    _project = _pub_session.get(Project, project_id) if project_id else None
+    if _project is None:
+        st.info("請先在左側選擇專案。")
+    else:
+        _enabled = getattr(_project, "auto_publish_enabled", False) or False
+        _min_score = getattr(_project, "auto_publish_min_score", 85) or 85
+
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            new_enabled = st.toggle("啟用自動發布", value=_enabled)
+        with col_p2:
+            new_min_score = st.number_input(
+                "最低 SEO 分數門檻",
+                min_value=0, max_value=100,
+                value=int(_min_score),
+                step=1,
+                disabled=not new_enabled,
+                help="文章 SEO 分數 ≥ 此值且有排程時間才自動發布",
+            )
+
+        if st.button("💾 儲存自動發布設定", type="primary"):
+            _project.auto_publish_enabled = new_enabled
+            _project.auto_publish_min_score = new_min_score
+            _pub_session.commit()
+            st.success(
+                f"已{'啟用' if new_enabled else '停用'}自動發布"
+                + (f"，門檻設為 {new_min_score} 分" if new_enabled else "")
+            )
+            st.rerun()
+finally:
+    _pub_session.close()

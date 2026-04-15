@@ -156,8 +156,34 @@ class WordPressPublisher(BasePublisher):
             logger.error(f"[WordPress] 文章更新異常：{exc}")
             return PublishResult(success=False, platform="wordpress", error=str(exc))
 
+    async def publish_post(self, post_id: str) -> PublishResult:
+        """將 WordPress 草稿改為已發布狀態（status: draft → publish）。"""
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    self._api(f"/posts/{post_id}"),
+                    json={"status": "publish"},
+                    headers=self._headers(),
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"[WordPress] 文章發布成功 post_id={post_id}")
+            return PublishResult(
+                success=True,
+                platform="wordpress",
+                post_id=post_id,
+                publish_url=data.get("link", ""),
+            )
+        except httpx.HTTPStatusError as exc:
+            msg = f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            logger.error(f"[WordPress] 文章發布失敗：{msg}")
+            return PublishResult(success=False, platform="wordpress", error=msg)
+        except Exception as exc:
+            logger.error(f"[WordPress] 文章發布異常：{exc}")
+            return PublishResult(success=False, platform="wordpress", error=str(exc))
+
     async def get_post_url(self, post_id: str) -> str:
-        """取得已發布文章的公開 URL。"""
+        """取得已發布文章的公開 URL."""
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(

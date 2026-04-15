@@ -25,13 +25,18 @@ session = get_db()
 
 # ── 排程定義（對應 scheduler.py 的 job id）──────────────────────────────
 JOBS = [
-    {"id": "gsc_sync",        "name": "GSC 排名同步",        "cron": "每日 03:00"},
-    {"id": "ga4_sync",        "name": "GA4 頁面指標同步",    "cron": "每日 03:30"},
-    {"id": "competitor_serp", "name": "競品 SERP 追蹤",      "cron": "每週一 04:00"},
-    {"id": "attribution",     "name": "文章表現歸因分析",    "cron": "每週一 05:00"},
-    {"id": "refresh_check",   "name": "Content Refresh 觸發檢查", "cron": "每週二 04:00"},
-    {"id": "l1_learn",        "name": "L1 成功模式學習",     "cron": "每月 1 號 06:00"},
-    {"id": "l2_learn",        "name": "L2 ROI 分析",         "cron": "每月 1 號 07:00"},
+    {"id": "gsc_sync",        "name": "GSC 排名同步",              "cron": "每日 03:00"},
+    {"id": "ga4_sync",        "name": "GA4 頁面指標同步",          "cron": "每日 03:30"},
+    {"id": "trends_sync",     "name": "關鍵字趨勢同步",            "cron": "每月 1 號 03:45"},
+    {"id": "outcome_backfill","name": "行動成效回填",              "cron": "每日 04:00"},
+    {"id": "sched_publish",   "name": "排程發布文章",              "cron": "每日 04:05"},
+    {"id": "competitor_serp", "name": "競品 SERP 追蹤",            "cron": "每週一 04:30"},
+    {"id": "attribution",     "name": "文章表現歸因分析",          "cron": "每週一 05:00"},
+    {"id": "refresh_check",   "name": "Content Refresh 觸發檢查",  "cron": "每週二 04:00"},
+    {"id": "l1_learn",        "name": "L1 成功模式學習",           "cron": "每月 1 號 06:00"},
+    {"id": "l2_learn",        "name": "L2 ROI 分析",               "cron": "每月 1 號 07:00"},
+    {"id": "auto_pipeline",   "name": "自動產文 Pipeline",         "cron": "每日 08:00"},
+    {"id": "render_verify",   "name": "已發布頁面 SEO 渲染驗證",   "cron": "每日 10:00"},
 ]
 
 

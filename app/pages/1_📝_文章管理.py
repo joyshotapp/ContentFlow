@@ -32,7 +32,7 @@ try:
     with col_f1:
         status_filter = st.selectbox(
             "狀態篩選",
-            ["全部", "planned", "researching", "writing", "reviewing", "published"],
+            ["全部", "planned", "researching", "writing", "reviewing", "approved", "published"],
         )
     with col_f2:
         search_kw = st.text_input("搜尋關鍵字 / 標題", "")
@@ -71,6 +71,7 @@ try:
                 "搜尋量": int(a.primary_keyword_volume),
                 "副關鍵字": (a.secondary_keywords or "")[:50],
                 "狀態": a.status,
+                "表現": getattr(a, "performance_grade", None) or "-",
                 "Google Doc": a.google_doc_url or "",
             }
             for a in articles
@@ -102,12 +103,19 @@ try:
                 st.markdown(f"**搜尋量：** {int(article.primary_keyword_volume)}")
                 st.markdown(f"**副關鍵字：** {article.secondary_keywords or '無'}")
 
+                # SEO 表現評等（歸因引擎產生）
+                grade = getattr(article, "performance_grade", None)
+                if grade:
+                    grade_color = {"A": "🟢", "B": "🔵", "C": "🟡", "D": "🟠", "F": "🔴"}.get(grade, "⚪")
+                    st.markdown(f"**SEO 表現評等：** {grade_color} {grade}")
+
                 # 狀態更新
+                _all_statuses = ["planned", "researching", "writing", "reviewing", "approved", "published"]
                 new_status = st.selectbox(
                     "更新狀態",
-                    ["planned", "researching", "writing", "reviewing", "published"],
-                    index=["planned", "researching", "writing", "reviewing", "published"].index(article.status)
-                    if article.status in ["planned", "researching", "writing", "reviewing", "published"]
+                    _all_statuses,
+                    index=_all_statuses.index(article.status)
+                    if article.status in _all_statuses
                     else 0,
                     key="status_update",
                 )

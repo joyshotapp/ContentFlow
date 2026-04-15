@@ -47,6 +47,10 @@ class Project(Base):
     target_audience_json = Column(Text, default="{}")  # JSON: persona_name, age_range, pain_points...
     ga4_property_id = Column(String, default="")       # GA4 Property ID for this project
 
+    # 發布政策（L2-1）
+    auto_publish_enabled = Column(Boolean, default=False)    # 开啟自動發布
+    auto_publish_min_score = Column(Integer, default=85)     # 自動發布所需最低 SEO 分數
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -184,6 +188,7 @@ class Article(Base):
     author_id = Column(Integer, ForeignKey("authors.id"), nullable=True)
     reviewer_id = Column(Integer, ForeignKey("authors.id"), nullable=True)  # 醫療審閱者
     eeat_score = Column(Integer, nullable=True)     # E-E-A-T 綜合評分 0-100
+    performance_grade = Column(String(2), nullable=True)  # 歸因引擎計算等級 A/B/C/D/F
     last_refresh_date = Column(DateTime, nullable=True)  # 最近一次 Content Refresh
     factcheck_flags_json = Column(Text, default="[]")    # FactCheck 高風險標記
     suggested_internal_links = Column(Text, default="[]")  # AI 建議的內部連結

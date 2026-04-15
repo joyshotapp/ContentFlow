@@ -152,6 +152,10 @@ class ForgeBasePublisher(BasePublisher):
         except Exception as exc:
             return PublishResult(success=False, platform="forgebase", error=f"Step3 失敗: {exc}")
 
+    async def publish_post(self, post_id: str) -> PublishResult:
+        """將 ForgeBase 草稿正式發布（封裝 publish_page）。"""
+        return await self.publish_page(post_id)
+
     async def update_post(self, post_id: str, draft: ArticleDraft) -> PublishResult:
         """更新既有 ForgeBase page。"""
         if not self._base or not self._token:

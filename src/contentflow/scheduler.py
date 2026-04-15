@@ -306,13 +306,10 @@ async def run_attribution_engine() -> None:
             with SessionLocal() as session:
                 engine = AttributionEngine(session)
                 performances = engine.get_project_performance(project_id)
-                # 把 eeat_score (used as a stand-in for performance grade) 回寫到文章
                 for perf in performances:
                     article = session.get(Article, perf.article_id)
                     if article:
-                        # Store grade as numeric: A=95, B=80, C=60, D=40, F=20
-                        grade_map = {"A": 95, "B": 80, "C": 60, "D": 40, "F": 20}
-                        article.eeat_score = grade_map.get(perf.performance_grade, 50)
+                        article.performance_grade = perf.performance_grade
                         session.commit()
                 total_analyzed += len(performances)
                 logger.info(f"[Attribution] project={project_id}，分析 {len(performances)} 篇文章")
@@ -819,6 +816,181 @@ async def check_ranking_drops() -> None:
         logger.info(f"[RankDrop] 退步關鍵字 < 5 個（{len(drops)}），非批量退步，不發送警報")
 
 
+@with_retry(max_retries=1)
+async def run_render_verification() -> None:
+    """每日 10:00 — 驗證前 2 小時內發布的文章是否含所有必要 SEO 元素。
+
+    對有缺失的文章發 Slack 告警。不寫新 DB 表。
+    """
+    from contentflow.models.database import Article
+    from contentflow.tools.render_verify import verify_rendered_html
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    with SessionLocal() as session:
+        articles = (
+            session.query(Article)
+            .filter(
+                Article.published_at >= cutoff,
+                Article.publish_url.isnot(None),
+                Article.publish_url != "",
+            )
+            .all()
+        )
+        targets = [(a.id, a.title, a.publish_url) for a in articles]
+
+    if not targets:
+        logger.info("[RenderVerify] 最近 2 小時無新發布文章")
+        return
+
+    logger.info(f"[RenderVerify] 驗證 {len(targets)} 篇文章")
+    slack_url = settings.slack_webhook_url
+    failed_count = 0
+
+    for art_id, art_title, pub_url in targets:
+        issues = await verify_rendered_html(pub_url)
+        if issues:
+            failed_count += 1
+            msg = (
+                f"⚠️ *[Render Verify]* 《{art_title}》發布後 SEO 元素缺失\n"
+                f"URL: {pub_url}\n"
+                f"缺失項目：{', '.join(issues)}"
+            )
+            logger.warning(f"[RenderVerify] #{art_id} '{art_title}' — {issues}")
+            if slack_url:
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(slack_url, json={"text": msg})
+                except Exception as exc:
+                    logger.warning(f"[RenderVerify] Slack 發送失敗：{exc}")
+        else:
+            logger.info(f"[RenderVerify] ✅ #{art_id} '{art_title}' 通過")
+
+    logger.info(f"[RenderVerify] 完成，{failed_count}/{len(targets)} 篇有缺失")
+
+
+@with_retry(max_retries=2)
+async def check_scheduled_publishes() -> None:
+    """每日 04:00 — 掃描已到期的排程發布文章，自動推送至各平台。
+
+    條件：Article.scheduled_publish_at <= now()，Article.status == "approved"，
+    且 wp_post_id 或 forgebase_id 不為空（代表草稿已推送）。
+    """
+    from contentflow.models.database import Article
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        due_articles = (
+            session.query(Article)
+            .filter(
+                Article.status == "approved",
+                Article.scheduled_publish_at <= now,
+                Article.scheduled_publish_at.isnot(None),
+            )
+            .all()
+        )
+
+    if not due_articles:
+        logger.info("[ScheduledPublish] 無到期排程文章")
+        return
+
+    logger.info(f"[ScheduledPublish] 找到 {len(due_articles)} 篇到期排程文章")
+    published_count = 0
+
+    for article in due_articles:
+        try:
+            result = None
+            if article.wp_post_id:
+                from contentflow.publishers.wordpress import WordPressPublisher
+                pub = WordPressPublisher()
+                result = await pub.publish_post(article.wp_post_id)
+            elif article.forgebase_id:
+                from contentflow.publishers.forgebase import ForgeBasePublisher
+                pub = ForgeBasePublisher()
+                result = await pub.publish_post(article.forgebase_id)
+            else:
+                logger.warning(
+                    f"[ScheduledPublish] 文章 #{article.id} '{article.title}' "
+                    "尚未推送草稿（無 wp_post_id / forgebase_id），跳過"
+                )
+                continue
+
+            if result and result.success:
+                with SessionLocal() as session:
+                    art = session.get(Article, article.id)
+                    if art:
+                        art.status = "published"
+                        art.published_at = now
+                        if result.publish_url:
+                            art.publish_url = result.publish_url
+                        session.commit()
+                published_count += 1
+                logger.info(
+                    f"[ScheduledPublish] ✅ 已發布：'{article.title}' → {result.publish_url}"
+                )
+            else:
+                err = result.error if result else "未知錯誤"
+                logger.error(f"[ScheduledPublish] 文章 #{article.id} 發布失敗：{err}")
+        except Exception as exc:
+            logger.error(f"[ScheduledPublish] 文章 #{article.id} 例外：{exc}")
+
+    logger.info(f"[ScheduledPublish] 完成，本次發布 {published_count}/{len(due_articles)} 篇")
+
+
+@with_retry(max_retries=1)
+async def sync_keyword_trends() -> None:
+    """每月 1 日 03:45 — 用 SerpAPI Google Trends 同步關鍵字趨勢方向。
+
+    每次處理所有有效關鍵字（search_volume > 0），優先更新 trend_direction 為 None
+    或超過 30 天未更新的關鍵字，每個關鍵字間隔 0.5 秒避免 rate limit。
+    """
+    if not settings.serpapi_key:
+        logger.info("[TrendsSync] 未設定 SERPAPI_KEY，跳過")
+        return
+
+    from contentflow.models.database import Keyword
+    from contentflow.tools.serp import fetch_trends
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+
+    with SessionLocal() as session:
+        keywords = (
+            session.query(Keyword)
+            .filter(
+                Keyword.search_volume > 0,
+            )
+            .filter(
+                (Keyword.trend_direction == None) |  # noqa: E711
+                (Keyword.updated_at < cutoff)
+            )
+            .order_by(Keyword.search_volume.desc())
+            .limit(200)  # 每月最多 200 個，控制 API 成本
+            .all()
+        )
+        kw_list = [(k.id, k.keyword) for k in keywords]
+
+    if not kw_list:
+        logger.info("[TrendsSync] 無需更新的關鍵字")
+        return
+
+    logger.info(f"[TrendsSync] 開始同步 {len(kw_list)} 個關鍵字趨勢")
+    updated = 0
+    for kw_id, kw_text in kw_list:
+        try:
+            trend = await fetch_trends(kw_text)
+            with SessionLocal() as session:
+                kw = session.get(Keyword, kw_id)
+                if kw:
+                    kw.trends_score = trend["score"]
+                    kw.trend_direction = trend["direction"]
+                    session.commit()
+            updated += 1
+            await asyncio.sleep(0.5)
+        except Exception as exc:
+            logger.warning(f"[TrendsSync] 關鍵字「{kw_text}」失敗：{exc}")
+
+    logger.info(f"[TrendsSync] 完成，已更新 {updated}/{len(kw_list)} 個關鍵字")
+
+
 # ── 排程設定進入點 ────────────────────────────────────────────
 
 def schedule_all_jobs() -> None:
@@ -842,13 +1014,16 @@ def schedule_all_jobs() -> None:
 
     scheduler.add_job(sync_gsc_all_projects,      CronTrigger(hour=3,  minute=0),                              id="gsc_sync",        replace_existing=True)
     scheduler.add_job(sync_ga4_all_projects,       CronTrigger(hour=3,  minute=30),                             id="ga4_sync",        replace_existing=True)
+    scheduler.add_job(sync_keyword_trends,         CronTrigger(day=1,   hour=3,  minute=45),                    id="trends_sync",     replace_existing=True)
     scheduler.add_job(backfill_action_outcomes,     CronTrigger(hour=4,  minute=0),                              id="outcome_backfill", replace_existing=True)
+    scheduler.add_job(check_scheduled_publishes,   CronTrigger(hour=4,  minute=5),                              id="sched_publish",   replace_existing=True)
     scheduler.add_job(run_competitor_serp_check,   CronTrigger(day_of_week="mon", hour=4, minute=30),           id="competitor_serp", replace_existing=True)
     scheduler.add_job(run_attribution_engine,      CronTrigger(day_of_week="mon", hour=5, minute=0),            id="attribution",     replace_existing=True)
     scheduler.add_job(check_refresh_triggers,      CronTrigger(day_of_week="tue", hour=4, minute=0),            id="refresh_check",   replace_existing=True)
     scheduler.add_job(run_l1_pattern_analysis,     CronTrigger(day=1,   hour=6,  minute=0),                     id="l1_learn",        replace_existing=True)
     scheduler.add_job(run_l2_roi_analysis,         CronTrigger(day=1,   hour=7,  minute=0),                     id="l2_learn",        replace_existing=True)
     scheduler.add_job(run_auto_pipeline,           CronTrigger(hour=8,  minute=0),                              id="auto_pipeline",   replace_existing=True)
+    scheduler.add_job(run_render_verification,     CronTrigger(hour=10, minute=0),                              id="render_verify",   replace_existing=True)
     scheduler.add_job(run_weekly_reflection,        CronTrigger(day_of_week="sun", hour=8, minute=0),            id="weekly_reflection", replace_existing=True)
     scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
     scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)

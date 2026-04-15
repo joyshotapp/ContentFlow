@@ -33,6 +33,8 @@ from ..models.database import (
     SEORanking,
     StrategicPlan,
     ActionOutcome,
+    TopicCluster,
+    ClusterMember,
 )
 
 
@@ -225,6 +227,51 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         if o.success_flag in outcome_stats[at]:
             outcome_stats[at][o.success_flag] += 1
 
+    # 9. 關鍵字自蝕偵測（CannibalizationDetector）
+    from .analytics_agent import CannibalizationDetector
+    cannib_pairs = CannibalizationDetector(session).detect(project_id)
+    cannibalization_summary = [
+        {
+            "keyword": p.keyword,
+            "competing_titles": p.article_titles[:3],
+            "suggestion": p.suggestion,
+        }
+        for p in cannib_pairs[:5]
+    ]
+
+    # 10. 叢集缺口（直接查 DB，不重新執行 AI 分群）
+    cluster_gaps_raw = (
+        session.query(ClusterMember.keyword, TopicCluster.pillar_keyword)
+        .join(TopicCluster, ClusterMember.cluster_id == TopicCluster.id)
+        .filter(
+            TopicCluster.project_id == project_id,
+            ClusterMember.article_id == None,  # noqa: E711
+        )
+        .all()
+    )
+    cluster_gaps_summary = [
+        {"pillar": row.pillar_keyword, "missing_keyword": row.keyword}
+        for row in cluster_gaps_raw[:10]
+    ]
+
+    # 11. 關鍵字趨勢方向（rising/declining）
+    from ..models.database import Keyword
+    trending_keywords = (
+        session.query(Keyword.keyword, Keyword.trend_direction, Keyword.trends_score)
+        .filter(
+            Keyword.project_id == project_id,
+            Keyword.trend_direction.isnot(None),
+            Keyword.trend_direction != "stable",
+        )
+        .order_by(Keyword.trends_score.desc())
+        .limit(10)
+        .all()
+    )
+    keyword_trends_summary = [
+        {"keyword": r.keyword, "direction": r.trend_direction, "score": r.trends_score}
+        for r in trending_keywords
+    ]
+
     return {
         "today": today.isoformat(),
         "calendar_items": calendar_items,
@@ -242,6 +289,9 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         },
         "action_outcome_history": outcome_summary[:10],
         "action_outcome_stats": outcome_stats,
+        "cannibalization_risks": cannibalization_summary,
+        "cluster_gaps": cluster_gaps_summary,
+        "keyword_trends": keyword_trends_summary,
     }
 
 
@@ -260,6 +310,9 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
    - 優先處理排名 4-20 的文章（§8.3 群組 B/C，ROI 最高）
 3. **alert** — 標記需要人工注意的事項
    - 排名大幅下滑、未收錄、待審閱文章堆積等
+4. **optimize_meta** — 重寫指定文章的 meta title / description
+   - 需指定 article_id
+   - 適用情境：CTR 明顯低於同排名水準（CTR < 2% 且排名 B/C 群）
 
 ## 決策原則：
 - 排名 B 群（4-10）的 Refresh ROI 最高，優先安排
@@ -268,7 +321,8 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 - 每日控制在 2 個 generate + 2 個 refresh 以內
 - 如果有很多待審閱文章（≥5），提醒人工優先處理
 - 參考上次執行摘要，避免重複工作
-
+- 如果 `cannibalization_risks` 不為空，發送 alert 告知哪些關鍵字有自蝕風險
+- 如果 `cluster_gaps` 不為空，優先將高价値缺口關鍵字納入 generate 計劃- 如果 `keyword_trends` 中有 direction="up" 的關鍵字且尚無文章，納入 generate 候選
 ## 因果學習（重要）：
 - 數據中包含 `action_outcome_history`，記錄過去動作的實際成效
 - `action_outcome_stats` 顯示各類動作（generate/refresh）的成功率統計
@@ -281,8 +335,9 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 {
   "actions": [
     {"action": "generate", "calendar_id": 7, "reason": "日曆排程已到期", "priority": 1},
-    {"action": "refresh", "article_id": 3, "reason": "排名從 8 掉到 15，屬於 B→C 群", "priority": 2},
-    {"action": "alert", "message": "有 6 篇文章待審閱，建議今日優先處理", "priority": 0}
+      {"action": "refresh", "article_id": 3, "reason": "排名從 8 掉到 15，屬於 B→C 群", "priority": 2},
+    {"action": "alert", "message": "有 6 篇文章待審閱，建議今日優先處理", "priority": 0},
+    {"action": "optimize_meta", "article_id": 5, "reason": "CTR 1.2% 但排名 P5，活化 meta 可提升點擊率", "priority": 3}
   ],
   "summary": "今日計畫：產出 1 篇新文、Refresh 1 篇排名下滑文章。6 篇待審閱需儘快處理。",
   "outcome_insight": "過去 refresh 動作成功率 75%，generate 成功率 60%，本次優先安排 refresh。"
@@ -443,6 +498,12 @@ async def execute_strategic_plan(plan_id: int) -> None:
             elif action_type == "alert":
                 await _execute_alert(action, project_id)
                 executed += 1
+            elif action_type == "optimize_meta":
+                await _execute_optimize_meta(action, project_id)
+                executed += 1
+            elif action_type == "inject_internal_links":
+                await _execute_inject_internal_links(action, project_id)
+                executed += 1
             else:
                 logger.warning(f"[StrategicExecutor] 未知 action 類型：{action_type}")
         except Exception as e:
@@ -525,6 +586,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
         # 回寫結果
         with SessionLocal() as session:
             article = session.get(Article, art_id)
+            project = session.get(Project, project_id)
             if article and result.draft:
                 article.draft_content = result.draft.content_markdown
                 article.meta_title = result.draft.meta_title
@@ -533,7 +595,28 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                 article.faq_schema_json = result.draft.faq_schema_json
                 article.article_schema_json = result.draft.article_schema_json
                 article.seo_score = result.draft.seo_score or None
-                article.status = result.status or "reviewing"
+                # 持久化內部連結建議
+                if result.draft.internal_link_suggestions:
+                    import json as _json
+                    article.suggested_internal_links = _json.dumps(
+                        result.draft.internal_link_suggestions, ensure_ascii=False
+                    )
+                # 發布政策（L2-1）：
+                #   auto_publish_enabled=True 且 seo_score >= min_score → 直接發布
+                #   有排程時間 → approved（等待排程 job）
+                #   否則 → reviewing（人工審核）
+                auto_pub = (
+                    project
+                    and project.auto_publish_enabled
+                    and (article.seo_score or 0) >= (project.auto_publish_min_score or 85)
+                )
+                if auto_pub:
+                    article.status = "approved"   # check_scheduled_publishes 會立即偵測並發布
+                    article.scheduled_publish_at = article.scheduled_publish_at or datetime.now(timezone.utc)
+                elif article.scheduled_publish_at:
+                    article.status = "approved"
+                else:
+                    article.status = result.status or "reviewing"
                 article.updated_at = datetime.now(timezone.utc)
 
             cal = session.get(ContentCalendar, calendar_id)
@@ -661,3 +744,183 @@ async def _execute_alert(action: dict, project_id: int) -> None:
         logger.info("[StrategicExecutor/alert] Slack 通知已發送")
     except Exception as e:
         logger.warning(f"[StrategicExecutor/alert] Slack 發送失敗：{e}")
+
+
+async def _execute_optimize_meta(action: dict, project_id: int) -> None:
+    """執行 optimize_meta action：用 SEO QA Agent 重寫 meta title/description 並回寫平台。"""
+    from ..agents.seo_qa_agent import run_seo_qa_agent
+    from ..models.database import Article
+    from ..models.schemas import ArticleDraft, ResearchReport
+
+    article_id = action.get("article_id")
+    if not article_id:
+        logger.warning("[StrategicExecutor/optimize_meta] 缺少 article_id")
+        return
+
+    with SessionLocal() as session:
+        article = session.get(Article, article_id)
+        if not article:
+            logger.warning(f"[StrategicExecutor/optimize_meta] 找不到文章 #{article_id}")
+            return
+        if not article.draft_content:
+            logger.warning(f"[StrategicExecutor/optimize_meta] 文章 #{article_id} 無草稿，跳過")
+            return
+        art_title = article.title
+        art_kw = article.primary_keyword or article.title
+        draft_content = article.draft_content
+        art_wp_id = article.wp_post_id
+        art_fb_id = article.forgebase_id
+        art_pub_url = article.publish_url or ""
+
+    logger.info(f"[StrategicExecutor/optimize_meta] 文章：'{art_title}' 原因={action.get('reason', '')}")
+
+    try:
+        # 組裝一個最小 ArticleDraft 讓 SEO QA Agent 處理
+        draft_obj = ArticleDraft(
+            title=art_title,
+            content_markdown=draft_content,
+            meta_title="",
+            meta_description="",
+        )
+        empty_report = ResearchReport(
+            topic=art_kw,
+            suggested_keywords=[art_kw],
+            summary="",
+        )
+        optimized = await run_seo_qa_agent(
+            draft=draft_obj,
+            report=empty_report,
+            primary_keyword=art_kw,
+        )
+        new_title = optimized.meta_title
+        new_desc = optimized.meta_description
+
+        if not new_title and not new_desc:
+            logger.info(f"[StrategicExecutor/optimize_meta] '{art_title}' QA 未給出優化建議，跳過")
+            return
+        # 回寫 DB
+        with SessionLocal() as session:
+            art = session.get(Article, article_id)
+            if art:
+                if new_title:
+                    art.meta_title = new_title
+                if new_desc:
+                    art.meta_description = new_desc
+                art.updated_at = datetime.now(timezone.utc)
+                session.commit()
+
+        # 回寫平台（若已發布）
+        if art_pub_url:
+            draft_obj = ArticleDraft(
+                title=art_title,
+                content_markdown=draft_content,
+                meta_title=new_title or "",
+                meta_description=new_desc or "",
+            )
+            if art_wp_id:
+                from ..publishers.wordpress import WordPressPublisher
+                pub = WordPressPublisher()
+                await pub.update_post(art_wp_id, draft_obj)
+                logger.info(f"[StrategicExecutor/optimize_meta] '{art_title}' WP meta 已回寫")
+            elif art_fb_id:
+                from ..publishers.forgebase import ForgeBasePublisher
+                pub = ForgeBasePublisher()
+                await pub.update_post(art_fb_id, draft_obj)
+                logger.info(f"[StrategicExecutor/optimize_meta] '{art_title}' ForgeBase meta 已回寫")
+
+    except Exception as e:
+        logger.error(f"[StrategicExecutor/optimize_meta] '{art_title}' 失敗：{e}")
+
+
+async def _execute_inject_internal_links(action: dict, project_id: int) -> None:
+    """執行 inject_internal_links action：
+    讀取 Article.suggested_internal_links，將建議連結注入 Markdown 內文，
+    再透過 publisher 更新已發布文章。
+    """
+    import json as _json
+    import re as _re
+    from ..models.database import Article
+
+    article_id = action.get("article_id")
+    if not article_id:
+        logger.warning("[StrategicExecutor/inject_links] 缺少 article_id")
+        return
+
+    with SessionLocal() as session:
+        article = session.get(Article, article_id)
+        if not article:
+            logger.warning(f"[StrategicExecutor/inject_links] 文章 #{article_id} 不存在")
+            return
+        if not article.draft_content:
+            logger.warning(f"[StrategicExecutor/inject_links] 文章 #{article_id} 無草稿")
+            return
+
+        raw_links = article.suggested_internal_links or "[]"
+        suggestions: list[dict] = _json.loads(raw_links)
+        if not suggestions:
+            logger.info(f"[StrategicExecutor/inject_links] 文章 #{article_id} 無建議連結，跳過")
+            return
+
+        art_title = article.title
+        art_wp_id = article.wp_post_id
+        art_fb_id = article.forgebase_id
+        draft_content = article.draft_content
+        art_meta_title = article.meta_title
+        art_meta_desc = article.meta_description
+
+    logger.info(
+        f"[StrategicExecutor/inject_links] '{art_title}'：注入 {len(suggestions)} 條建議連結"
+    )
+
+    # 將建議連結逐一注入：在 Markdown 中找到 anchor_text 第一次出現處並替換為 [anchor_text](target_url)
+    modified = draft_content
+    injected = 0
+    for link in suggestions:
+        anchor = link.get("anchor_text", "").strip()
+        url = link.get("target_url", "").strip()
+        if not anchor or not url:
+            continue
+        # 確保不替換已經是連結的部分
+        pattern = rf"(?<!\[)(?<!\()({_re.escape(anchor)})(?!\])(?!\))"
+        replacement = f"[{anchor}]({url})"
+        new_content, count = _re.subn(pattern, replacement, modified, count=1)
+        if count:
+            modified = new_content
+            injected += 1
+
+    if not injected:
+        logger.info(f"[StrategicExecutor/inject_links] '{art_title}'：無法在內文中找到錨文字，跳過")
+        return
+
+    # 回寫 DB
+    with SessionLocal() as session:
+        art = session.get(Article, article_id)
+        if art:
+            art.draft_content = modified
+            art.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+    # 回寫平台（若已發布）
+    from ..models.schemas import ArticleDraft
+    draft_obj = ArticleDraft(
+        title=art_title,
+        content_markdown=modified,
+        meta_title=art_meta_title,
+        meta_description=art_meta_desc,
+    )
+    try:
+        if art_wp_id:
+            from ..publishers.wordpress import WordPressPublisher
+            await WordPressPublisher().update_post(art_wp_id, draft_obj)
+            logger.info(f"[StrategicExecutor/inject_links] '{art_title}' WP 已更新（注入 {injected} 條連結）")
+        elif art_fb_id:
+            from ..publishers.forgebase import ForgeBasePublisher
+            await ForgeBasePublisher().update_post(art_fb_id, draft_obj)
+            logger.info(f"[StrategicExecutor/inject_links] '{art_title}' ForgeBase 已更新（注入 {injected} 條連結）")
+        else:
+            logger.info(
+                f"[StrategicExecutor/inject_links] '{art_title}'：尚未發布（無 wp/forgebase id），"
+                "連結已寫入草稿，待發布時生效"
+            )
+    except Exception as e:
+        logger.error(f"[StrategicExecutor/inject_links] '{art_title}' 平台回寫失敗：{e}")
