@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: Inter, "Noto Sans TC", system-ui, sans-serif;
+    background-color: #ffffff;
+    color: #111827;
+  }
+
+  body {
+    min-height: 100vh;
+  }
+}

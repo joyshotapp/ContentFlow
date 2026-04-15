@@ -27,6 +27,7 @@ from xml.sax.saxutils import escape as xml_escape
 import markdown as md_module
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 from sqlalchemy import desc, func
@@ -54,6 +55,7 @@ _ARTICLE_TYPE_MAP = {
 # ─────────────────────────────────────────────────────────────
 
 _BASE_DIR = Path(__file__).parent
+_STATIC_DIR = _BASE_DIR / "static"
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 _md = md_module.Markdown(
@@ -209,6 +211,7 @@ site_app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @site_app.on_event("startup")

@@ -38,6 +38,163 @@ from ..models.database import (
 )
 
 
+def _configured_generate_ceiling() -> int:
+    candidates: list[int] = []
+    for raw_value in (
+        getattr(settings, "strategic_daily_generate_limit", None),
+        getattr(settings, "max_articles_per_run", None),
+    ):
+        try:
+            if raw_value is None:
+                continue
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            candidates.append(parsed)
+    return min(candidates) if candidates else 5
+
+
+def _calculate_generate_capacity(context: dict[str, Any]) -> dict[str, Any]:
+    """依 backlog、待審稿壓力與歷史成效決定今日 generate 配額。"""
+    backlog = len(context.get("calendar_items", []))
+    reviewing = int(context.get("article_stats", {}).get("reviewing", 0) or 0)
+    ranking_changes = context.get("ranking_changes_top10", [])
+    outcome_stats = context.get("action_outcome_stats", {}) or {}
+    generate_stats = outcome_stats.get("generate", {}) or {}
+    ceiling = _configured_generate_ceiling()
+    signals: list[str] = []
+
+    if backlog <= 0:
+        return {
+            "quota": 0,
+            "ceiling": ceiling,
+            "backlog": 0,
+            "reviewing": reviewing,
+            "signals": ["no_planned_backlog"],
+        }
+
+    if backlog >= max(ceiling * 4, 20):
+        quota = ceiling
+        signals.append("very_large_backlog")
+    elif backlog >= max(ceiling * 2, 8):
+        quota = min(ceiling, 4)
+        signals.append("large_backlog")
+    elif backlog >= 4:
+        quota = min(ceiling, 3)
+        signals.append("medium_backlog")
+    elif backlog >= 2:
+        quota = min(ceiling, 2)
+        signals.append("small_backlog")
+    else:
+        quota = 1
+        signals.append("single_backlog_item")
+
+    if reviewing >= 8:
+        quota = max(0, quota - 2)
+        signals.append("review_backlog_critical")
+    elif reviewing >= 5:
+        quota = max(0, quota - 1)
+        signals.append("review_backlog_high")
+    elif reviewing >= 3:
+        quota = max(0, quota - 1)
+        signals.append("review_backlog_building")
+
+    total_generate = int(generate_stats.get("total", 0) or 0)
+    improved_generate = int(generate_stats.get("improved", 0) or 0)
+    declined_generate = int(generate_stats.get("declined", 0) or 0)
+    success_rate = improved_generate / total_generate if total_generate else None
+    decline_rate = declined_generate / total_generate if total_generate else None
+
+    if total_generate >= 4 and decline_rate is not None and success_rate is not None:
+        if decline_rate >= 0.5:
+            quota = max(0, quota - 2)
+            signals.append("generate_decline_rate_high")
+        elif decline_rate >= 0.34 or success_rate < 0.25:
+            quota = max(0, quota - 1)
+            signals.append("generate_performance_soften")
+        elif success_rate >= 0.6 and decline_rate <= 0.2 and reviewing <= 2 and backlog > quota:
+            quota = min(ceiling, quota + 1)
+            signals.append("generate_performance_strong")
+
+    severe_rank_drops = sum(1 for rc in ranking_changes if (rc.get("delta") or 0) >= 8)
+    if severe_rank_drops >= 3 and quota > 0:
+        quota = max(0, quota - 1)
+        signals.append("refresh_pressure_high")
+
+    quota = min(quota, backlog, ceiling)
+    return {
+        "quota": quota,
+        "ceiling": ceiling,
+        "backlog": backlog,
+        "reviewing": reviewing,
+        "generate_outcome_total": total_generate,
+        "generate_success_rate": round(success_rate, 3) if success_rate is not None else None,
+        "generate_decline_rate": round(decline_rate, 3) if decline_rate is not None else None,
+        "signals": signals,
+    }
+
+
+def _ensure_generate_capacity(context: dict[str, Any]) -> dict[str, Any]:
+    existing = context.get("generate_capacity")
+    if isinstance(existing, dict) and "quota" in existing:
+        return existing
+    capacity = _calculate_generate_capacity(context)
+    context["generate_capacity"] = capacity
+    return capacity
+
+
+def _normalize_plan_result(plan_result: dict[str, Any], context_snapshot: dict[str, Any]) -> dict[str, Any]:
+    """將 LLM 計畫收斂到系統實際可執行的 generate 配額內。"""
+    normalized = dict(plan_result or {})
+    capacity = _ensure_generate_capacity(context_snapshot)
+    quota = int(capacity.get("quota", 0) or 0)
+    allowed_calendar_ids = {
+        item.get("calendar_id")
+        for item in context_snapshot.get("calendar_items", [])
+        if item.get("calendar_id") is not None
+    }
+
+    actions = normalized.get("actions", []) or []
+    kept_actions: list[dict[str, Any]] = []
+    skipped_generate = 0
+    generate_count = 0
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action") != "generate":
+            kept_actions.append(action)
+            continue
+
+        calendar_id = action.get("calendar_id")
+        if calendar_id not in allowed_calendar_ids:
+            skipped_generate += 1
+            continue
+        if generate_count >= quota:
+            skipped_generate += 1
+            continue
+
+        kept_actions.append(action)
+        generate_count += 1
+
+    if skipped_generate > 0:
+        kept_actions.append({
+            "action": "alert",
+            "message": (
+                f"系統自動產能控制已將 generate 收斂為 {quota} 篇，"
+                f"本次略過 {skipped_generate} 個超額或無效 generate action"
+            ),
+            "priority": 0,
+        })
+
+    normalized["actions"] = kept_actions
+    summary = (normalized.get("summary") or "").strip()
+    capacity_note = f"系統動態 generate 配額：{quota} 篇"
+    normalized["summary"] = f"{summary}｜{capacity_note}" if summary else capacity_note
+    return normalized
+
+
 # ── 數據收集 ──────────────────────────────────────────────────
 
 def _collect_project_context(project_id: int, session) -> dict[str, Any]:
@@ -272,7 +429,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         for r in trending_keywords
     ]
 
-    return {
+    context_snapshot = {
         "today": today.isoformat(),
         "calendar_items": calendar_items,
         "ranking_changes_top10": ranking_changes[:10],
@@ -293,18 +450,20 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         "cluster_gaps": cluster_gaps_summary,
         "keyword_trends": keyword_trends_summary,
     }
+    context_snapshot["generate_capacity"] = _calculate_generate_capacity(context_snapshot)
+    return context_snapshot
 
 
 # ── LLM 決策 ─────────────────────────────────────────────────
 
-STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決定「今天要做什麼」。
+STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，負責決定「今天要做什麼」。
 
 你不執行任何操作 — 你只輸出一份結構化的**執行計畫**，由 Tactical Pipeline 去執行。
 
 ## 你可以規劃的 action 類型：
 1. **generate** — 啟動 AI Pipeline 產出新文章
    - 需指定 calendar_id（從待執行日曆中選）
-   - 每日最多 2 篇（避免成本失控）
+    - 今日系統自動核定上限為 __GENERATE_LIMIT__ 篇，不可超出
 2. **refresh** — 對已發布文章觸發 Content Refresh
    - 需指定 article_id + 原因
    - 優先處理排名 4-20 的文章（§8.3 群組 B/C，ROI 最高）
@@ -318,7 +477,8 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 - 排名 B 群（4-10）的 Refresh ROI 最高，優先安排
 - 排名 C 群（11-20）是重點優化目標
 - 新文章優先產出日曆上已排程且已到期的
-- 每日控制在 2 個 generate + 2 個 refresh 以內
+- generate 必須服從系統動態產能配額 __GENERATE_LIMIT__，不可自行放大
+- refresh 仍控制在 2 個以內
 - 如果有很多待審閱文章（≥5），提醒人工優先處理
 - 參考上次執行摘要，避免重複工作
 - 如果 `cannibalization_risks` 不為空，發送 alert 告知哪些關鍵字有自蝕風險
@@ -347,15 +507,24 @@ STRATEGIC_SYSTEM_PROMPT = """你是 ContentFlow 的 Strategic Agent，負責決�
 只輸出 JSON，不要其他文字。"""
 
 
+def _build_strategic_system_prompt(generate_limit: int) -> str:
+    return STRATEGIC_SYSTEM_PROMPT_TEMPLATE.replace(
+        "__GENERATE_LIMIT__",
+        str(generate_limit),
+    )
+
+
 async def _call_strategic_llm(context_snapshot: dict) -> dict:
     """呼叫 LLM 產出執行計畫，自帶 provider failover。"""
     from ..llm_client import achat
 
+    capacity = _ensure_generate_capacity(context_snapshot)
+    generate_limit = int(capacity.get("quota", 0) or 0)
     user_msg = f"以下是今日的專案數據，請產出今日執行計畫：\n\n```json\n{json.dumps(context_snapshot, ensure_ascii=False, indent=2)}\n```"
 
     content = await achat(
         messages=[
-            {"role": "system", "content": STRATEGIC_SYSTEM_PROMPT},
+            {"role": "system", "content": _build_strategic_system_prompt(generate_limit)},
             {"role": "user", "content": user_msg},
         ],
         model=settings.llm_lite_model or "gpt-4o-mini",
@@ -403,6 +572,7 @@ async def run_strategic_agent(project_id: int) -> StrategicPlan:
         # Fallback：只排日曆中到期的 planned 文章
         plan_result = _fallback_plan(context_snapshot)
 
+    plan_result = _normalize_plan_result(plan_result, context_snapshot)
     actions = plan_result.get("actions", [])
     summary = plan_result.get("summary", "")
 
@@ -431,14 +601,29 @@ async def run_strategic_agent(project_id: int) -> StrategicPlan:
 def _fallback_plan(context: dict) -> dict:
     """LLM 不可用時的 fallback：純規則產出計畫。"""
     actions = []
+    capacity = _ensure_generate_capacity(context)
+    generate_limit = int(capacity.get("quota", 0) or 0)
+    calendar_items = context.get("calendar_items", [])
+
     # 到期日曆 → generate
-    for item in context.get("calendar_items", [])[:2]:
+    for item in calendar_items[:generate_limit]:
         actions.append({
             "action": "generate",
             "calendar_id": item["calendar_id"],
             "reason": "日曆排程已到期（fallback 規則）",
             "priority": 1,
         })
+
+    if len(calendar_items) > generate_limit:
+        actions.append({
+            "action": "alert",
+            "message": (
+                f"仍有 {len(calendar_items)} 筆待產出日曆項目，"
+                f"今日系統自動核定僅產出 {generate_limit} 筆"
+            ),
+            "priority": 0,
+        })
+
     # 排名下滑 > 5 位 → refresh
     for rc in context.get("ranking_changes_top10", []):
         if rc["delta"] >= 5:

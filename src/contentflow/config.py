@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     output_dir: str = Field(default="./outputs", alias="OUTPUT_DIR")
     max_articles_per_run: int = Field(default=5, alias="MAX_ARTICLES_PER_RUN")
+    strategic_daily_generate_limit: int = Field(
+        default=5,
+        alias="STRATEGIC_DAILY_GENERATE_LIMIT",
+    )
 
     # API 認證
     api_secret_key: str = Field(default="", alias="API_SECRET_KEY")

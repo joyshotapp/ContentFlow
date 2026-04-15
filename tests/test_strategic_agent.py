@@ -10,8 +10,10 @@ from contentflow.models.database import (
     StrategicPlan, PipelineRun,
 )
 from contentflow.agents.strategic_agent import (
+    _calculate_generate_capacity,
     _collect_project_context,
     _fallback_plan,
+    _normalize_plan_result,
     run_strategic_agent,
     execute_strategic_plan,
 )
@@ -62,6 +64,59 @@ class TestCollectProjectContext:
 # ── _fallback_plan ────────────────────────────────────────────
 
 
+
+    def test_increases_quota_for_large_backlog(self):
+        ctx = {
+            "calendar_items": [{"calendar_id": index} for index in range(1, 13)],
+            "article_stats": {"reviewing": 0},
+            "ranking_changes_top10": [],
+            "action_outcome_stats": {},
+        }
+
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 5
+            mock_settings.max_articles_per_run = 5
+            capacity = _calculate_generate_capacity(ctx)
+
+        assert capacity["quota"] == 4
+        assert "large_backlog" in capacity["signals"]
+
+    def test_reduces_quota_when_reviewing_backlog_builds(self):
+        ctx = {
+            "calendar_items": [{"calendar_id": index} for index in range(1, 7)],
+            "article_stats": {"reviewing": 6},
+            "ranking_changes_top10": [],
+            "action_outcome_stats": {},
+        }
+
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 5
+            mock_settings.max_articles_per_run = 5
+            capacity = _calculate_generate_capacity(ctx)
+
+        assert capacity["quota"] == 2
+        assert "review_backlog_high" in capacity["signals"]
+
+    def test_reduces_quota_when_generate_outcomes_decline(self):
+        ctx = {
+            "calendar_items": [{"calendar_id": index} for index in range(1, 10)],
+            "article_stats": {"reviewing": 0},
+            "ranking_changes_top10": [],
+            "action_outcome_stats": {
+                "generate": {"total": 6, "improved": 1, "declined": 4, "stable": 1},
+            },
+        }
+
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 5
+            mock_settings.max_articles_per_run = 5
+            capacity = _calculate_generate_capacity(ctx)
+
+        assert capacity["quota"] == 1
+        assert "generate_decline_rate_high" in capacity["signals"]
+
+
+
 class TestFallbackPlan:
     def test_generates_from_calendar(self):
         """日曆到期 → 產生 generate action"""
@@ -74,10 +129,34 @@ class TestFallbackPlan:
             "ranking_changes_top10": [],
             "article_stats": {"reviewing": 0},
         }
-        plan = _fallback_plan(ctx)
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 3
+            mock_settings.max_articles_per_run = 5
+            plan = _fallback_plan(ctx)
+
         generates = [a for a in plan["actions"] if a["action"] == "generate"]
-        assert len(generates) == 2  # max 2
+        assert len(generates) == 2
         assert generates[0]["calendar_id"] == 7
+
+    def test_alerts_when_calendar_backlog_exceeds_limit(self):
+        """planned backlog 超過每日上限時應提醒"""
+        ctx = {
+            "calendar_items": [
+                {"calendar_id": 7, "title": "Test"},
+                {"calendar_id": 8, "title": "Test2"},
+                {"calendar_id": 9, "title": "Test3"},
+            ],
+            "ranking_changes_top10": [],
+            "article_stats": {"reviewing": 0},
+        }
+
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 2
+            mock_settings.max_articles_per_run = 5
+            plan = _fallback_plan(ctx)
+
+        alerts = [a for a in plan["actions"] if a["action"] == "alert"]
+        assert "今日系統自動核定僅產出 2 筆" in alerts[0]["message"]
 
     def test_generates_refresh_for_rank_drop(self):
         """排名下滑超過 5 位 → refresh"""
@@ -116,6 +195,35 @@ class TestFallbackPlan:
         plan = _fallback_plan(ctx)
         assert plan["actions"] == []
 
+    def test_normalize_plan_result_clamps_generate_actions(self):
+        ctx = {
+            "calendar_items": [
+                {"calendar_id": 1, "title": "A"},
+                {"calendar_id": 2, "title": "B"},
+                {"calendar_id": 3, "title": "C"},
+            ],
+            "ranking_changes_top10": [],
+            "article_stats": {"reviewing": 0},
+            "action_outcome_stats": {},
+            "generate_capacity": {"quota": 1, "ceiling": 5},
+        }
+        plan_result = {
+            "actions": [
+                {"action": "generate", "calendar_id": 1, "priority": 1},
+                {"action": "generate", "calendar_id": 2, "priority": 1},
+                {"action": "refresh", "article_id": 9, "priority": 2},
+            ],
+            "summary": "test",
+        }
+
+        normalized = _normalize_plan_result(plan_result, ctx)
+
+        generates = [a for a in normalized["actions"] if a["action"] == "generate"]
+        alerts = [a for a in normalized["actions"] if a["action"] == "alert"]
+        assert len(generates) == 1
+        assert len(alerts) == 1
+        assert "動態 generate 配額：1 篇" in normalized["summary"]
+
 
 # ── run_strategic_agent ───────────────────────────────────────
 
@@ -125,9 +233,19 @@ class TestRunStrategicAgent:
     async def test_creates_plan_in_db(self, db_session, sample_project):
         """成功建立 StrategicPlan 到 DB"""
         pid = sample_project.id
+        calendar_item = ContentCalendar(
+            project_id=pid,
+            title="測試日曆",
+            keywords="骨刺",
+            month=date.today().month,
+            week=1,
+            status="planned",
+        )
+        db_session.add(calendar_item)
+        db_session.commit()
         llm_response = {
             "actions": [
-                {"action": "generate", "calendar_id": 1, "reason": "test", "priority": 1}
+                {"action": "generate", "calendar_id": calendar_item.id, "reason": "test", "priority": 1}
             ],
             "summary": "test plan",
         }

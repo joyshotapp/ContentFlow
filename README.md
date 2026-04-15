@@ -14,6 +14,7 @@ ContentFlow AI 將「選題 → 學術研究 → 撰文 → SEO 審查 → 事�
 - [啟動應用程式](#啟動應用程式)
 - [執行測試](#執行測試)
 - [CLI 工具](#cli-工具)
+- [SEO 閉環與後台](#seo-閉環與後台)
 - [目錄結構](#目錄結構)
 - [Agent Pipeline 說明](#agent-pipeline-說明)
 - [資料庫設計](#資料庫設計)
@@ -111,6 +112,13 @@ LLM_WRITING_MODEL=claude-sonnet-4-5 # 文章撰寫使用
 
 # ── Token 上限（可選，有預設值）─────────────────────────
 LLM_SEO_QA_MAX_COMPLETION_TOKENS=4096
+MAX_ARTICLES_PER_RUN=5
+STRATEGIC_DAILY_GENERATE_LIMIT=5
+
+# ── 後台 / 對外站點（建議正式環境設定）────────────────────
+API_SECRET_KEY=change-me
+ADMIN_URL=http://localhost:8000
+SITE_URL=http://localhost:8000/site
 
 # ── WordPress（尚未實作，留空即可）─────────────────────
 WORDPRESS_SITE_URL=
@@ -148,6 +156,24 @@ streamlit run app/Home.py
 | ⚖️ 法規合規 | 食品廣告法規用詞（允許/禁止/注意）|
 | 🔬 AI 研究 | **主要操作入口** — 啟動 Pipeline、查看研究報告、SEO 評分、事實查核 |
 | ⚙️ 設定 | Excel 匯入、API 連線狀態、DB 統計 |
+
+---
+
+## SEO 閉環與後台
+
+除了 Streamlit 介面之外，系統也內建 FastAPI 後台與對外 SEO 驗證站點。
+
+- Admin 後台入口：`/admin`
+- Public reference site：`/site`，正式部署時可直接掛在主網域
+- Admin 登入密碼：使用 `API_SECRET_KEY`；若未設定，開發環境 fallback 為 `admin`
+
+Public site 目前不再依賴 Tailwind CDN。樣式由以下檔案在建置時產出：
+
+- `tailwind.site.config.js`
+- `src/contentflow/site/static/css/site.input.css`
+- 輸出檔：`src/contentflow/site/static/css/site.css`
+
+正式部署站台時，`deploy/Dockerfile.site` 會先編譯 CSS，再把靜態檔打包進 image。`src/contentflow/site/static/og-default.png` 也作為文章頁 fallback og:image 使用。
 
 ---
 
@@ -315,6 +341,15 @@ ContentFlow/
 ```
 
 **專案上下文注入**：每個 Agent 在呼叫 LLM 前，都會透過 `project_context.py` 載入該專案的品牌名稱、撰寫原則、法規詞庫等，確保輸出符合品牌調性。
+
+**Strategic Agent 動態產能控制**：每日自動管線仍固定排程執行，但「今天要產出幾篇」不再是寫死常數。系統會根據以下訊號先算出當日 generate quota，再由 LLM 計畫與 fallback 規則共同服從這個 quota：
+
+- `content_calendar` backlog 多寡
+- 待審稿文章數量
+- `ActionOutcome` 中 generate 的近 28 天成效
+- 嚴重排名下滑帶來的 refresh 壓力
+
+換句話說，系統現在會依回饋自動調整每日產能，但 scheduler 本身的執行節奏仍是固定排程，不是動態改變一天跑幾次。
 
 **SEO Check 評分項目（11 項規則引擎）**：
 
