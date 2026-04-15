@@ -979,9 +979,27 @@ async def check_scheduled_publishes() -> None:
                 pub = ForgeBasePublisher()
                 result = await pub.publish_post(article.forgebase_id)
             else:
-                logger.warning(
-                    f"[ScheduledPublish] 文章 #{article.id} '{article.title}' "
-                    "尚未推送草稿（無 wp_post_id / forgebase_id），跳過"
+                # 原生 blog 路徑：直接將文章標記為已發佈
+                if not article.slug:
+                    logger.warning(
+                        f"[ScheduledPublish] 文章 #{article.id} '{article.title}' "
+                        "缺少 slug，跳過"
+                    )
+                    continue
+                with SessionLocal() as session:
+                    art = session.get(Article, article.id)
+                    if art:
+                        art.status = "published"
+                        art.published_at = now
+                        if not art.publish_url:
+                            art.publish_url = f"https://goodbone.com.tw/blog/{art.slug}"
+                        if not art.publish_date:
+                            art.publish_date = now.strftime("%Y-%m-%d")
+                        session.commit()
+                        publish_url = art.publish_url
+                published_count += 1
+                logger.info(
+                    f"[ScheduledPublish] ✅ 原生發布：'{article.title}' → {publish_url}"
                 )
                 continue
 

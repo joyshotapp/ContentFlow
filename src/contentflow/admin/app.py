@@ -2793,6 +2793,32 @@ async def reports_page(request: Request, project_id: int = 0, period: str = "wee
 # SETTINGS  /settings
 # ═══════════════════════════════════════════════════════════════
 
+@admin_app.post("/settings/auto-publish/save")
+async def save_auto_publish(
+    request: Request,
+    project_id: int = Form(...),
+    auto_publish_enabled: str = Form("off"),
+    auto_publish_min_score: int = Form(85),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        proj = db.query(Project).filter(Project.id == project_id).first()
+        if not proj:
+            raise HTTPException(status_code=404)
+        proj.auto_publish_enabled = (auto_publish_enabled == "on")
+        proj.auto_publish_min_score = max(0, min(100, auto_publish_min_score))
+        proj.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return RedirectResponse(
+            f"/admin/settings?project_id={project_id}&saved=1#auto-publish",
+            status_code=303,
+        )
+    finally:
+        db.close()
+
+
 @admin_app.post("/settings/project/save")
 async def save_project(
     request: Request,
