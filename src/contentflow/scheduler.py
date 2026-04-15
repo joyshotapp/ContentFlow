@@ -1001,6 +1001,27 @@ async def check_scheduled_publishes() -> None:
                 logger.info(
                     f"[ScheduledPublish] ✅ 原生發布：'{article.title}' → {publish_url}"
                 )
+                # Google Indexing API：加速 Googlebot 收錄
+                try:
+                    import httpx as _httpx
+                    svc_file = settings.google_service_account_file
+                    if svc_file:
+                        import google.oauth2.service_account as _sa
+                        import google.auth.transport.requests as _gtr
+                        _creds = _sa.Credentials.from_service_account_file(
+                            svc_file, scopes=["https://www.googleapis.com/auth/indexing"]
+                        )
+                        _creds.refresh(_gtr.Request())
+                        async with _httpx.AsyncClient(timeout=20) as _hc:
+                            _r = await _hc.post(
+                                "https://indexing.googleapis.com/v3/urlNotifications:publish",
+                                headers={"Authorization": f"Bearer {_creds.token}", "Content-Type": "application/json"},
+                                json={"url": publish_url, "type": "URL_UPDATED"},
+                            )
+                            if _r.status_code == 200:
+                                logger.info(f"[IndexingAPI] ✅ 提交成功：{publish_url}")
+                except Exception as _ie:
+                    logger.debug(f"[IndexingAPI] 略過：{_ie}")
                 continue
 
             if result and result.success:

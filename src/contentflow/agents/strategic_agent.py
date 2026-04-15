@@ -704,6 +704,33 @@ async def execute_strategic_plan(plan_id: int) -> None:
     logger.info(f"[StrategicExecutor] Plan #{plan_id} 完成，{executed}/{len(actions)} 項")
 
 
+async def _submit_url_to_indexing(url: str) -> None:
+    """Submit URL to Google Indexing API to accelerate Googlebot crawl (best-effort)."""
+    try:
+        import httpx
+        svc_file = settings.google_service_account_file
+        if not svc_file:
+            return
+        import google.oauth2.service_account as _sa
+        import google.auth.transport.requests as _gtr
+        creds = _sa.Credentials.from_service_account_file(
+            svc_file, scopes=["https://www.googleapis.com/auth/indexing"]
+        )
+        creds.refresh(_gtr.Request())
+        async with httpx.AsyncClient(timeout=20) as c:
+            resp = await c.post(
+                "https://indexing.googleapis.com/v3/urlNotifications:publish",
+                headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
+                json={"url": url, "type": "URL_UPDATED"},
+            )
+            if resp.status_code == 200:
+                logger.info(f"[IndexingAPI] ✅ 提交成功：{url}")
+            else:
+                logger.warning(f"[IndexingAPI] 失敗 {resp.status_code}：{resp.text[:200]}")
+    except Exception as e:
+        logger.debug(f"[IndexingAPI] 略過（non-fatal）：{e}")
+
+
 async def _execute_generate(action: dict, project_id: int, *, plan_id: int | None = None) -> None:
     """執行 generate action：從日曆條目啟動 pipeline。"""
     import uuid
@@ -769,6 +796,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
         result = await run_orchestrator(task, project_id=project_id, article_id=art_id)
 
         # 回寫結果
+        pub_url: str | None = None
         with SessionLocal() as session:
             article = session.get(Article, art_id)
             project = session.get(Project, project_id)
@@ -786,23 +814,43 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                     article.suggested_internal_links = _json.dumps(
                         result.draft.internal_link_suggestions, ensure_ascii=False
                     )
+                # Slug 唯一性保障：避免多篇文章搶佔同一 URL
+                proposed_slug = article.slug
+                if proposed_slug:
+                    suffix = 2
+                    candidate = proposed_slug
+                    while session.query(Article).filter(
+                        Article.slug == candidate, Article.id != art_id
+                    ).first():
+                        candidate = f"{proposed_slug}-{suffix}"
+                        suffix += 1
+                    article.slug = candidate
                 # 發布政策（L2-1）：
-                #   auto_publish_enabled=True 且 seo_score >= min_score → 直接發布
-                #   有排程時間 → approved（等待排程 job）
-                #   否則 → reviewing（人工審核）
+                #   auto_publish_enabled=True 且 seo_score >= min_score → 立即發布（不等排程）
+                #   有排程時間 → approved（等待 04:05 排程 job）
+                #   否則 → review_required（人工審核）
+                now_utc = datetime.now(timezone.utc)
                 auto_pub = (
                     project
                     and project.auto_publish_enabled
                     and (article.seo_score or 0) >= (project.auto_publish_min_score or 85)
                 )
-                if auto_pub:
-                    article.status = "approved"   # check_scheduled_publishes 會立即偵測並發布
-                    article.scheduled_publish_at = article.scheduled_publish_at or datetime.now(timezone.utc)
+                if auto_pub and article.slug:
+                    # 直接發布：pipeline 完成後即時上線，不等隔日 check_scheduled_publishes
+                    article.status = "published"
+                    article.published_at = now_utc
+                    article.publish_date = now_utc.strftime("%Y-%m-%d")
+                    pub_url = f"https://goodbone.com.tw/blog/{article.slug}"
+                    article.publish_url = pub_url
+                elif auto_pub:
+                    # slug 尚未生成（罕見），fallback 到排程器
+                    article.status = "approved"
+                    article.scheduled_publish_at = article.scheduled_publish_at or now_utc
                 elif article.scheduled_publish_at:
                     article.status = "approved"
                 else:
-                    article.status = result.status or "reviewing"
-                article.updated_at = datetime.now(timezone.utc)
+                    article.status = result.status or "review_required"
+                article.updated_at = now_utc
 
             cal = session.get(ContentCalendar, calendar_id)
             if cal:
@@ -816,6 +864,14 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                 pr.finished_at = datetime.now(timezone.utc)
 
             session.commit()
+
+        # Google Indexing API：加速 Googlebot 首次收錄（best-effort）
+        if pub_url:
+            try:
+                import asyncio as _asyncio
+                _asyncio.create_task(_submit_url_to_indexing(pub_url))
+            except Exception:
+                pass
 
         # 記錄 ActionOutcome（因果追蹤基線）
         from ..scheduler import record_action_outcome

@@ -86,32 +86,40 @@ class GA4Client:
 
         def _fetch() -> list[PageMetrics]:
             client = self._get_client()
-            request = RunReportRequest(
-                property=f"properties/{prop_id}" if not prop_id.startswith("properties/") else prop_id,
-                dimensions=[Dimension(name="pagePath")],
-                metrics=[
-                    Metric(name="activeUsers"),
-                    Metric(name="sessions"),
-                    Metric(name="averageSessionDuration"),
-                    Metric(name="bounceRate"),
-                    Metric(name="conversions"),
-                ],
-                date_ranges=[DateRange(start_date=start, end_date=end)],
-                limit=row_limit,
-            )
-            response = client.run_report(request)
-            results = []
-            for row in response.rows:
-                dims = [d.value for d in row.dimension_values]
-                vals = [m.value for m in row.metric_values]
-                results.append(PageMetrics(
-                    page_path=dims[0],
-                    active_users=int(vals[0] or 0),
-                    sessions=int(vals[1] or 0),
-                    avg_engagement_time_sec=float(vals[2] or 0.0),
-                    bounce_rate=float(vals[3] or 0.0),
-                    conversions=int(vals[4] or 0),
-                ))
-            return results
+            all_results: list[PageMetrics] = []
+            offset = 0
+            while True:
+                request = RunReportRequest(
+                    property=f"properties/{prop_id}" if not prop_id.startswith("properties/") else prop_id,
+                    dimensions=[Dimension(name="pagePath")],
+                    metrics=[
+                        Metric(name="activeUsers"),
+                        Metric(name="sessions"),
+                        Metric(name="averageSessionDuration"),
+                        Metric(name="bounceRate"),
+                        Metric(name="conversions"),
+                    ],
+                    date_ranges=[DateRange(start_date=start, end_date=end)],
+                    limit=row_limit,
+                    offset=offset,
+                )
+                response = client.run_report(request)
+                batch: list[PageMetrics] = []
+                for row in response.rows:
+                    dims = [d.value for d in row.dimension_values]
+                    vals = [m.value for m in row.metric_values]
+                    batch.append(PageMetrics(
+                        page_path=dims[0],
+                        active_users=int(vals[0] or 0),
+                        sessions=int(vals[1] or 0),
+                        avg_engagement_time_sec=float(vals[2] or 0.0),
+                        bounce_rate=float(vals[3] or 0.0),
+                        conversions=int(vals[4] or 0),
+                    ))
+                all_results.extend(batch)
+                if len(batch) < row_limit:
+                    break
+                offset += row_limit
+            return all_results
 
         return await asyncio.get_event_loop().run_in_executor(None, _fetch)
