@@ -3153,3 +3153,44 @@ async def reflections_page(request: Request, reflection_type: str = "", page: in
         })
     finally:
         db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI CHAT  /chat
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/chat", response_class=HTMLResponse)
+async def chat_page(request: Request):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    return templates.TemplateResponse(request, "chat.html", {
+        "request": request,
+        "page": "chat",
+        "now": datetime.now(timezone.utc),
+    })
+
+
+@admin_app.post("/api/chat")
+async def chat_api(request: Request):
+    """AI 對話 API — 接受 messages 陣列，回傳 assistant 回答。"""
+    if not _check_login(request):
+        raise HTTPException(status_code=403, detail="未登入")
+
+    body = await request.json()
+    messages = body.get("messages", [])
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages 不可為空")
+
+    # 限制 messages 數量防止過長 context
+    messages = messages[-20:]
+
+    from contentflow.agents.chat_agent import chat as chat_fn
+    try:
+        result = await chat_fn(messages)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"[ChatAPI] 錯誤: {e}")
+        return JSONResponse(
+            {"role": "assistant", "content": f"發生錯誤：{str(e)}", "tool_calls_count": 0},
+            status_code=500,
+        )

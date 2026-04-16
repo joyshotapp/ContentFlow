@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+{% block title %}AI 助理{% endblock %}
+{% block page_title %}AI 助理{% endblock %}
+{% block page_subtitle %}與 ContentFlow AI 對話 — 查詢狀態、分析數據、下達指令{% endblock %}
+
+{% block content %}
+<div class="chat-container" x-data="chatApp()" @keydown.meta.k.window="$refs.chatInput.focus()" @keydown.ctrl.k.window="$refs.chatInput.focus()">
+
+  <!-- 快捷提問卡片 -->
+  <div class="chat-quick-actions" x-show="messages.length === 0" x-cloak>
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="font-size:40px;margin-bottom:8px;">🤖</div>
+      <h2 style="font-size:18px;font-weight:700;color:var(--cf-text);margin:0;">你好！我是 ContentFlow AI</h2>
+      <p style="font-size:13px;color:var(--cf-text-muted);margin-top:6px;">我可以幫你查詢系統狀態、分析 SEO 數據、或執行操作</p>
+    </div>
+    <div class="quick-grid">
+      <button class="quick-card" @click="sendQuick('今天系統整體狀況如何？')">
+        <span class="quick-icon">📊</span>
+        <span class="quick-label">系統總覽</span>
+        <span class="quick-desc">文章、排名、排程狀態</span>
+      </button>
+      <button class="quick-card" @click="sendQuick('最近 7 天點擊數最高的關鍵字有哪些？')">
+        <span class="quick-icon">🏆</span>
+        <span class="quick-label">熱門關鍵字</span>
+        <span class="quick-desc">7 天內表現最好的詞</span>
+      </button>
+      <button class="quick-card" @click="sendQuick('最近有哪些關鍵字排名下降了？')">
+        <span class="quick-icon">📉</span>
+        <span class="quick-label">排名警示</span>
+        <span class="quick-desc">排名下降的關鍵字</span>
+      </button>
+      <button class="quick-card" @click="sendQuick('排程系統健康嗎？最近有失敗的 job 嗎？')">
+        <span class="quick-icon">⚙️</span>
+        <span class="quick-label">排程健康</span>
+        <span class="quick-desc">排程執行與失敗情況</span>
+      </button>
+      <button class="quick-card" @click="sendQuick('最近的 Pipeline 執行結果如何？有失敗的嗎？')">
+        <span class="quick-icon">🔄</span>
+        <span class="quick-label">Pipeline 執行</span>
+        <span class="quick-desc">產文流程最近紀錄</span>
+      </button>
+      <button class="quick-card" @click="sendQuick('學習閉環運作情況如何？最近有更新寫作規範嗎？')">
+        <span class="quick-icon">🧠</span>
+        <span class="quick-label">學習閉環</span>
+        <span class="quick-desc">反思、知識庫、規範更新</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 對話區域 -->
+  <div class="chat-messages" x-ref="chatMessages">
+    <template x-for="(msg, idx) in messages" :key="idx">
+      <div :class="'chat-bubble ' + msg.role">
+        <div class="bubble-avatar" x-text="msg.role === 'user' ? '👤' : '🤖'"></div>
+        <div class="bubble-content">
+          <div class="bubble-text" x-html="renderMarkdown(msg.content)"></div>
+          <div class="bubble-meta" x-show="msg.tool_calls_count > 0" x-cloak>
+            <span style="font-size:11px;color:var(--cf-text-muted);">
+              🔧 查詢了 <span x-text="msg.tool_calls_count"></span> 項資料
+            </span>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Loading indicator -->
+    <div class="chat-bubble assistant" x-show="loading" x-cloak>
+      <div class="bubble-avatar">🤖</div>
+      <div class="bubble-content">
+        <div class="typing-indicator">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 輸入區 -->
+  <div class="chat-input-bar">
+    <div class="chat-input-wrap">
+      <textarea
+        x-ref="chatInput"
+        x-model="input"
+        @keydown.enter.prevent="if (!$event.shiftKey) send()"
+        placeholder="問我任何 SEO 問題⋯（⌘K 聚焦）"
+        rows="1"
+        :disabled="loading"
+        @input="autoResize($event)"
+      ></textarea>
+      <button class="chat-send-btn" @click="send()" :disabled="loading || !input.trim()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      </button>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:0 4px;">
+      <span style="font-size:11px;color:var(--cf-text-muted);">Shift+Enter 換行 · Enter 發送</span>
+      <button class="btn btn-ghost btn-sm" @click="clearChat()" x-show="messages.length > 0" style="font-size:11px;">清除對話</button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* ── Chat Layout ─────────────────────────────────────────── */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 80px);
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 8px;
+}
+
+/* ── Quick Actions ───────────────────────────────────────── */
+.chat-quick-actions {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 16px;
+}
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .quick-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.quick-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: var(--cf-card);
+  border: 1px solid var(--cf-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+.quick-card:hover {
+  border-color: var(--cf-accent);
+  box-shadow: var(--cf-shadow-sm);
+  transform: translateY(-1px);
+}
+.quick-icon { font-size: 22px; margin-bottom: 8px; }
+.quick-label { font-size: 13px; font-weight: 600; color: var(--cf-text); }
+.quick-desc { font-size: 11px; color: var(--cf-text-muted); margin-top: 2px; }
+
+/* ── Messages ────────────────────────────────────────────── */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 0;
+  scroll-behavior: smooth;
+}
+.chat-bubble {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  max-width: 100%;
+}
+.chat-bubble.user {
+  flex-direction: row-reverse;
+}
+.bubble-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+  background: var(--cf-surface);
+}
+.chat-bubble.user .bubble-avatar {
+  background: var(--cf-accent);
+  color: white;
+  font-size: 14px;
+}
+.bubble-content {
+  max-width: 85%;
+  min-width: 60px;
+}
+.bubble-text {
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--cf-text);
+  word-break: break-word;
+}
+.chat-bubble.assistant .bubble-text {
+  background: var(--cf-card);
+  border: 1px solid var(--cf-border);
+  border-top-left-radius: 4px;
+}
+.chat-bubble.user .bubble-text {
+  background: var(--cf-accent);
+  color: white;
+  border-top-right-radius: 4px;
+}
+.bubble-text table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.bubble-text th, .bubble-text td {
+  border: 1px solid var(--cf-border);
+  padding: 5px 8px;
+  text-align: left;
+}
+.bubble-text th {
+  background: var(--cf-surface);
+  font-weight: 600;
+  font-size: 11px;
+}
+.bubble-text code {
+  background: rgba(99,102,241,0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.bubble-text pre {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.bubble-text ul, .bubble-text ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.bubble-text li { margin-bottom: 2px; }
+.bubble-text strong { font-weight: 700; }
+.bubble-text h3, .bubble-text h4 {
+  margin: 10px 0 4px;
+  font-weight: 700;
+}
+.bubble-meta {
+  padding: 4px 14px 0;
+}
+
+/* ── Typing indicator ────────────────────────────────────── */
+.typing-indicator {
+  display: flex;
+  gap: 5px;
+  padding: 4px 0;
+}
+.typing-indicator span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cf-accent);
+  opacity: 0.4;
+  animation: typing-bounce 1.4s infinite;
+}
+.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ── Input bar ───────────────────────────────────────────── */
+.chat-input-bar {
+  padding: 12px 0 8px;
+  flex-shrink: 0;
+}
+.chat-input-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--cf-card);
+  border: 1.5px solid var(--cf-border);
+  border-radius: 16px;
+  padding: 8px 12px;
+  transition: border-color 0.2s;
+}
+.chat-input-wrap:focus-within {
+  border-color: var(--cf-accent);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+}
+.chat-input-wrap textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  max-height: 120px;
+  font-family: inherit;
+  color: var(--cf-text);
+}
+.chat-input-wrap textarea::placeholder {
+  color: var(--cf-text-muted);
+}
+.chat-send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--cf-accent-grad);
+  color: white;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.chat-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.chat-send-btn:hover:not(:disabled) { box-shadow: var(--cf-shadow-accent); }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function chatApp() {
+  return {
+    messages: [],
+    input: '',
+    loading: false,
+
+    // ── Markdown renderer (lightweight) ──────────────────
+    renderMarkdown(text) {
+      if (!text) return '';
+      let html = text
+        // Code blocks
+        .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+        // Inline code
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        // Bold
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        // Italic
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        // Headers
+        .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        // Tables
+        .replace(/^\|(.+)\|$/gm, (match) => {
+          const cells = match.split('|').filter(c => c.trim());
+          return '<tr>' + cells.map(c => {
+            const trimmed = c.trim();
+            if (/^[-:]+$/.test(trimmed)) return null;
+            return '<td>' + trimmed + '</td>';
+          }).filter(Boolean).join('') + '</tr>';
+        });
+
+      // Wrap consecutive <tr> in <table>
+      html = html.replace(/((?:<tr>.*<\/tr>\s*)+)/g, '<table><tbody>$1</tbody></table>');
+      // Replace separator rows that leaked through
+      html = html.replace(/<tr><td>[-:| ]+<\/td><\/tr>/g, '');
+
+      // Fix: first row of table → <th>
+      html = html.replace(/<table><tbody><tr>(.*?)<\/tr>/g, (m, inner) => {
+        const ths = inner.replace(/<td>/g, '<th>').replace(/<\/td>/g, '</th>');
+        return '<table><thead><tr>' + ths + '</tr></thead><tbody>';
+      });
+
+      // Lists
+      html = html.replace(/^[-•] (.+)$/gm, '<li>$1</li>');
+      html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
+      html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+      // Line breaks (but not inside tags)
+      html = html.replace(/\n/g, '<br>');
+      // Clean up excessive <br>
+      html = html.replace(/(<br>){3,}/g, '<br><br>');
+      html = html.replace(/<br>(<\/?(?:table|thead|tbody|tr|th|td|ul|ol|li|pre|h3|h4)>)/g, '$1');
+      html = html.replace(/(<\/?(?:table|thead|tbody|tr|th|td|ul|ol|li|pre|h3|h4)>)<br>/g, '$1');
+
+      return html;
+    },
+
+    // ── Send message ─────────────────────────────────────
+    async send() {
+      const text = this.input.trim();
+      if (!text || this.loading) return;
+
+      this.messages.push({ role: 'user', content: text });
+      this.input = '';
+      this.loading = true;
+      await this.$nextTick();
+      this.scrollBottom();
+
+      try {
+        // Build messages for API (only role + content)
+        const apiMessages = this.messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role, content: m.content }));
+
+        const res = await fetch('/admin/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ messages: apiMessages }),
+        });
+
+        const data = await res.json();
+        this.messages.push({
+          role: 'assistant',
+          content: data.content || '（空白回覆）',
+          tool_calls_count: data.tool_calls_count || 0,
+        });
+      } catch (err) {
+        this.messages.push({
+          role: 'assistant',
+          content: '⚠️ 連線錯誤：' + err.message,
+          tool_calls_count: 0,
+        });
+      } finally {
+        this.loading = false;
+        await this.$nextTick();
+        this.scrollBottom();
+      }
+    },
+
+    sendQuick(text) {
+      this.input = text;
+      this.send();
+    },
+
+    clearChat() {
+      this.messages = [];
+    },
+
+    scrollBottom() {
+      const el = this.$refs.chatMessages;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    autoResize(event) {
+      const el = event.target;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    },
+  };
+}
+</script>
+{% endblock %}
