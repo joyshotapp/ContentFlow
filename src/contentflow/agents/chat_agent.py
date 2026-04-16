@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,6 +24,7 @@ from ..models.database import (
     CompetitorSnapshot,
     GAPageMetric,
     Keyword,
+    KnowledgeAuditLog,
     KnowledgeEntry,
     PipelineRun,
     Project,
@@ -41,7 +43,13 @@ SYSTEM_PROMPT = """\
 你能做三件事：
 1. **報告**：查詢系統狀態（文章、排名、排程、Pipeline 執行情況等）
 2. **分析**：交叉分析數據並產出 SEO 洞察（關鍵字 ROI、排名趨勢、競品動態等）
-3. **操作**：根據使用者指示觸發系統動作（產文、刷新、排程等）
+3. **操作**：根據使用者指示觸發系統動作，包括：
+   - 產文 / 刷新文章 / 批量建立文章
+   - 變更文章狀態 / 更新文章 meta 資訊
+   - 新增關鍵字 / 新增日曆排程 / 執行日曆項目
+   - 手動觸發排程 Job（GSC 同步、GA4 同步、自動 Pipeline 等）
+   - 管理知識庫（啟停用、採納為寫作規範）
+   - 更新自動發布設定
 
 回答規則：
 - 使用繁體中文（台灣用語）
@@ -50,6 +58,7 @@ SYSTEM_PROMPT = """\
 - 主動提供可操作的建議
 - 如果對查詢結果有 SEO 觀點，主動補充
 - 金額用美元、排名用 Google 排名位置
+- 執行操作前確認使用者意圖，操作後回報結果
 
 你代表的系統名稱是「ContentFlow」，品牌名稱是「{site_name}」。
 現在時間：{now}
@@ -268,6 +277,200 @@ TOOLS = [
                     "article_id": {"type": "integer", "description": "要刷新的文章 ID"},
                 },
                 "required": ["article_id"],
+            },
+        },
+    },
+    # ── L3 擴展工具 ──
+    {
+        "type": "function",
+        "function": {
+            "name": "trigger_scheduler_job",
+            "description": "手動觸發排程 Job（如 GSC 同步、GA4 同步、自動 Pipeline、排名掉落檢查、每週反思等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "排程 Job ID",
+                        "enum": [
+                            "sync_gsc_all_projects", "sync_ga4_all_projects",
+                            "sync_keyword_trends", "check_scheduled_publishes",
+                            "backfill_action_outcomes", "run_auto_pipeline",
+                            "run_render_verification", "run_competitor_serp_check",
+                            "run_attribution_engine", "check_refresh_triggers",
+                            "run_weekly_reflection", "send_weekly_report",
+                            "run_l1_pattern_analysis", "run_l2_roi_analysis",
+                            "check_ranking_drops",
+                        ],
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bulk_create_articles",
+            "description": "批量建立文章（提供關鍵字清單，每個關鍵字建立一篇 planned 狀態文章）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "要建立的文章清單",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "keyword": {"type": "string", "description": "主關鍵字（必填）"},
+                                "title": {"type": "string", "description": "文章標題（可選，預設同關鍵字）"},
+                                "article_type": {"type": "string", "description": "文章類型（預設「知識」）"},
+                            },
+                            "required": ["keyword"],
+                        },
+                    },
+                },
+                "required": ["items"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_article_meta",
+            "description": "更新文章的 meta 資訊（標題、SEO 標題、SEO 描述、slug）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "article_id": {"type": "integer", "description": "文章 ID"},
+                    "title": {"type": "string", "description": "文章標題"},
+                    "meta_title": {"type": "string", "description": "SEO 標題"},
+                    "meta_description": {"type": "string", "description": "SEO 描述"},
+                    "slug": {"type": "string", "description": "URL slug"},
+                },
+                "required": ["article_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_article_status",
+            "description": "變更文章狀態（例如 planned → writing、reviewing → published）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "article_id": {"type": "integer", "description": "文章 ID"},
+                    "status": {
+                        "type": "string",
+                        "description": "新狀態",
+                        "enum": ["planned", "writing", "researching", "reviewing", "published", "failed"],
+                    },
+                },
+                "required": ["article_id", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_keyword",
+            "description": "新增關鍵字到關鍵字庫",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "關鍵字文字"},
+                    "search_volume": {"type": "number", "description": "月搜尋量（可選）"},
+                    "seo_difficulty": {"type": "number", "description": "SEO 難度 0-100（可選）"},
+                    "intent": {
+                        "type": "string",
+                        "description": "搜尋意圖",
+                        "enum": ["informational", "commercial", "transactional", "navigational"],
+                    },
+                    "funnel_stage": {
+                        "type": "string",
+                        "description": "漏斗階段",
+                        "enum": ["awareness", "consideration", "decision"],
+                    },
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_entry",
+            "description": "新增內容日曆排程項目",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "日曆項目標題"},
+                    "month": {"type": "string", "description": "月份（YYYY-MM 格式，預設當月）"},
+                    "week": {"type": "integer", "description": "第幾週（1-5，預設 1）"},
+                    "article_type": {"type": "string", "description": "文章類型（預設「知識」）"},
+                    "keywords": {"type": "string", "description": "關鍵字（逗號分隔）"},
+                    "search_intent": {"type": "string", "description": "搜尋意圖"},
+                    "target_audience": {"type": "string", "description": "目標受眾"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_calendar_entry",
+            "description": "執行日曆排程項目（建立文章並排入 Pipeline 佇列）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "integer", "description": "日曆項目 ID"},
+                },
+                "required": ["entry_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_knowledge",
+            "description": "啟用或停用知識庫條目",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "integer", "description": "知識條目 ID"},
+                },
+                "required": ["entry_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "adopt_knowledge_to_rule",
+            "description": "將知識庫條目採納為寫作規範（WritingRule），讓後續文章撰寫遵守此規則",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "integer", "description": "知識條目 ID"},
+                },
+                "required": ["entry_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_auto_publish",
+            "description": "更新自動發布設定（啟用/停用自動發布、設定最低 SEO 分數門檻）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "description": "是否啟用自動發布"},
+                    "min_score": {"type": "integer", "description": "最低 SEO 分數門檻（0-100，預設 85）"},
+                },
+                "required": ["enabled"],
             },
         },
     },
@@ -812,6 +1015,375 @@ def _tool_trigger_refresh(**kwargs: Any) -> dict:
     }
 
 
+# ── L3 擴展工具實作 ──────────────────────────────────────────
+
+
+async def _tool_trigger_scheduler_job(**kwargs: Any) -> dict:
+    """手動觸發排程 Job。"""
+    from .. import scheduler as sched_mod
+
+    job_id = kwargs["job_id"]
+    valid_jobs = [
+        "sync_gsc_all_projects", "sync_ga4_all_projects",
+        "sync_keyword_trends", "check_scheduled_publishes",
+        "backfill_action_outcomes", "run_auto_pipeline",
+        "run_render_verification", "run_competitor_serp_check",
+        "run_attribution_engine", "check_refresh_triggers",
+        "run_weekly_reflection", "send_weekly_report",
+        "run_l1_pattern_analysis", "run_l2_roi_analysis",
+        "check_ranking_drops",
+    ]
+    if job_id not in valid_jobs:
+        return {"error": f"未知的排程 Job: {job_id}"}
+
+    fn = getattr(sched_mod, job_id, None)
+    if not fn:
+        return {"error": f"排程函數 {job_id} 不存在"}
+
+    try:
+        await fn()
+        return {
+            "success": True,
+            "message": f"排程 Job「{job_id}」已成功執行完畢。",
+        }
+    except Exception as e:
+        return {"error": f"執行 {job_id} 失敗: {str(e)[:200]}"}
+
+
+def _tool_bulk_create_articles(**kwargs: Any) -> dict:
+    """批量建立文章。"""
+    items = kwargs.get("items", [])
+    if not items:
+        return {"error": "未提供任何文章項目"}
+    if len(items) > 20:
+        return {"error": "單次最多建立 20 篇文章"}
+
+    created = []
+    skipped = []
+    with SessionLocal() as session:
+        project = session.query(Project).first()
+        if not project:
+            return {"error": "尚無專案，請先在設定頁建立"}
+
+        for item in items:
+            keyword = (item.get("keyword") or "").strip()
+            if not keyword:
+                skipped.append({"keyword": "(空)", "reason": "關鍵字為空"})
+                continue
+
+            existing = session.query(Article).filter(
+                Article.primary_keyword == keyword
+            ).first()
+            if existing:
+                skipped.append({
+                    "keyword": keyword,
+                    "reason": f"已存在 (ID={existing.id}, 狀態={existing.status})",
+                })
+                continue
+
+            article = Article(
+                project_id=project.id,
+                primary_keyword=keyword,
+                title=item.get("title") or keyword,
+                article_type=item.get("article_type", "知識"),
+                slug="",
+                draft_content="",
+                status="planned",
+            )
+            session.add(article)
+            session.flush()
+            created.append({"id": article.id, "keyword": keyword})
+
+        session.commit()
+
+    return {
+        "success": True,
+        "created": len(created),
+        "skipped": len(skipped),
+        "created_articles": created,
+        "skipped_articles": skipped,
+    }
+
+
+def _tool_update_article_meta(**kwargs: Any) -> dict:
+    """更新文章 meta 資訊。"""
+    article_id = kwargs["article_id"]
+    with SessionLocal() as session:
+        article = session.get(Article, article_id)
+        if not article:
+            return {"error": f"找不到文章 ID={article_id}"}
+
+        updated_fields = []
+        for field in ("title", "meta_title", "meta_description", "slug"):
+            if field in kwargs and kwargs[field] is not None:
+                # slug 唯一性檢查
+                if field == "slug":
+                    dup = session.query(Article).filter(
+                        Article.slug == kwargs["slug"],
+                        Article.id != article_id,
+                    ).first()
+                    if dup:
+                        return {"error": f"slug「{kwargs['slug']}」已被文章 ID={dup.id} 使用"}
+                setattr(article, field, kwargs[field])
+                updated_fields.append(field)
+
+        if not updated_fields:
+            return {"error": "未提供任何要更新的欄位"}
+
+        session.commit()
+
+    return {
+        "success": True,
+        "article_id": article_id,
+        "updated_fields": updated_fields,
+        "message": f"已更新文章 ID={article_id} 的 {', '.join(updated_fields)}。",
+    }
+
+
+def _tool_update_article_status(**kwargs: Any) -> dict:
+    """變更文章狀態。"""
+    article_id = kwargs["article_id"]
+    new_status = kwargs["status"]
+
+    with SessionLocal() as session:
+        article = session.get(Article, article_id)
+        if not article:
+            return {"error": f"找不到文章 ID={article_id}"}
+
+        old_status = article.status
+        article.status = new_status
+
+        publish_info = None
+        if new_status == "published" and article.slug:
+            article.publish_url = f"https://{settings.site_name}/blog/{article.slug}"
+            article.published_at = datetime.now(timezone.utc)
+            publish_info = article.publish_url
+
+        session.commit()
+
+    result = {
+        "success": True,
+        "article_id": article_id,
+        "old_status": old_status,
+        "new_status": new_status,
+        "message": f"文章 ID={article_id} 狀態已從「{old_status}」變更為「{new_status}」。",
+    }
+    if publish_info:
+        result["publish_url"] = publish_info
+        result["message"] += f" 發布 URL: {publish_info}"
+    return result
+
+
+def _tool_add_keyword(**kwargs: Any) -> dict:
+    """新增關鍵字。"""
+    keyword_text = (kwargs.get("keyword") or "").strip()
+    if not keyword_text:
+        return {"error": "關鍵字不可為空"}
+
+    with SessionLocal() as session:
+        project = session.query(Project).first()
+
+        existing = session.query(Keyword).filter(
+            Keyword.keyword == keyword_text
+        ).first()
+        if existing:
+            return {"error": f"關鍵字「{keyword_text}」已存在 (ID={existing.id})"}
+
+        kw = Keyword(
+            project_id=project.id if project else None,
+            keyword=keyword_text,
+            search_volume=kwargs.get("search_volume", 0),
+            seo_difficulty=kwargs.get("seo_difficulty", 0),
+            intent=kwargs.get("intent") or None,
+            funnel_stage=kwargs.get("funnel_stage") or None,
+        )
+        session.add(kw)
+        session.commit()
+        session.refresh(kw)
+        kw_id = kw.id
+
+    return {
+        "success": True,
+        "keyword_id": kw_id,
+        "message": f"已新增關鍵字「{keyword_text}」(ID={kw_id})。",
+    }
+
+
+def _tool_create_calendar_entry(**kwargs: Any) -> dict:
+    """新增內容日曆項目。"""
+    title = (kwargs.get("title") or "").strip()
+    if not title:
+        return {"error": "標題不可為空"}
+
+    month = kwargs.get("month") or datetime.now(timezone.utc).strftime("%Y-%m")
+    week = kwargs.get("week", 1)
+
+    with SessionLocal() as session:
+        project = session.query(Project).first()
+        entry = ContentCalendar(
+            project_id=project.id if project else None,
+            title=title,
+            month=month,
+            week=week,
+            article_type=kwargs.get("article_type", "知識"),
+            keywords=kwargs.get("keywords", ""),
+            search_intent=kwargs.get("search_intent", ""),
+            target_audience=kwargs.get("target_audience", ""),
+            writing_architecture="倒三角",
+            status="planned",
+        )
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+        entry_id = entry.id
+
+    return {
+        "success": True,
+        "entry_id": entry_id,
+        "message": f"已新增日曆項目「{title}」(ID={entry_id})，排程 {month} 第 {week} 週。",
+    }
+
+
+def _tool_run_calendar_entry(**kwargs: Any) -> dict:
+    """執行日曆項目：建立文章並排入佇列。"""
+    entry_id = kwargs["entry_id"]
+    with SessionLocal() as session:
+        entry = session.get(ContentCalendar, entry_id)
+        if not entry:
+            return {"error": f"找不到日曆項目 ID={entry_id}"}
+        if entry.status in ("completed", "published"):
+            return {"error": f"日曆項目已完成（狀態: {entry.status}）"}
+
+        if entry.article_id:
+            article = session.get(Article, entry.article_id)
+            if article:
+                article.status = "planned"
+        else:
+            keywords_list = [k.strip() for k in (entry.keywords or "").split(",") if k.strip()]
+            article = Article(
+                project_id=entry.project_id,
+                primary_keyword=keywords_list[0] if keywords_list else entry.title,
+                secondary_keywords=",".join(keywords_list[1:]) if len(keywords_list) > 1 else "",
+                title=entry.title,
+                article_type=entry.article_type or "知識",
+                slug="",
+                draft_content="",
+                status="planned",
+            )
+            session.add(article)
+            session.flush()
+            entry.article_id = article.id
+
+        entry.status = "in_progress"
+        session.commit()
+        article_id = entry.article_id
+
+    return {
+        "success": True,
+        "entry_id": entry_id,
+        "article_id": article_id,
+        "message": f"日曆項目 ID={entry_id} 已準備就緒，文章 ID={article_id} 已排入佇列。"
+                   f"可至 Agent 執行中心手動觸發 Pipeline，或等待每日自動排程處理。",
+    }
+
+
+def _tool_toggle_knowledge(**kwargs: Any) -> dict:
+    """啟用/停用知識庫條目。"""
+    entry_id = kwargs["entry_id"]
+    with SessionLocal() as session:
+        entry = session.get(KnowledgeEntry, entry_id)
+        if not entry:
+            return {"error": f"找不到知識條目 ID={entry_id}"}
+
+        entry.is_active = not entry.is_active
+        action = "reactivate" if entry.is_active else "deactivate"
+
+        audit = KnowledgeAuditLog(
+            entry_id=entry_id,
+            action=action,
+            operator="chat_agent",
+        )
+        session.add(audit)
+        session.commit()
+        new_state = "啟用" if entry.is_active else "停用"
+
+    return {
+        "success": True,
+        "entry_id": entry_id,
+        "is_active": entry.is_active,
+        "message": f"知識條目 ID={entry_id} 已{new_state}。",
+    }
+
+
+def _tool_adopt_knowledge_to_rule(**kwargs: Any) -> dict:
+    """將知識條目採納為寫作規範。"""
+    entry_id = kwargs["entry_id"]
+    with SessionLocal() as session:
+        entry = session.get(KnowledgeEntry, entry_id)
+        if not entry:
+            return {"error": f"找不到知識條目 ID={entry_id}"}
+
+        # 檢查是否已採納
+        existing = session.query(WritingRule).filter(
+            WritingRule.content == entry.pattern,
+            WritingRule.project_id == entry.project_id,
+        ).first()
+        if existing:
+            return {
+                "error": f"此知識條目已採納為寫作規範 (ID={existing.id})",
+                "rule_id": existing.id,
+            }
+
+        rule = WritingRule(
+            project_id=entry.project_id,
+            rule_type="style",
+            name=entry.category or "知識庫採納",
+            content=entry.pattern,
+        )
+        session.add(rule)
+
+        audit = KnowledgeAuditLog(
+            entry_id=entry_id,
+            action="adopted_as_rule",
+            operator="chat_agent",
+        )
+        session.add(audit)
+        session.commit()
+        session.refresh(rule)
+        rule_id = rule.id
+
+    return {
+        "success": True,
+        "entry_id": entry_id,
+        "rule_id": rule_id,
+        "message": f"知識條目 ID={entry_id} 已採納為寫作規範 (Rule ID={rule_id})。"
+                   f"後續文章撰寫將遵守此規則。",
+    }
+
+
+def _tool_update_auto_publish(**kwargs: Any) -> dict:
+    """更新自動發布設定。"""
+    enabled = kwargs["enabled"]
+    min_score = max(0, min(100, kwargs.get("min_score", 85)))
+
+    with SessionLocal() as session:
+        project = session.query(Project).first()
+        if not project:
+            return {"error": "尚無專案，請先在設定頁建立"}
+
+        project.auto_publish_enabled = enabled
+        project.auto_publish_min_score = min_score
+        session.commit()
+
+    state = "啟用" if enabled else "停用"
+    return {
+        "success": True,
+        "enabled": enabled,
+        "min_score": min_score,
+        "message": f"自動發布已{state}，最低 SEO 分數門檻: {min_score} 分。",
+    }
+
+
 # ── Tool dispatcher ───────────────────────────────────────────
 
 TOOL_MAP = {
@@ -829,15 +1401,29 @@ TOOL_MAP = {
     "explain_article_decision": _tool_explain_article_decision,
     "trigger_pipeline": _tool_trigger_pipeline,
     "trigger_refresh": _tool_trigger_refresh,
+    # L3 擴展
+    "trigger_scheduler_job": _tool_trigger_scheduler_job,
+    "bulk_create_articles": _tool_bulk_create_articles,
+    "update_article_meta": _tool_update_article_meta,
+    "update_article_status": _tool_update_article_status,
+    "add_keyword": _tool_add_keyword,
+    "create_calendar_entry": _tool_create_calendar_entry,
+    "run_calendar_entry": _tool_run_calendar_entry,
+    "toggle_knowledge": _tool_toggle_knowledge,
+    "adopt_knowledge_to_rule": _tool_adopt_knowledge_to_rule,
+    "update_auto_publish": _tool_update_auto_publish,
 }
 
 
-def _execute_tool(name: str, arguments: dict) -> str:
+async def _execute_tool(name: str, arguments: dict) -> str:
     fn = TOOL_MAP.get(name)
     if not fn:
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
     try:
-        result = fn(**arguments)
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn(**arguments)
+        else:
+            result = fn(**arguments)
         return json.dumps(result, ensure_ascii=False, default=str)
     except Exception as e:
         logger.error(f"[ChatAgent] Tool {name} 執行失敗: {e}")
@@ -900,7 +1486,7 @@ async def chat(
             tool_calls_count += 1
             args = json.loads(tc.function.arguments)
             logger.info(f"[ChatAgent] Calling {tc.function.name}({args})")
-            result = _execute_tool(tc.function.name, args)
+            result = await _execute_tool(tc.function.name, args)
             full_messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
