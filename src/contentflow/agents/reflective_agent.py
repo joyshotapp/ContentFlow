@@ -326,6 +326,10 @@ REFLECTION_PROMPTS = {
 分析以下 pipeline 執行數據，產出：
 1. **insights** — 觀察到的洞察（有什麼值得記錄的模式？）
 2. **knowledge_updates** — 要寫入知識庫的條目（category + pattern）
+   category 必須使用以下標準名稱之一：
+   content_quality / content_strategy / fact_checking / seo_optimization /
+   writing_strategy / format_pattern / word_count_pattern / title_format /
+   faq_impact / keyword_roi / refresh_priority
 3. **writing_rule_updates** — 要更新的撰寫規範（如有的話）
 4. **session_summary** — 用 3-5 句話壓縮本次執行的重要資訊，供下次 Agent 讀取
 
@@ -411,11 +415,60 @@ def _fallback_reflection(context: dict) -> dict:
 
 # ── 知識庫與規則更新 ─────────────────────────────────────────
 
+# 正規 category 清單（snake_case），LLM 輸出的任何變體都會被映射至此
+_KB_CATEGORY_ALIASES: dict[str, str] = {
+    # content quality
+    "content quality": "content_quality",
+    "contentquality": "content_quality",
+    "content_quality": "content_quality",
+    # content strategy
+    "content strategy": "content_strategy",
+    "contentstrategy": "content_strategy",
+    "content_strategy": "content_strategy",
+    # fact checking
+    "fact checking": "fact_checking",
+    "fact-checking": "fact_checking",
+    "factchecking": "fact_checking",
+    "fact_checking": "fact_checking",
+    # seo
+    "seo": "seo_optimization",
+    "seo optimization": "seo_optimization",
+    "seo_optimization": "seo_optimization",
+    "seo optimisation": "seo_optimization",
+    # writing strategy
+    "writing strategy": "writing_strategy",
+    "writingstrategy": "writing_strategy",
+    "writing_strategy": "writing_strategy",
+    # format
+    "format pattern": "format_pattern",
+    "format_pattern": "format_pattern",
+    # word count
+    "word count": "word_count_pattern",
+    "word_count_pattern": "word_count_pattern",
+    # title
+    "title format": "title_format",
+    "title_format": "title_format",
+    # faq
+    "faq impact": "faq_impact",
+    "faq_impact": "faq_impact",
+}
+
+
+def _normalize_kb_category(raw: str) -> str:
+    """將 LLM 自由生成的 category 正規化為 snake_case 標準名稱。"""
+    normalized = _KB_CATEGORY_ALIASES.get(raw.lower().strip())
+    if normalized:
+        return normalized
+    # 無對應時：轉 snake_case（空格改底線、全小寫）
+    return raw.strip().lower().replace(" ", "_").replace("-", "_")
+
+
 def _apply_knowledge_updates(session, project_id: int, updates: list[dict]) -> int:
     """將反思洞察寫入 KnowledgeEntry。去重：相同 category + pattern 前 50 字不重複。"""
     count = 0
     for upd in updates:
-        category = upd.get("category", "reflection")
+        raw_category = upd.get("category", "reflection")
+        category = _normalize_kb_category(raw_category)
         pattern = upd.get("pattern", "")
         if not pattern:
             continue

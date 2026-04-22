@@ -71,6 +71,8 @@ class Project(Base):
     ga_page_metrics = relationship("GAPageMetric", back_populates="project")
     competitor_snapshots = relationship("CompetitorSnapshot", back_populates="project")
     authors = relationship("Author", back_populates="project")
+    backlink_snapshots = relationship("BacklinkSnapshot", back_populates="project")
+    gbp_metrics = relationship("GoogleBusinessMetric", back_populates="project")
 
     def __repr__(self):
         return f"<Project '{self.slug}' ({self.name})>"
@@ -685,3 +687,58 @@ class ActionOutcome(Base):
 
     def __repr__(self):
         return f"<ActionOutcome {self.action_type} kw='{self.primary_keyword}' {self.success_flag or 'pending'}>"
+
+
+# ── 反向連結快照（SEO SOP 反向連結監控）─────────────────────────────────────────
+
+class BacklinkSnapshot(Base):
+    """DataForSEO 反向連結摘要快照，每週同步一次。"""
+    __tablename__ = "backlink_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    target_url = Column(String, nullable=False)                  # 被連結的目標 URL（品牌域名）
+    total_backlinks = Column(Integer, default=0)                 # 反向連結總數
+    referring_domains = Column(Integer, default=0)               # 引薦域名數
+    new_backlinks = Column(Integer, default=0)                   # 本週新增反向連結
+    lost_backlinks = Column(Integer, default=0)                  # 本週失去反向連結
+    domain_rank = Column(Float, nullable=True)                   # 目標域名評分（DataForSEO DR）
+    broken_backlinks = Column(Integer, default=0)                # 指向 4xx/5xx 頁面的反向連結
+    nofollow_backlinks = Column(Integer, default=0)              # nofollow 反向連結數
+    dofollow_backlinks = Column(Integer, default=0)              # dofollow 反向連結數
+    top_anchors_json = Column(Text, default="[]")                # 前 10 錨文字（JSON 陣列）
+    top_referring_domains_json = Column(Text, default="[]")      # 前 10 引薦域名（JSON 陣列）
+    tracked_date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="backlink_snapshots")
+
+    def __repr__(self):
+        return f"<BacklinkSnapshot project={self.project_id} domains={self.referring_domains} {self.tracked_date}>"
+
+
+# ── Google 商家檔案指標（GBP 整合）──────────────────────────────────────────────
+
+class GoogleBusinessMetric(Base):
+    """Google Business Profile 每日指標快照（本地 SEO 監控）。"""
+    __tablename__ = "google_business_metrics"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    location_id = Column(String, nullable=False, index=True)     # GBP location ID（數字字串）
+    location_name = Column(String, default="")                   # 商家名稱
+    views_search = Column(Integer, default=0)                    # Google 搜尋曝光次數
+    views_maps = Column(Integer, default=0)                      # Google 地圖曝光次數
+    clicks_website = Column(Integer, default=0)                  # 點擊官網次數
+    clicks_phone = Column(Integer, default=0)                    # 點擊電話次數
+    clicks_directions = Column(Integer, default=0)               # 點擊導航次數
+    reviews_total = Column(Integer, default=0)                   # 累計評論數
+    reviews_avg_rating = Column(Float, nullable=True)            # 平均評分 1.0-5.0
+    new_reviews = Column(Integer, default=0)                     # 本期新增評論
+    tracked_date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="gbp_metrics")
+
+    def __repr__(self):
+        return f"<GoogleBusinessMetric loc={self.location_id} views={self.views_search + self.views_maps} {self.tracked_date}>"

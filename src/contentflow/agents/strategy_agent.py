@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from loguru import logger
-from openai import OpenAI
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import SerpAnalysis
 from ..project_context import ProjectContext, load_project_context
 
@@ -84,20 +84,14 @@ class StrategyReport:
         }
 
 
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _chat(client: OpenAI, system: str, user: str) -> str:
-    resp = client.chat.completions.create(
-        model=settings.llm_lite_model,
+def _chat(system: str, user: str) -> str:
+    return chat_sync(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        max_completion_tokens=2048,
+        max_tokens=2048,
     )
-    return resp.choices[0].message.content or ""
 
 
 def _build_serp_summary(serp: SerpAnalysis) -> str:
@@ -141,7 +135,6 @@ async def run_strategy_agent(
     也可只給 keyword 自動抓取。
     """
     logger.info(f"[Strategy Agent] 啟動：「{keyword}」")
-    client = _get_client()
     ctx = load_project_context(project_id)
 
     # ── Step 1: 如果沒有 SERP 資料，先抓取 ──────────────────
@@ -244,7 +237,7 @@ async def run_strategy_agent(
 {kb_context}
 請根據以上資料，產出完整的 SEO 策略分析報告（JSON 格式）。"""
 
-    raw = _chat(client, system, user)
+    raw = _chat(system, user)
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]

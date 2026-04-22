@@ -150,7 +150,7 @@ async def _run_pipeline(article_id: int, keyword: str, project_id: int) -> None:
         await _notify_draft_ready(article_id, task.title)
 
     except Exception as exc:
-        logger.error(f"[Pipeline] article_id={article_id} 失敗：{exc}")
+        logger.exception(f"[Pipeline] article_id={article_id} 失敗：{exc}")
         with next(get_session()) as session:
             article = session.get(Article, article_id)
             if article:

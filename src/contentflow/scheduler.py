@@ -14,6 +14,7 @@ import asyncio
 import fcntl
 import os
 import time
+import traceback
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from typing import Callable, Awaitable
@@ -105,20 +106,23 @@ def with_retry(max_retries: int = 3, base_delay: int = 300):
                     return
                 except Exception as exc:
                     error_msg = str(exc)
-                    logger.warning(f"[Scheduler] {job_name} 第 {attempt + 1} 次失敗：{error_msg}")
+                    tb = traceback.format_exc()
+                    # 前幾次失敗用 exception() 記錄完整 traceback，方便 debug
+                    logger.exception(f"[Scheduler] {job_name} 第 {attempt + 1} 次失敗：{error_msg}")
                     if attempt < max_retries:
                         delay = base_delay * (3 ** attempt)  # 5min, 15min, 45min
                         logger.info(f"[Scheduler] {job_name} {delay // 60}min 後重試")
                         await asyncio.sleep(delay)
                     else:
                         duration = time.monotonic() - t0
+                        # 將 traceback 截短後存入 DB（Text 欄位上限約 50KB）
                         _write_log(
                             job_id=job_name,
                             job_name=job_name,
                             status="failed",
                             started_at=started_at,
                             retry_count=attempt,
-                            error_message=error_msg,
+                            error_message=(error_msg + "\n\n" + tb)[:4000],
                             duration_seconds=duration,
                         )
                         logger.error(f"[Scheduler] ❌ {job_name} 超過最大重試次數")
@@ -624,7 +628,7 @@ async def send_weekly_report() -> None:
         )
         avg_pos = round(float(avg_seo_q.avg_pos), 1) if avg_seo_q and avg_seo_q.avg_pos else None
         total_clicks = int(avg_seo_q.total_clicks or 0) if avg_seo_q else 0
-        total_imp = int(avg_seo_q.total_impressions or 0) if avg_seo_q else 0
+        total_imp = int(avg_seo_q.total_imp or 0) if avg_seo_q else 0
 
         planned_count = session.query(Article).filter(Article.status == "planned").count()
         writing_count = session.query(Article).filter(Article.status == "writing").count()
@@ -1019,28 +1023,61 @@ async def _notify_google_indexing(url: str) -> None:
 async def check_scheduled_publishes() -> None:
     """每日 04:05 — 掃描已到期的排程發布文章，自動推送至各平台。
 
-    條件：Article.scheduled_publish_at <= now()，Article.status == "approved"，
-    且 wp_post_id 或 forgebase_id 不為空（代表草稿已推送）。
+    觸發條件（OR 關係）：
+    1. status="approved"，且 scheduled_publish_at <= now（有預訂時間且到期）
+    2. status="approved"，且 scheduled_publish_at IS NULL（人工核准、無排程 → 立即發布）
+    3. status="review_required"，且 seo_score >= project.auto_publish_min_score
+       （seo 分數符合自動發布門檻但因舊 bug 未被自動發布的文章，補救發布）
     """
-    from contentflow.models.database import Article
+    from contentflow.models.database import Article, Project
+    from sqlalchemy import or_
 
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
-        due_articles = (
+        # 取得 project 門檻對照表
+        project_thresholds: dict[int, int] = {
+            p.id: (p.auto_publish_min_score or 85)
+            for p in session.query(Project).filter(Project.auto_publish_enabled.is_(True)).all()
+        }
+
+        # 條件 1 & 2：approved 文章（有排程且到期 OR 無排程）
+        approved_articles = (
             session.query(Article)
             .filter(
                 Article.status == "approved",
-                Article.scheduled_publish_at <= now,
-                Article.scheduled_publish_at.isnot(None),
+                Article.project_id.in_(list(project_thresholds.keys())),
+                or_(
+                    Article.scheduled_publish_at.is_(None),
+                    Article.scheduled_publish_at <= now,
+                ),
             )
             .all()
         )
+
+        # 條件 3：review_required 且 seo_score >= 門檻（補救自動發布）
+        review_rescue_articles = (
+            session.query(Article)
+            .filter(
+                Article.status == "review_required",
+                Article.project_id.in_(list(project_thresholds.keys())),
+                Article.seo_score.isnot(None),
+                Article.slug.isnot(None),
+            )
+            .all()
+        )
+        # 按專案門檻過濾
+        review_rescue_articles = [
+            a for a in review_rescue_articles
+            if (a.seo_score or 0) >= project_thresholds.get(a.project_id, 85)
+        ]
+
+        due_articles = approved_articles + review_rescue_articles
 
     if not due_articles:
         logger.info("[ScheduledPublish] 無到期排程文章")
         return
 
-    logger.info(f"[ScheduledPublish] 找到 {len(due_articles)} 篇到期排程文章")
+    logger.info(f"[ScheduledPublish] 找到 {len(due_articles)} 篇待發布文章（approved={len(approved_articles)} 補救={len(review_rescue_articles)}）")
     published_count = 0
 
     for article in due_articles:
@@ -1165,6 +1202,207 @@ async def sync_keyword_trends() -> None:
 # ── 排程設定進入點 ────────────────────────────────────────────
 
 @with_retry(max_retries=2)
+async def check_gsc_sitemap_health() -> None:
+    """每週一 04:45 — 稽核 GSC 已提交的 Sitemap 狀態，偵測「無法擷取」並告警。
+
+    使用 GSC Sitemaps API（webmasters v3）列出所有已提交 sitemap，
+    逐一檢查 lastDownloaded、errors、isPending。
+    若發現 unreachable / fetch error，寫入知識庫並送出告警。
+    此為 run_index_coverage_check 的前置基礎設施健康檢查。
+    """
+    from contentflow.models.database import Project, KnowledgeEntry
+    import json as _json_sm
+    import httpx
+
+    svc_file = settings.google_service_account_file
+    if not svc_file:
+        logger.info("[SitemapHealth] 未設定 GOOGLE_SERVICE_ACCOUNT_FILE，跳過")
+        return
+
+    try:
+        import google.oauth2.service_account as _sa
+        import google.auth.transport.requests as _gtr
+        creds = _sa.Credentials.from_service_account_file(
+            svc_file,
+            scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
+        )
+        creds.refresh(_gtr.Request())
+    except Exception as exc:
+        logger.warning(f"[SitemapHealth] Service Account 初始化失敗：{exc}")
+        return
+
+    with SessionLocal() as session:
+        projects = session.query(Project).filter(Project.brand_url != "").all()
+        project_data = [(p.id, p.brand_url) for p in projects]
+
+    if not project_data:
+        logger.info("[SitemapHealth] 無可稽核的專案")
+        return
+
+    for project_id, brand_url in project_data:
+        site_url = _to_gsc_site_url(brand_url)
+        api_site_url = site_url.replace("sc-domain:", "sc-domain%3A")
+        api_url = f"https://www.googleapis.com/webmasters/v3/sites/{api_site_url}/sitemaps"
+
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(
+                    api_url,
+                    headers={"Authorization": f"Bearer {creds.token}"},
+                )
+                if resp.status_code == 404:
+                    logger.info(f"[SitemapHealth] project={project_id} GSC 無已提交的 sitemap")
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning(f"[SitemapHealth] project={project_id} API 呼叫失敗：{exc}")
+            continue
+
+        sitemaps = data.get("sitemap", [])
+        if not sitemaps:
+            # 沒有任何已提交的 sitemap → 這本身就是問題
+            logger.warning(f"[SitemapHealth] project={project_id} {site_url} 無已提交 Sitemap")
+            alert_msg = f"⚠️ [{brand_url}] GSC 無已提交 Sitemap，建議手動提交 /sitemap.xml"
+            await _send_failure_alert("SitemapHealth", alert_msg)
+            with SessionLocal() as session:
+                session.add(KnowledgeEntry(
+                    project_id=project_id,
+                    category="sitemap_health",
+                    pattern="GSC 無已提交 Sitemap",
+                    evidence_count=0,
+                    confidence_level="verified",
+                    metadata_json=_json_sm.dumps({"site_url": site_url, "issue": "no_sitemap_submitted"}),
+                ))
+                session.commit()
+            continue
+
+        broken = []
+        for sm in sitemaps:
+            sm_url = sm.get("path", "")
+            try:
+                errors = int(sm.get("errors", 0) or 0)
+            except (TypeError, ValueError):
+                errors = 0
+            try:
+                warnings = int(sm.get("warnings", 0) or 0)
+            except (TypeError, ValueError):
+                warnings = 0
+            is_pending_raw = sm.get("isPending", False)
+            if isinstance(is_pending_raw, str):
+                is_pending = is_pending_raw.strip().lower() == "true"
+            else:
+                is_pending = bool(is_pending_raw)
+            # GSC 用 "lastDownloaded" 空值或 errors > 0 代表無法擷取
+            if errors > 0 or (not sm.get("lastDownloaded") and not is_pending):
+                broken.append({"url": sm_url, "errors": errors, "warnings": warnings})
+
+        if broken:
+            issue_summary = f"{len(broken)} 個 Sitemap 無法擷取：{[b['url'] for b in broken]}"
+            logger.warning(f"[SitemapHealth] project={project_id} {issue_summary}")
+            await _send_failure_alert("SitemapHealth", f"⚠️ [{brand_url}] {issue_summary}")
+            with SessionLocal() as session:
+                session.add(KnowledgeEntry(
+                    project_id=project_id,
+                    category="sitemap_health",
+                    pattern=issue_summary,
+                    evidence_count=len(broken),
+                    confidence_level="verified",
+                    metadata_json=_json_sm.dumps({
+                        "site_url": site_url,
+                        "broken_sitemaps": broken,
+                        "total_submitted": len(sitemaps),
+                    }),
+                ))
+                session.commit()
+        else:
+            logger.info(f"[SitemapHealth] project={project_id} {len(sitemaps)} 個 Sitemap 均正常")
+
+    logger.info("[SitemapHealth] Sitemap 健康稽核完成")
+
+
+@with_retry(max_retries=2)
+async def check_published_noindex() -> None:
+    """每日 04:10（發布後）— 驗證已發布文章的 HTML 無 noindex，robots.txt 無誤封鎖。
+
+    發布後的「後驗」機制：
+    1. 抓取最近 7 天發布的文章 URL，確認 <meta name="robots"> 無 noindex
+    2. 抓取 robots.txt，確認 /blog/ 路徑未被 Disallow
+    3. 發現問題立即告警，不靜默失敗
+    """
+    import httpx
+    import re as _re
+    from contentflow.models.database import Project, Article
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+
+    with SessionLocal() as session:
+        projects = session.query(Project).filter(Project.brand_url != "").all()
+        project_data = [(p.id, p.brand_url) for p in projects]
+
+    for project_id, brand_url in project_data:
+        # 取最近 7 天已發布文章
+        with SessionLocal() as session:
+            articles = (
+                session.query(Article)
+                .filter(
+                    Article.project_id == project_id,
+                    Article.status == "published",
+                    Article.published_at >= cutoff,
+                )
+                .order_by(Article.published_at.desc())
+                .limit(10)
+                .all()
+            )
+            url_slug_pairs = [(a.id, a.slug) for a in articles if a.slug]
+
+        if not url_slug_pairs:
+            continue
+
+        base = brand_url.rstrip("/")
+        issues = []
+
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            # 1. 檢查 robots.txt
+            try:
+                rb = await client.get(f"{base}/robots.txt")
+                robots_text = rb.text if rb.status_code == 200 else ""
+                if _re.search(r"Disallow:\s*/blog", robots_text, _re.IGNORECASE):
+                    issues.append("robots.txt Disallow: /blog → 文章路徑被封鎖")
+                if _re.search(r"Disallow:\s*/\s*$", robots_text, _re.MULTILINE):
+                    issues.append("robots.txt Disallow: / → 全站被封鎖")
+            except Exception:
+                pass
+
+            # 2. 抽查最多 3 篇文章的 HTML noindex
+            for art_id, slug in url_slug_pairs[:3]:
+                article_url = f"{base}/blog/{slug}"
+                try:
+                    resp = await client.get(article_url)
+                    if resp.status_code == 200:
+                        html = resp.text
+                        if _re.search(
+                            r'<meta[^>]+name=["\']robots["\'][^>]+content=["\'][^"\']*noindex',
+                            html, _re.IGNORECASE
+                        ):
+                            issues.append(f"文章 #{art_id} ({slug}) HTML 含 noindex")
+                    elif resp.status_code == 404:
+                        issues.append(f"文章 #{art_id} ({slug}) 返回 404（未正確發布）")
+                except Exception:
+                    pass
+
+        if issues:
+            msg = f"⚠️ [{brand_url}] 發布後驗證發現問題：{'; '.join(issues)}"
+            logger.warning(f"[PublishVerify] project={project_id} {msg}")
+            await _send_failure_alert("PublishVerify", msg)
+        else:
+            logger.info(f"[PublishVerify] project={project_id} {len(url_slug_pairs)} 篇文章驗證通過")
+
+    logger.info("[PublishVerify] 發布後驗證完成")
+
+
+@with_retry(max_retries=2)
 async def run_index_coverage_check() -> None:
     """每週五 05:00 — Index Coverage 掃描，偵測新失索頁面並寫入知識庫。"""
     from contentflow.tools.tech_seo import GSCIndexCoverageMonitor
@@ -1221,6 +1459,249 @@ async def run_index_coverage_check() -> None:
     logger.info("[IndexCoverage] Index Coverage 掃描完成")
 
 
+# ── 反向連結監控（DataForSEO Backlinks API）─────────────────────────────────
+
+import json as _json_bl
+from contentflow.models.database import BacklinkSnapshot
+
+
+@with_retry()
+async def sync_backlink_metrics() -> None:
+    """每週同步各專案的反向連結摘要（DataForSEO Backlinks Summary Live API）。"""
+    from contentflow.tools.backlinks import DataForSEOBacklinksClient
+    from datetime import date
+
+    if not getattr(settings, "backlink_sync_enabled", False):
+        logger.info("[Backlinks] BACKLINK_SYNC_ENABLED=false，跳過")
+        return
+
+    if not settings.dataforseo_login or not settings.dataforseo_password:
+        logger.warning("[Backlinks] DataForSEO 憑證未設定，跳過")
+        return
+
+    with SessionLocal() as session:
+        from contentflow.models.database import Project
+        projects = session.query(Project).filter(Project.brand_url != "").all()
+        project_data = [(p.id, p.brand_url) for p in projects if p.brand_url]
+
+    if not project_data:
+        logger.info("[Backlinks] 無可掃描的專案（brand_url 未設定）")
+        return
+
+    client = DataForSEOBacklinksClient()
+    today = date.today()
+
+    for project_id, brand_url in project_data:
+        try:
+            summary = await client.get_backlink_summary(brand_url)
+            if summary.has_error:
+                logger.warning(f"[Backlinks] project={project_id} 查詢失敗：{summary.error}")
+                continue
+
+            with SessionLocal() as session:
+                snap = BacklinkSnapshot(
+                    project_id=project_id,
+                    target_url=summary.target_url,
+                    total_backlinks=summary.total_backlinks,
+                    referring_domains=summary.referring_domains,
+                    new_backlinks=summary.new_backlinks,
+                    lost_backlinks=summary.lost_backlinks,
+                    domain_rank=summary.domain_rank,
+                    broken_backlinks=summary.broken_backlinks,
+                    nofollow_backlinks=summary.nofollow_backlinks,
+                    dofollow_backlinks=summary.dofollow_backlinks,
+                    top_anchors_json=_json_bl.dumps(summary.top_anchors, ensure_ascii=False),
+                    top_referring_domains_json=_json_bl.dumps(
+                        summary.top_referring_domains, ensure_ascii=False
+                    ),
+                    tracked_date=today,
+                )
+                session.add(snap)
+
+                # 若有大量失去反向連結，記入知識庫並預警
+                if summary.lost_backlinks > 50 or (
+                    summary.referring_domains > 0
+                    and summary.lost_backlinks / max(summary.referring_domains, 1) > 0.1
+                ):
+                    from contentflow.models.database import KnowledgeEntry
+                    session.add(KnowledgeEntry(
+                        project_id=project_id,
+                        category="backlink_alert",
+                        pattern=(
+                            f"反向連結大幅減少：本週失去 {summary.lost_backlinks} 條 backlinks，"
+                            f"引薦域名 {summary.referring_domains}，"
+                            f"請確認是否有 URL 異動或懲罰問題"
+                        ),
+                        evidence_count=summary.lost_backlinks,
+                        confidence_level="verified",
+                        metadata_json=_json_bl.dumps({
+                            "target_url": summary.target_url,
+                            "total_backlinks": summary.total_backlinks,
+                            "referring_domains": summary.referring_domains,
+                            "new_backlinks": summary.new_backlinks,
+                            "lost_backlinks": summary.lost_backlinks,
+                            "domain_rank": summary.domain_rank,
+                            "tracked_date": str(today),
+                        }, ensure_ascii=False),
+                    ))
+                    await _send_failure_alert(
+                        "sync_backlink_metrics",
+                        f"project={project_id} 本週失去 {summary.lost_backlinks} 條反向連結！"
+                        f"引薦域名數：{summary.referring_domains}",
+                    )
+
+                session.commit()
+                logger.info(
+                    f"[Backlinks] project={project_id} 同步完成："
+                    f"total={summary.total_backlinks} domains={summary.referring_domains} "
+                    f"+{summary.new_backlinks}/-{summary.lost_backlinks}"
+                )
+
+        except Exception as exc:
+            logger.warning(f"[Backlinks] project={project_id} 失敗：{exc}")
+
+    logger.info("[Backlinks] 反向連結同步完成")
+
+
+# ── Google 商家檔案指標同步（GBP Business Profile API）──────────────────────
+
+import json as _json_gbp
+from contentflow.models.database import GoogleBusinessMetric
+
+
+@with_retry()
+async def sync_gbp_metrics() -> None:
+    """每日同步 Google Business Profile 指標（Business Profile API v4）。"""
+    from datetime import date, timedelta
+
+    gbp_location_ids_raw = getattr(settings, "gbp_location_ids", "")
+    gbp_oauth_access_token = getattr(settings, "gbp_oauth_access_token", "")
+    gbp_location_project_map_raw = getattr(settings, "gbp_location_project_map", "")
+    if not gbp_location_ids_raw:
+        logger.info("[GBP] GBP_LOCATION_IDS 未設定，跳過")
+        return
+    if not gbp_oauth_access_token:
+        logger.info("[GBP] GBP_OAUTH_ACCESS_TOKEN 未設定，跳過")
+        return
+    if not gbp_location_project_map_raw:
+        logger.info("[GBP] GBP_LOCATION_PROJECT_MAP 未設定，跳過")
+        return
+
+    location_ids = [lid.strip() for lid in gbp_location_ids_raw.split(",") if lid.strip()]
+    if not location_ids:
+        logger.info("[GBP] GBP_LOCATION_IDS 為空，跳過")
+        return
+
+    location_project_map: dict[str, int] = {}
+    for pair in gbp_location_project_map_raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        location_id, project_id_raw = pair.split(":", 1)
+        location_id = location_id.strip()
+        project_id_raw = project_id_raw.strip()
+        if not location_id or not project_id_raw:
+            continue
+        try:
+            location_project_map[location_id] = int(project_id_raw)
+        except ValueError:
+            logger.warning(f"[GBP] 無效的 location/project 映射：{pair}")
+
+    if not location_project_map:
+        logger.warning("[GBP] GBP_LOCATION_PROJECT_MAP 無有效映射，跳過")
+        return
+
+    yesterday = date.today() - timedelta(days=1)
+
+    # GBP Business Profile API v4 端點
+    GBP_METRICS_URL = (
+        "https://businessprofileperformance.googleapis.com/v1/"
+        "locations/{location_id}:fetchMultiDailyMetricsTimeSeries"
+    )
+
+    import httpx as _httpx
+
+    for location_id in location_ids:
+        project_id = location_project_map.get(location_id)
+        if project_id is None:
+            logger.warning(f"[GBP] location={location_id} 未配置 project_id，跳過")
+            continue
+
+        try:
+            params = {
+                "dailyMetrics": [
+                    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+                    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+                    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+                    "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+                    "CALL_CLICKS",
+                    "WEBSITE_CLICKS",
+                    "BUSINESS_DIRECTION_REQUESTS",
+                ],
+                "dailyRange.startDate.year": yesterday.year,
+                "dailyRange.startDate.month": yesterday.month,
+                "dailyRange.startDate.day": yesterday.day,
+                "dailyRange.endDate.year": yesterday.year,
+                "dailyRange.endDate.month": yesterday.month,
+                "dailyRange.endDate.day": yesterday.day,
+            }
+
+            url = GBP_METRICS_URL.format(location_id=location_id)
+            async with _httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    url,
+                    params=params,
+                    headers={
+                        "Authorization": f"Bearer {gbp_oauth_access_token}",
+                        "X-GOOG-API-FORMAT-VERSION": "2",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            # 解析各指標值
+            metric_vals: dict[str, int] = {}
+            for series in data.get("multiDailyMetricTimeSeries", []):
+                metric_name = series.get("dailyMetric", "")
+                for ts in series.get("dailyMetricTimeSeries", {}).get("datedValues", []):
+                    metric_vals[metric_name] = int(ts.get("value", 0) or 0)
+
+            views_search = (
+                metric_vals.get("BUSINESS_IMPRESSIONS_DESKTOP_SEARCH", 0)
+                + metric_vals.get("BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 0)
+            )
+            views_maps = (
+                metric_vals.get("BUSINESS_IMPRESSIONS_DESKTOP_MAPS", 0)
+                + metric_vals.get("BUSINESS_IMPRESSIONS_MOBILE_MAPS", 0)
+            )
+
+            with SessionLocal() as session:
+                session.add(GoogleBusinessMetric(
+                    project_id=project_id,
+                    location_id=location_id,
+                    views_search=views_search,
+                    views_maps=views_maps,
+                    clicks_website=metric_vals.get("WEBSITE_CLICKS", 0),
+                    clicks_phone=metric_vals.get("CALL_CLICKS", 0),
+                    clicks_directions=metric_vals.get("BUSINESS_DIRECTION_REQUESTS", 0),
+                    tracked_date=yesterday,
+                ))
+                session.commit()
+
+            logger.info(
+                f"[GBP] location={location_id} 同步完成："
+                f"search={views_search} maps={views_maps} "
+                f"website_clicks={metric_vals.get('WEBSITE_CLICKS', 0)}"
+            )
+
+        except _httpx.HTTPStatusError as e:
+            logger.warning(f"[GBP] location={location_id} API 錯誤 {e.response.status_code}: {e}")
+        except Exception as exc:
+            logger.warning(f"[GBP] location={location_id} 失敗：{exc}")
+
+    logger.info("[GBP] GBP 指標同步完成")
+
+
 def schedule_all_jobs() -> None:
     """註冊全部排程任務。由 site_app startup 呼叫。"""
     global _scheduler_lock_fd
@@ -1245,6 +1726,8 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(sync_keyword_trends,         CronTrigger(day=1,   hour=3,  minute=45),                    id="trends_sync",     replace_existing=True)
     scheduler.add_job(backfill_action_outcomes,     CronTrigger(hour=4,  minute=0),                              id="outcome_backfill", replace_existing=True)
     scheduler.add_job(check_scheduled_publishes,   CronTrigger(hour=4,  minute=5),                              id="sched_publish",   replace_existing=True)
+    scheduler.add_job(check_published_noindex,      CronTrigger(hour=4,  minute=10),                             id="publish_verify",  replace_existing=True)
+    scheduler.add_job(check_gsc_sitemap_health,    CronTrigger(day_of_week="mon", hour=4, minute=45),           id="sitemap_health",  replace_existing=True)
     scheduler.add_job(run_competitor_serp_check,   CronTrigger(day_of_week="mon", hour=4, minute=30),           id="competitor_serp", replace_existing=True)
     scheduler.add_job(run_attribution_engine,      CronTrigger(day_of_week="mon", hour=5, minute=0),            id="attribution",     replace_existing=True)
     scheduler.add_job(check_refresh_triggers,      CronTrigger(day_of_week="tue", hour=4, minute=0),            id="refresh_check",   replace_existing=True)
@@ -1256,6 +1739,8 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
     scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
     scheduler.add_job(run_index_coverage_check,    CronTrigger(day_of_week="fri", hour=5, minute=0),            id="index_coverage",  replace_existing=True)
+    scheduler.add_job(sync_gbp_metrics,            CronTrigger(hour=3,  minute=50),                             id="gbp_sync",        replace_existing=True)
+    scheduler.add_job(sync_backlink_metrics,       CronTrigger(day_of_week="tue", hour=5, minute=30),           id="backlink_sync",   replace_existing=True)
 
     scheduler.start()
     # 寫入獨立的心跳檔案（繞過 flock 的 overlay fs 問題）

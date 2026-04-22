@@ -578,13 +578,26 @@ async def sitemap(db: DBDep):
     return Response(content="\n".join(lines), media_type="application/xml")
 
 
+@site_app.get("/sitemap_index.xml")
+async def sitemap_index_redirect():
+    """Redirect legacy /sitemap_index.xml to /sitemap.xml (GSC compatibility)."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/sitemap.xml", status_code=301)
+
+
 # ─── Robots ───────────────────────────────────────────────────
 
 @site_app.get("/robots.txt")
 async def robots():
     base = _site_url()
     return Response(
-        content=f"User-agent: *\nAllow: /\nDisallow: /health\n\nSitemap: {base}/sitemap.xml\n",
+        content=(
+            f"User-agent: *\n"
+            f"Allow: /\n"
+            f"Disallow: /health\n"
+            f"Disallow: /admin/\n"
+            f"\nSitemap: {base}/sitemap.xml\n"
+        ),
         media_type="text/plain",
     )
 

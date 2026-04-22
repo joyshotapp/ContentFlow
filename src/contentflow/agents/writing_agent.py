@@ -8,29 +8,23 @@ from __future__ import annotations
 import json
 import re
 from loguru import logger
-from openai import OpenAI
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import ResearchReport, ArticleDraft, ArticleOutline, ArticleStatus
 from ..project_context import ProjectContext, load_project_context, project_uses_pubmed
 
 
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _chat(client: OpenAI, system: str, user: str, temperature: float = 0.7) -> str:
-    """單次 GPT-4o-mini 呼叫"""
-    resp = client.chat.completions.create(
-        model=settings.llm_lite_model,  # gpt-4o-mini
+def _chat(system: str, user: str, temperature: float = 0.7) -> str:
+    """單次 Gemini 呼叫"""
+    return chat_sync(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         temperature=temperature,
-        max_completion_tokens=4096,
+        max_tokens=4096,
     )
-    return resp.choices[0].message.content or ""
 
 
 def _load_project_author_metadata(project_id: int | None) -> dict[str, str]:
@@ -154,7 +148,6 @@ def _build_strategy_block(strategy_context: dict | None) -> str:
 # ── Step 1: 生成大綱 ──────────────────────────────────────────
 
 def _generate_outline(
-    client: OpenAI,
     report: ResearchReport,
     brand_context: str,
     writing_arch: str = "",
@@ -186,7 +179,7 @@ def _generate_outline(
 
     research = _build_research_summary(report)
     user = f"研究報告：\n{research}\n\n請產出文章大綱 JSON。"
-    raw = _chat(client, system, user, temperature=0.5)
+    raw = _chat(system, user, temperature=0.5)
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -198,7 +191,6 @@ def _generate_outline(
 # ── Step 2: 逐段撰寫文章 ─────────────────────────────────────
 
 def _write_section(
-    client: OpenAI,
     section: dict,
     report: ResearchReport,
     brand_context: str,
@@ -242,7 +234,7 @@ def _write_section(
 
 請撰寫這個段落的完整內容（Markdown 格式，含 H2/H3 標題）。"""
 
-    raw = _chat(client, system, user, temperature=0.7).strip()
+    raw = _chat(system, user, temperature=0.7).strip()
     # 去除 GPT 可能加上的 code fence（```markdown ... ``` 或 ``` ... ```）
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -311,7 +303,7 @@ def _clean_gpt_artifacts(text: str) -> str:
 
 # ── Step 3: Meta tags ─────────────────────────────────────────
 
-def _generate_meta(client: OpenAI, title: str, content: str, keywords: list[str]) -> dict:
+def _generate_meta(title: str, content: str, keywords: list[str]) -> dict:
     system = """你是 SEO meta tag 專家。產出 JSON 格式：
 {"meta_title": "...", "meta_description": "..."}
 
@@ -322,7 +314,7 @@ def _generate_meta(client: OpenAI, title: str, content: str, keywords: list[str]
 回傳純 JSON。"""
 
     user = f"文章標題：{title}\n關鍵字：{', '.join(keywords[:5])}\n文章摘要：{content[:1000]}"
-    raw = _chat(client, system, user, temperature=0.3)
+    raw = _chat(system, user, temperature=0.3)
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -336,12 +328,10 @@ def _generate_meta(client: OpenAI, title: str, content: str, keywords: list[str]
 
 # ── Step 4: SEO URL Slug ──────────────────────────────────────
 
-def _generate_slug(client: OpenAI, article_title: str) -> str:
+def _generate_slug(article_title: str) -> str:
     """將文章標題轉換為 SEO 友善的英文 URL slug。"""
     try:
-        resp = client.chat.completions.create(
-            model=settings.llm_lite_model,
-            temperature=0,
+        raw = chat_sync(
             messages=[
                 {
                     "role": "system",
@@ -354,9 +344,10 @@ def _generate_slug(client: OpenAI, article_title: str) -> str:
                 },
                 {"role": "user", "content": article_title},
             ],
+            temperature=0.1,
+            max_tokens=64,
         )
-        raw = (resp.choices[0].message.content or "").strip().lower()
-        slug = re.sub(r"[^a-z0-9-]", "-", raw)
+        slug = re.sub(r"[^a-z0-9-]", "-", raw.strip().lower())
         slug = re.sub(r"-{2,}", "-", slug).strip("-")
         return slug or "article"
     except Exception as e:
@@ -715,7 +706,6 @@ async def run_writing_agent(
       - faq_questions: SEO 專員建議的 FAQ
     """
     logger.info(f"[Writing Agent] 啟動：「{report.article_title}」")
-    client = _get_client()
 
     # 1. 載入專案品牌知識
     ctx = load_project_context(project_id)
@@ -728,7 +718,7 @@ async def run_writing_agent(
     # 2. 生成大綱
     logger.info("[Writing Agent] Step 1/3 — 生成大綱...")
     outline_json = _generate_outline(
-        client, report, brand_context, writing_architecture, target_word_count,
+        report, brand_context, writing_architecture, target_word_count,
         strategy_context=strategy_context,
     )
     try:
@@ -754,7 +744,7 @@ async def run_writing_agent(
     for i, section in enumerate(sections):
         logger.info(f"[Writing Agent] 撰寫段落 {i+1}/{len(sections)}: {section.get('h2', '')}")
         section_content = _write_section(
-            client, section, report, brand_context, article_title, prev_summary,
+            section, report, brand_context, article_title, prev_summary,
             strategy_context=strategy_context,
         )
         content_parts.append(section_content)
@@ -765,10 +755,10 @@ async def run_writing_agent(
 
     # 4. 生成 Meta tags
     logger.info("[Writing Agent] Step 3/3 — 生成 Meta tags...")
-    meta = _generate_meta(client, article_title, full_content, report.keywords)
+    meta = _generate_meta(article_title, full_content, report.keywords)
 
     # 5. 生成 SEO URL Slug
-    slug = _generate_slug(client, article_title)
+    slug = _generate_slug(article_title)
     logger.info(f"[Writing Agent] Slug：{slug}")
 
     # 6. 注入 CTA 區塊（SEO × CRO）

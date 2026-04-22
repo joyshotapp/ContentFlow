@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import unicodedata
 from pathlib import Path
 from loguru import logger
-from openai import OpenAI
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import ArticleDraft
-
-
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
 
 
 def _extract_sections(markdown: str) -> list[dict]:
@@ -30,21 +27,19 @@ def _extract_sections(markdown: str) -> list[dict]:
     return sections
 
 
-def _generate_image_prompts(client: OpenAI, title: str, sections: list[dict]) -> list[str]:
-    """用 LLM 為每個段落生成 DALL-E 風格的圖片 prompt。"""
+def _generate_image_prompts(title: str, sections: list[dict]) -> list[str]:
+    """用 LLM 為每個段落生成圖片 prompt（供 Gemini 圖片生成使用）。"""
     section_text = "\n".join(
         f"- {s['heading']}: {s['summary']}" for s in sections[:8]
     )
 
-    resp = client.chat.completions.create(
-        model=settings.llm_lite_model,
-        temperature=0.7,
+    raw = chat_sync(
         messages=[
             {
                 "role": "system",
                 "content": (
                     "You generate image prompts for blog article illustrations. "
-                    "Each prompt should be a detailed DALL-E 3 prompt in English, "
+                    "Each prompt should be a detailed image generation prompt in English, "
                     "describing a professional, clean illustration suitable for a health/lifestyle blog. "
                     "Avoid text in images. Use flat illustration or photography style.\n\n"
                     "Return a JSON array of objects: [{\"section\": \"heading\", \"prompt\": \"...\", \"alt_text\": \"...\", \"filename\": \"...\"}]\n"
@@ -59,10 +54,8 @@ def _generate_image_prompts(client: OpenAI, title: str, sections: list[dict]) ->
                 "content": f"Article: {title}\n\nSections:\n{section_text}",
             },
         ],
-        max_completion_tokens=1024,
+        max_tokens=1024,
     )
-
-    raw = resp.choices[0].message.content or "[]"
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -87,6 +80,35 @@ def _to_seo_filename(title: str, primary_keyword: str, index: int) -> str:
     return f"{base}-{index:02d}" if base else f"image-{index:02d}"
 
 
+async def _generate_image_gemini(prompt: str) -> bytes | None:
+    """使用 Gemini gemini-3.1-flash-image-preview 生成圖片，回傳 WebP bytes。"""
+    from google import genai
+    from google.genai import types
+
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-image-preview",
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(
+                    aspect_ratio="16:9",
+                    image_size="1K",
+                ),
+            ),
+        )
+        for part in response.parts:
+            if part.inline_data is not None:
+                image = part.as_image()
+                buf = io.BytesIO()
+                image.save(buf, format="WEBP")
+                return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"[Image Agent] Gemini 圖片生成失敗：{e}")
+    return None
+
+
 async def run_image_agent(
     draft: ArticleDraft,
     output_dir: Path | None = None,
@@ -98,14 +120,13 @@ async def run_image_agent(
     Args:
         draft: 文章草稿
         output_dir: 圖片輸出目錄（僅 generate_images=True 時使用）
-        generate_images: 是否實際呼叫 DALL-E 3 生成圖片（費用 ~$0.04/張）
+        generate_images: 是否實際呼叫 Gemini gemini-3.1-flash-image-preview 生成圖片
 
     Returns:
         更新 image_prompts 欄位的 draft
     """
     logger.info(f"[Image Agent] 啟動：「{draft.title}」")
 
-    client = _get_client()
     sections = _extract_sections(draft.content_markdown)
     if not sections:
         logger.warning("[Image Agent] 未找到 H2 段落，跳過")
@@ -113,7 +134,7 @@ async def run_image_agent(
 
     logger.info(f"[Image Agent] 找到 {len(sections)} 個段落，生成配圖 Prompt…")
 
-    prompt_items = _generate_image_prompts(client, draft.title, sections)
+    prompt_items = _generate_image_prompts(draft.title, sections)
     # Support both old (list of strings) and new (list of dicts) formats
     prompts = []
     image_seo_metadata: list[dict] = []
@@ -148,22 +169,12 @@ async def run_image_agent(
         generated = 0
         for i, prompt in enumerate(prompts[:5]):  # 最多 5 張
             try:
-                resp = client.images.generate(
-                    model="dall-e-3",
-                    prompt=prompt,
-                    size="1792x1024",
-                    quality="standard",
-                    n=1,
-                )
-                image_url = resp.data[0].url
-                if image_url:
-                    import httpx
-                    img_data = httpx.get(image_url).content
-                    # Use SEO filename (WebP extension) if available
+                img_bytes = await _generate_image_gemini(prompt)
+                if img_bytes:
                     seo_fname = (image_seo_metadata[i]["filename"]
                                  if i < len(image_seo_metadata) else f"image-{i+1:02d}.webp")
                     img_path = output_dir / seo_fname
-                    img_path.write_bytes(img_data)
+                    img_path.write_bytes(img_bytes)
                     generated += 1
                     logger.info(f"[Image Agent] 圖片 {i+1} 已保存：{img_path}")
             except Exception as e:

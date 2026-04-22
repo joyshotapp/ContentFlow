@@ -1,7 +1,7 @@
 """Phase Gate C：排程系統完整性測試（CF-02-09）
 
 完成定義：
-- scheduler.py 中全部 7 個 job 均有明確 cron 設定
+- scheduler.py 中核心與新增 SEO health jobs 均有明確 cron 設定
 - SchedulerLog ORM 可正常寫入與查詢
 - with_retry 裝飾器在失敗後正確記錄 failed 狀態
 - schedule_all_jobs 在 SCHEDULER_ENABLED=false 時不啟動 scheduler
@@ -37,17 +37,31 @@ def test_all_job_functions_importable():
     from contentflow.scheduler import (
         sync_gsc_all_projects,
         sync_ga4_all_projects,
+        sync_keyword_trends,
+        sync_gbp_metrics,
+        sync_backlink_metrics,
         run_competitor_serp_check,
         run_attribution_engine,
+        check_scheduled_publishes,
+        check_published_noindex,
+        check_gsc_sitemap_health,
         check_refresh_triggers,
+        run_index_coverage_check,
         run_l1_pattern_analysis,
         run_l2_roi_analysis,
     )
     assert callable(sync_gsc_all_projects)
     assert callable(sync_ga4_all_projects)
+    assert callable(sync_keyword_trends)
+    assert callable(sync_gbp_metrics)
+    assert callable(sync_backlink_metrics)
     assert callable(run_competitor_serp_check)
     assert callable(run_attribution_engine)
+    assert callable(check_scheduled_publishes)
+    assert callable(check_published_noindex)
+    assert callable(check_gsc_sitemap_health)
     assert callable(check_refresh_triggers)
+    assert callable(run_index_coverage_check)
     assert callable(run_l1_pattern_analysis)
     assert callable(run_l2_roi_analysis)
 
@@ -170,15 +184,33 @@ def test_with_retry_failure_writes_failed_log(monkeypatch):
 
 # ── 5. cron 排程數量確認 ──────────────────────────────────────────────────
 
-def test_scheduler_has_7_jobs_defined():
-    """scheduler.py 中應定義 7 個 job（gsc, ga4, competitor, attribution, refresh, l1, l2）。"""
+def test_scheduler_has_20_jobs_defined():
+    """scheduler.py 中應定義 20 個 job，並包含本次新增的 SEO health / off-site 監控。"""
     expected_job_ids = {
-        "gsc_sync", "ga4_sync", "competitor_serp",
-        "attribution", "refresh_check", "l1_learn", "l2_learn"
+        "gsc_sync",
+        "ga4_sync",
+        "trends_sync",
+        "gbp_sync",
+        "outcome_backfill",
+        "sched_publish",
+        "publish_verify",
+        "auto_pipeline",
+        "render_verify",
+        "sitemap_health",
+        "competitor_serp",
+        "attribution",
+        "refresh_check",
+        "backlink_sync",
+        "ranking_drops",
+        "index_coverage",
+        "weekly_reflection",
+        "weekly_report",
+        "l1_learn",
+        "l2_learn",
     }
-    # 直接從 schedule_all_jobs 的 source 確認 job count
     import inspect
     from contentflow import scheduler as sched_mod
     src = inspect.getsource(sched_mod.schedule_all_jobs)
+    assert src.count("scheduler.add_job(") == 20
     for jid in expected_job_ids:
         assert jid in src, f"schedule_all_jobs 缺少 job id: {jid}"

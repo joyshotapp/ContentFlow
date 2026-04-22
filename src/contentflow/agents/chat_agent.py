@@ -1,6 +1,6 @@
 """ContentFlow AI 對話 Agent — L1 報告 + L2 分析 + L3 指令
 
-提供基於 OpenAI function calling 的對話介面，
+提供基於 Gemini function calling 的對話介面，
 讓使用者用自然語言查詢系統狀態、分析數據、並觸發操作。
 """
 from __future__ import annotations
@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
-from openai import AsyncOpenAI
 from sqlalchemy import desc, func
 
 from ..config import settings
@@ -1439,61 +1438,102 @@ async def chat(
     """
     執行一輪對話。
 
-    Args:
-        messages: OpenAI 格式 messages [{"role": ..., "content": ...}, ...]
-        project_id: 專案 ID（可選，用於 context）
-
     Returns:
         {"role": "assistant", "content": "...", "tool_calls_count": N}
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    model = settings.llm_lite_model  # gpt-4o-mini — 快速且便宜
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=settings.gemini_api_key)
+    model = settings.llm_lite_model or "gemini-3-flash-preview"
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    system_msg = SYSTEM_PROMPT.format(
+    system_instruction = SYSTEM_PROMPT.format(
         site_name=settings.site_name,
         now=now_str,
     )
 
-    full_messages = [{"role": "system", "content": system_msg}] + messages
+    # Convert OpenAI TOOLS format → Gemini FunctionDeclarations
+    function_declarations = []
+    for tool in TOOLS:
+        fn = tool["function"]
+        function_declarations.append(
+            types.FunctionDeclaration(
+                name=fn["name"],
+                description=fn.get("description", ""),
+                parameters=fn.get("parameters"),
+            )
+        )
+    gemini_tools = [types.Tool(function_declarations=function_declarations)]
+
+    # Convert message history to Gemini Contents (exclude system msgs)
+    contents: list = []
+    for m in messages:
+        role = m.get("role", "")
+        if role == "user":
+            contents.append(
+                types.Content(role="user", parts=[types.Part.from_text(text=m.get("content") or "")])
+            )
+        elif role == "assistant":
+            text = m.get("content") or ""
+            if text:
+                contents.append(
+                    types.Content(role="model", parts=[types.Part.from_text(text=text)])
+                )
 
     tool_calls_count = 0
-    max_rounds = 5  # 防止無限迴圈
+    max_rounds = 5
 
     for _ in range(max_rounds):
-        response = await client.chat.completions.create(
+        response = await client.aio.models.generate_content(
             model=model,
-            messages=full_messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            temperature=0.3,
-            max_tokens=2048,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                tools=gemini_tools,
+                system_instruction=system_instruction,
+                max_output_tokens=2048,
+            ),
         )
 
-        msg = response.choices[0].message
+        candidate = response.candidates[0]
+        model_content = candidate.content
 
-        if not msg.tool_calls:
-            # 直接回答
+        # Collect function calls from response parts
+        function_calls = [p for p in model_content.parts if p.function_call]
+
+        if not function_calls:
+            # Pure text response
+            text = "".join(
+                p.text for p in model_content.parts if hasattr(p, "text") and p.text
+            )
             return {
                 "role": "assistant",
-                "content": msg.content or "",
+                "content": text,
                 "tool_calls_count": tool_calls_count,
             }
 
-        # 執行 tool calls
-        full_messages.append(msg.model_dump())
-        for tc in msg.tool_calls:
-            tool_calls_count += 1
-            args = json.loads(tc.function.arguments)
-            logger.info(f"[ChatAgent] Calling {tc.function.name}({args})")
-            result = await _execute_tool(tc.function.name, args)
-            full_messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            })
+        # Add model turn to history
+        contents.append(model_content)
 
-    # 如果走完所有 rounds 還沒回答
+        # Execute each function call and collect responses
+        function_response_parts = []
+        for part in function_calls:
+            tool_calls_count += 1
+            fc = part.function_call
+            args = dict(fc.args) if fc.args else {}
+            logger.info(f"[ChatAgent] Calling {fc.name}({args})")
+            result_str = await _execute_tool(fc.name, args)
+            function_response_parts.append(
+                types.Part.from_function_response(
+                    name=fc.name,
+                    response={"result": result_str},
+                )
+            )
+
+        # Add tool results as user turn
+        contents.append(types.Content(role="user", parts=function_response_parts))
+
+    # Exhausted max rounds
     return {
         "role": "assistant",
         "content": "抱歉，查詢過程較為複雜。請嘗試更具體的問題。",

@@ -16,7 +16,7 @@ from typing import Optional
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from ..models.database import Article, SEORanking
+from ..models.database import Article, GAPageMetric, SEORanking
 
 
 # ── 資料結構 ──────────────────────────────────────────────────────────────
@@ -204,6 +204,32 @@ class AttributionEngine:
             clicks_28d=clicks_28d,
             ctr=ctr,
         )
+
+        # 補充 GA4 行為數據（若 publish_url 能對應 ga_page_metrics）
+        pub_url = article.publish_url or ""
+        if pub_url:
+            # GA4 page_path 只包含 path 部分，例如 "/blog/knee-pain"
+            from urllib.parse import urlparse as _urlparse
+            page_path = _urlparse(pub_url).path or pub_url
+            ga_rows = (
+                self._s.query(GAPageMetric)
+                .filter(
+                    GAPageMetric.project_id == article.project_id,
+                    GAPageMetric.page_path == page_path,
+                    GAPageMetric.tracked_date >= cutoff,
+                )
+                .all()
+            )
+            if ga_rows:
+                perf.pageviews_28d = sum(r.active_users or 0 for r in ga_rows)
+                perf.avg_engagement_time = (
+                    sum(r.avg_engagement_time_sec or 0.0 for r in ga_rows) / len(ga_rows)
+                )
+                perf.bounce_rate = (
+                    sum(r.bounce_rate or 0.0 for r in ga_rows) / len(ga_rows)
+                )
+                perf.conversions_28d = sum(r.conversions or 0 for r in ga_rows)
+
         perf.performance_grade = _compute_grade(perf)
         action, reason = _compute_action(perf)
         perf.recommended_action = action

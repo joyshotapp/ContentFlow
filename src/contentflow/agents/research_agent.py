@@ -5,8 +5,8 @@ import asyncio
 import json
 import re
 from loguru import logger
-from openai import OpenAI
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import ResearchReport, PubMedSearchResult
 from ..tools import search_pubmed, search_serp, extract_keywords_from_serp
 
@@ -22,10 +22,7 @@ def _translate_keywords_for_pubmed(keywords: list[str]) -> list[str]:
         return keywords  # 已經是英文
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
-        resp = client.chat.completions.create(
-            model=settings.llm_lite_model,
-            temperature=0,
+        raw = chat_sync(
             messages=[
                 {
                     "role": "system",
@@ -42,8 +39,10 @@ def _translate_keywords_for_pubmed(keywords: list[str]) -> list[str]:
                     "content": json.dumps(cjk_keywords, ensure_ascii=False),
                 },
             ],
+            temperature=0.1,
+            max_tokens=256,
         )
-        raw = (resp.choices[0].message.content or "[]").strip()
+        raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
         if raw.endswith("```"):

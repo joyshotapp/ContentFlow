@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     r2_endpoint_url: str = Field(default="", alias="R2_ENDPOINT_URL")
     r2_bucket_name: str = Field(default="contentflow-images", alias="R2_BUCKET_NAME")
     r2_public_url: str = Field(default="", alias="R2_PUBLIC_URL")
-    llm_writing_model: str = Field(default="claude-sonnet-4-5", alias="LLM_WRITING_MODEL")
-    llm_lite_model: str = Field(default="gpt-4o-mini", alias="LLM_LITE_MODEL")
+    llm_writing_model: str = Field(default="gemini-3-flash-preview", alias="LLM_WRITING_MODEL")
+    llm_lite_model: str = Field(default="gemini-3-flash-preview", alias="LLM_LITE_MODEL")
     llm_seo_qa_max_completion_tokens: int = Field(
         default=4096,
         alias="LLM_SEO_QA_MAX_COMPLETION_TOKENS",
@@ -120,6 +120,30 @@ class Settings(BaseSettings):
     site_description: str = Field(
         default="以科學文獻為基礎的骨科健康知識平台，提供骨骼健康、關節保護與骨科治療的專業內容。",
         alias="SITE_DESCRIPTION",
+    )
+
+    # 反向連結監控（DataForSEO）
+    backlink_sync_enabled: bool = Field(
+        default=False,
+        alias="BACKLINK_SYNC_ENABLED",
+        description="啟用每週 DataForSEO 反向連結摘要同步",
+    )
+
+    # Google 商家檔案（GBP）整合
+    gbp_location_ids: str = Field(
+        default="",
+        alias="GBP_LOCATION_IDS",
+        description="GBP location ID 清單（逗號分隔），例：123456789,987654321",
+    )
+    gbp_oauth_access_token: str = Field(
+        default="",
+        alias="GBP_OAUTH_ACCESS_TOKEN",
+        description="Business Profile API OAuth access token",
+    )
+    gbp_location_project_map: str = Field(
+        default="",
+        alias="GBP_LOCATION_PROJECT_MAP",
+        description="GBP location_id 與 project_id 映射，格式如 123456789:2,987654321:5",
     )
 
 

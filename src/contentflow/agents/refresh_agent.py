@@ -25,10 +25,10 @@ from typing import Optional
 
 import httpx
 from loguru import logger
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models.database import Article
 
 
@@ -260,18 +260,12 @@ class ContentFetcher:
 # CF-06-02: RefreshDiffAnalyzer — AI 分析差距
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_openai() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _simple_chat(client: OpenAI, system: str, user: str, model: str | None = None) -> str:
-    resp = client.chat.completions.create(
-        model=model or settings.llm_lite_model,
+def _simple_chat(system: str, user: str, model: str | None = None) -> str:
+    return chat_sync(
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
-        max_completion_tokens=2048,
+        max_tokens=2048,
     )
-    return resp.choices[0].message.content or ""
 
 
 class RefreshDiffAnalyzer:
@@ -323,7 +317,6 @@ overall_freshness_score：0-100，100 表示完全新鮮，0 表示嚴重過時"
             return RefreshPlan(keyword=keyword, article_title=fetched.title,
                                recommendation="maintain")
 
-        client = _get_openai()
         article_excerpt = fetched.content_text[:2000] if fetched.content_text else "(無內容)"
 
         user = f"""關鍵字：{keyword}
@@ -338,7 +331,7 @@ overall_freshness_score：0-100，100 表示完全新鮮，0 表示嚴重過時"
 
 請分析這篇文章需要哪些補強。"""
 
-        raw = _simple_chat(client, self.SYSTEM_PROMPT, user)
+        raw = _simple_chat(self.SYSTEM_PROMPT, user)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
         try:
             data = json.loads(raw)
@@ -379,7 +372,6 @@ def generate_patch_content(
     針對單一缺口（ContentGap）產出補充段落（CF-06-03）。
     這只是局部增補，不重寫全文。
     """
-    client = _get_openai()
     section_type_map = {
         "missing_faq": "一個包含 5 個問答的 FAQ 區塊（Markdown 格式）",
         "missing_section": f"一段關於「{gap.suggested_heading}」的補充段落（200-300字，Markdown）",
@@ -398,7 +390,7 @@ def generate_patch_content(
 缺口描述：{gap.description}
 請產出：{task}"""
 
-    content = _simple_chat(client, system, user)
+    content = _simple_chat(system, user)
     return content.strip()
 
 

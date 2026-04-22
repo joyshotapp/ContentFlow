@@ -27,6 +27,7 @@ from loguru import logger
 import agentops
 
 from ..config import settings
+from ..llm_client import reset_cost_tracker, get_cost_summary
 
 
 def _init_agentops() -> bool:
@@ -69,6 +70,8 @@ class PipelineState(TypedDict, total=False):
     research_report: Any
     draft: Any
     seo_score: int
+    best_seo_score: int
+    best_draft: Any
     seo_retry_count: int
     _seo_checks: list
     agent_decisions: list
@@ -84,8 +87,8 @@ class PipelineState(TypedDict, total=False):
 SEO_PASS_THRESHOLD = 85
 SEO_MAX_RETRIES = 3
 
-# gpt-4o-mini 每次呼叫的估算成本（USD）；用於 total_cost 累積
-_LLM_CALL_COST_EST = 0.08
+# 随流量偵測用的預算上限（不再用於成本模擬）
+_LLM_CALL_COST_EST = 0.0  # 改用真實 token 計算，規則不再時使用此常數
 
 
 # ── 決策日誌 helper ──────────────────────────────────────────────────────
@@ -252,6 +255,16 @@ async def seo_check_node(state: dict) -> dict:
         f"前次分數={prev_score}，重試次數={state.get('seo_retry_count', 0)}",
         "rule",
     )
+    # 追蹤歷史最佳草稿：若此次分數更高則更新，否則保留前次最佳
+    best_score = state.get("best_seo_score", 0)
+    if score > best_score:
+        return {
+            "seo_score": score,
+            "best_seo_score": score,
+            "best_draft": draft,
+            "_seo_checks": seo_result.get("checks", []),
+            "agent_decisions": decisions,
+        }
     return {
         "seo_score": score,
         "_seo_checks": seo_result.get("checks", []),
@@ -261,7 +274,8 @@ async def seo_check_node(state: dict) -> dict:
 
 async def seo_qa_node(state: dict) -> dict:
     """SEO QA 修正節點"""
-    draft = state["draft"]
+    # 優先使用歷史最佳草稿作為修正基底，避免從退步版本繼續修改
+    draft = state.get("best_draft") or state["draft"]
     report = state["research_report"]
     primary_kw = state.get("primary_kw", "")
     secondary_kws = state.get("secondary_kws", [])
@@ -311,19 +325,20 @@ async def seo_qa_node(state: dict) -> dict:
 
 async def force_output_marker_node(state: dict) -> dict:
     """force_output 路徑：標記草稿需人工審核並繼續"""
-    score = state.get("seo_score", 0)
+    # 使用歷史最佳草稿作為最終輸出，而非最後一次（可能退步的）版本
+    best_score = state.get("best_seo_score", state.get("seo_score", 0))
     retries = state.get("seo_retry_count", 0)
     decisions = _append_decision(
         state, "seo_gate",
-        f"SEO 分數 {score} 低於閾值 {SEO_PASS_THRESHOLD}，已達 {retries} 次重試上限，強制輸出",
+        f"SEO 分數最高 {best_score} 低於閾值 {SEO_PASS_THRESHOLD}，已達 {retries} 次重試上限，強制輸出",
         "needs_human_review: seo_below_threshold",
         "rule",
     )
-    draft = state.get("draft")
+    draft = state.get("best_draft") or state.get("draft")
     if draft and hasattr(draft, "status"):
         if draft.status == ArticleStatus.APPROVED:
             draft.status = ArticleStatus.REVIEW_REQUIRED
-    return {"agent_decisions": decisions}
+    return {"agent_decisions": decisions, "draft": draft, "seo_score": best_score}
 
 
 async def factcheck_node(state: dict) -> dict:
@@ -547,6 +562,7 @@ async def run_orchestrator(
     strategy_context: dict | None = None,
     use_pubmed: bool | None = None,
     article_id: int | None = None,
+    run_id: str | None = None,
 ) -> ArticleTask:
     """
     端到端文章生產流程（LangGraph StateGraph 版）。
@@ -564,7 +580,7 @@ async def run_orchestrator(
         更新後的 ArticleTask（含 research_report + draft）
     """
     t0 = time.time()
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     logger.info(f"[Orchestrator] 啟動：「{task.title}」run_id={run_id[:8]}")
 
     agent = _get_agent()
@@ -579,6 +595,9 @@ async def run_orchestrator(
     if use_pubmed is None:
         use_pubmed = project_uses_pubmed(ctx)
 
+    # 開始計算真實 token 用量和成本
+    reset_cost_tracker()
+
     task.status = ArticleStatus.RESEARCHING
 
     initial_state: dict = {
@@ -590,6 +609,8 @@ async def run_orchestrator(
         "research_report": None,
         "draft": None,
         "seo_score": 0,
+        "best_seo_score": 0,
+        "best_draft": None,
         "seo_retry_count": 0,
         "_seo_checks": [],
         "agent_decisions": [],
@@ -618,7 +639,7 @@ async def run_orchestrator(
     try:
         final_state: dict = await agent.ainvoke(initial_state)
     except Exception as e:
-        logger.error(f"[Orchestrator] Graph 執行失敗：{e}")
+        logger.exception(f"[Orchestrator] Graph 執行失敗：{e}")
         _checkpoint(run_id, project_id, article_id, "failed", "failed", error=str(e))
         if _ao_session:
             try:
@@ -658,8 +679,10 @@ async def run_orchestrator(
     _persist_decisions(article_id, run_id, decisions)
 
     elapsed = time.time() - t0
-    calls = final_state.get("total_llm_calls", 0)
-    cost = final_state.get("total_cost", 0.0)
+    # 取得真實 LLM token 用量和成本（隶 ContextVar 累積）
+    usage = get_cost_summary()
+    calls = usage["calls"] or final_state.get("total_llm_calls", 0)
+    cost = usage["total_cost"] or final_state.get("total_cost", 0.0)
 
     # Pipeline checkpoint：記錄完成
     _checkpoint(
@@ -684,7 +707,8 @@ async def run_orchestrator(
     logger.info(
         f"[Orchestrator] 完成！耗時 {elapsed:.1f}s | "
         f"狀態: {task.status.value} | "
-        f"LLM calls: {calls} | cost: ${cost:.3f} | "
+        f"LLM calls: {calls} | cost: ${cost:.4f} | "
+        f"prompt_tokens: {usage['prompt_tokens']} out: {usage['completion_tokens']} | "
         f"需審核: {review_count} 項 | 決策日誌: {len(decisions)} 條"
     )
     return task

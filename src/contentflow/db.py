@@ -16,6 +16,7 @@ if _db_url.startswith("sqlite:///"):
 
 engine = create_engine(_db_url, echo=False)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+_SCHEMA_LOCK_KEY = 2026042201
 
 
 def _ensure_sqlite_columns(conn) -> None:
@@ -55,7 +56,13 @@ def _ensure_sqlite_columns(conn) -> None:
 
 def init_db():
     """建立所有資料表（若尚不存在）"""
-    Base.metadata.create_all(engine)
+    if _db_url.startswith("postgresql"):
+        # 多 worker 啟動時，用 DB advisory lock 序列化 DDL，避免 create_all 競態。
+        with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _SCHEMA_LOCK_KEY})
+            Base.metadata.create_all(bind=conn)
+    else:
+        Base.metadata.create_all(engine)
     if _db_url.startswith("sqlite:///"):
         with engine.begin() as conn:
             _ensure_sqlite_columns(conn)

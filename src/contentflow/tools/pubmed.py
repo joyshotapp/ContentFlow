@@ -33,6 +33,26 @@ async def search_pubmed(
     範例：
         result = await search_pubmed("Acanthopanax arthritis", max_results=10)
     """
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            return await _search_pubmed_once(query, max_results, min_year)
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.warning(f"PubMed 連線失敗（第 {attempt + 1} 次），{wait}s 後重試：{e}")
+                await asyncio.sleep(wait)
+            else:
+                logger.warning(f"PubMed 查詢失敗（已重試 {max_attempts} 次）：{e}")
+                return PubMedSearchResult(query=query, total_found=0)
+    return PubMedSearchResult(query=query, total_found=0)  # unreachable but satisfies type checker
+
+
+async def _search_pubmed_once(
+    query: str,
+    max_results: int = 20,
+    min_year: int = 2015,
+) -> PubMedSearchResult:
     async with httpx.AsyncClient(timeout=30) as client:
         # Step 1: ESearch — 取得 PMID 清單
         search_params = {

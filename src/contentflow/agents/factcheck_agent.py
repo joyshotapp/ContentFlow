@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import re
 from loguru import logger
-from openai import OpenAI
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import (
     ArticleDraft,
     ResearchReport,
@@ -19,10 +19,6 @@ from ..models import (
     ArticleStatus,
 )
 from ..project_context import ProjectContext, load_project_context
-
-
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
 
 
 # ── 禁用詞正則比對 ────────────────────────────────────────────
@@ -81,12 +77,11 @@ def _check_forbidden_words(
 # ── AI 查核 ───────────────────────────────────────────────────
 
 def _ai_factcheck(
-    client: OpenAI,
     content: str,
     report: ResearchReport,
     legal_terms: list[str],
 ) -> list[FactCheckItem]:
-    """用 GPT-4o-mini 檢查文章宣稱的可信度"""
+    """用 Gemini 檢查文章宣稱的可信度"""
 
     # 組裝研究證據
     evidence_parts = []
@@ -119,15 +114,13 @@ def _ai_factcheck(
 
 請檢查文章中的宣稱是否有足夠證據支持，以及是否有法規風險。"""
 
-    resp = client.chat.completions.create(
-        model=settings.llm_lite_model,
+    raw = chat_sync(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        max_completion_tokens=2048,
+        max_tokens=2048,
     )
-    raw = resp.choices[0].message.content or "[]"
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -184,8 +177,7 @@ async def run_factcheck_agent(
     logger.info(f"[FactCheck] 禁用詞檢查：{error_count} 處違規, {warn_count} 處提醒")
 
     # 2. AI 查核
-    client = _get_client()
-    ai_items = _ai_factcheck(client, draft.content_markdown, report, ctx.legal_terms)
+    ai_items = _ai_factcheck(draft.content_markdown, report, ctx.legal_terms)
     logger.info(f"[FactCheck] AI 查核：{len(ai_items)} 項宣稱已檢查")
 
     # 3. 合併結果

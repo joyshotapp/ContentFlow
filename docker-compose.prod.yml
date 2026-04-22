@@ -53,6 +53,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./credentials:/app/credentials
+      - ./src:/app/src  # live-reload Python source — restart only (no rebuild) after code changes
 
 volumes:
   pgdata:

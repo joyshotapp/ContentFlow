@@ -197,6 +197,68 @@ def _normalize_plan_result(plan_result: dict[str, Any], context_snapshot: dict[s
 
 # ── 數據收集 ──────────────────────────────────────────────────
 
+def _detect_seasonal_opportunities(
+    session,
+    project_id: int,
+    existing_kws: set | None = None,
+) -> list[dict]:
+    """
+    偵測季節性高峰提前佈局機會。
+
+    條件：
+    - trend_direction == "up"（熱度上升中）
+    - trends_score >= 60（有足夠搜尋量訊號）
+    - 尚未有 published/planned/draft 文章對應此關鍵字
+
+    提前佈局邏輯：文章從開始製作到上線平均需要 4-6 週，因此需提前規劃。
+
+    Returns:
+        list of {keyword, trends_score, note}
+    """
+    from ..models.database import Keyword, Article as _Article
+
+    if existing_kws is None:
+        existing_kws = {
+            kw[0] for kw in (
+                session.query(_Article.primary_keyword)
+                .filter(
+                    _Article.project_id == project_id,
+                    _Article.status.in_(["published", "planned", "draft", "review_required", "approved"]),
+                    _Article.primary_keyword.isnot(None),
+                )
+                .all()
+            )
+            if kw[0]
+        }
+
+    rising_keywords = (
+        session.query(Keyword)
+        .filter(
+            Keyword.project_id == project_id,
+            Keyword.trend_direction == "up",
+            Keyword.trends_score >= 60,
+        )
+        .order_by(Keyword.trends_score.desc())
+        .limit(20)
+        .all()
+    )
+
+    opportunities = []
+    for kw_obj in rising_keywords:
+        if kw_obj.keyword in existing_kws:
+            continue
+        # trends_score 越高越緊迫（≥ 80 = 高優先）
+        urgency = "高優先" if (kw_obj.trends_score or 0) >= 80 else "建議佈局"
+        opportunities.append({
+            "keyword": kw_obj.keyword,
+            "trends_score": kw_obj.trends_score,
+            "search_volume": kw_obj.search_volume,
+            "note": f"季節高峰提前佈局（{urgency}，熱度分數 {kw_obj.trends_score}，建議提前 4–6 週產出文章）",
+        })
+
+    return opportunities[:10]
+
+
 def _collect_project_context(project_id: int, session) -> dict[str, Any]:
     """收集 Strategic Agent 做決策所需的全部數據快照。"""
     today = date.today()
@@ -232,7 +294,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
     if len(calendar_items) < MIN_CALENDAR_BUFFER:
         from ..models.database import Keyword, Article as _Article
         existing_kws = {
-            kw for kw in (
+            kw[0] for kw in (
                 session.query(_Article.primary_keyword)
                 .filter(
                     _Article.project_id == project_id,
@@ -503,6 +565,11 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         for r in trending_keywords
     ]
 
+    # 12. 季節性高峰提前佈局機會（trends_score ≥ 60 且 direction="up" 且無文章）
+    seasonal_opportunities = _detect_seasonal_opportunities(
+        session, project_id, existing_kws=None
+    )
+
     context_snapshot = {
         "today": today.isoformat(),
         "calendar_items": calendar_items,
@@ -523,6 +590,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         "cannibalization_risks": cannibalization_summary,
         "cluster_gaps": cluster_gaps_summary,
         "keyword_trends": keyword_trends_summary,
+        "seasonal_opportunities": seasonal_opportunities,
     }
     context_snapshot["generate_capacity"] = _calculate_generate_capacity(context_snapshot)
     return context_snapshot
@@ -557,6 +625,7 @@ STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，�
 - 參考上次執行摘要，避免重複工作
 - 如果 `cannibalization_risks` 不為空，發送 alert 告知哪些關鍵字有自蝕風險
 - 如果 `cluster_gaps` 不為空，優先將高价値缺口關鍵字納入 generate 計劃- 如果 `keyword_trends` 中有 direction="up" 的關鍵字且尚無文章，納入 generate 候選
+- 如果 `seasonal_opportunities` 不為空，**立即將高優先項目納入 generate 計畫**，並在 reason 中標注「季節高峰提前佈局」；urgency="高優先" 的項目須排在其他 generate 之前
 ## 因果學習（重要）：
 - 數據中包含 `action_outcome_history`，記錄過去動作的實際成效
 - `action_outcome_stats` 顯示各類動作（generate/refresh）的成功率統計
@@ -867,7 +936,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
     logger.info(f"[StrategicExecutor/generate] 啟動 pipeline：'{art_title}' run_id={run_id[:8]}")
 
     try:
-        result = await run_orchestrator(task, project_id=project_id, article_id=art_id)
+        result = await run_orchestrator(task, project_id=project_id, article_id=art_id, run_id=run_id)
 
         # 回寫結果
         pub_url: str | None = None

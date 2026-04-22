@@ -6,29 +6,23 @@ import json
 import re
 
 from loguru import logger
-from openai import OpenAI
 
 from ..config import settings
+from ..llm_client import chat_sync
 from ..models import ArticleDraft, ResearchReport
 from ..project_context import ProjectContext, load_project_context
 from .writing_agent import _clean_gpt_artifacts
 
 
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _chat(client: OpenAI, system: str, user: str, temperature: float = 0.2) -> str:
-    resp = client.chat.completions.create(
-        model=settings.llm_lite_model,
+def _chat(system: str, user: str, temperature: float = 0.2) -> str:
+    return chat_sync(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         temperature=temperature,
-        max_completion_tokens=settings.llm_seo_qa_max_completion_tokens,
+        max_tokens=settings.llm_seo_qa_max_completion_tokens,
     )
-    return resp.choices[0].message.content or ""
 
 
 def _extract_primary_keyword(report: ResearchReport, fallback_title: str) -> str:
@@ -83,7 +77,6 @@ async def run_seo_qa_agent(
 ) -> ArticleDraft:
     """微調 meta 與首段，提升搜尋意圖匹配且維持低風險。"""
     logger.info(f"[SEO QA Agent] 啟動：「{draft.title}」")
-    client = _get_client()
     ctx = load_project_context(project_id)
 
     primary_keyword = primary_keyword or _extract_primary_keyword(report, draft.title)
@@ -132,7 +125,7 @@ async def run_seo_qa_agent(
 {failed_check_lines}
 """
 
-    raw = _chat(client, system, user, temperature=0.2).strip()
+    raw = _chat(system, user, temperature=0.2).strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
     if raw.endswith("```"):

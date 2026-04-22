@@ -36,8 +36,9 @@ ContentFlow AI 是一套**全自動 SEO 閉環系統**，整合 AI 策略決策�
 |------|---------|------|
 | Python | 3.11 | 建議使用 3.12+ |
 | 作業系統 | Windows 10 / macOS 12 / Ubuntu 20.04 | |
-| OpenAI API Key | — | GPT-4o-mini，研究/策略/SEO QA 用 |
-| Anthropic API Key | — | Claude Sonnet，文章撰寫用（可選，可 fallback 至 OpenAI）|
+| Gemini API Key | — | gemini-3-flash-preview，所有 Agent 主力 LLM |
+| OpenAI API Key | — | LLM fallback（可選）|
+| Anthropic API Key | — | LLM fallback（可選）|
 | SerpAPI 或 Serper.dev Key | — | SERP 競品分析用（擇一）|
 | Google Service Account | — | GSC 排名同步 + GA4 頁面指標（可選）|
 | PostgreSQL | 14+ | 正式環境必備；開發可用 SQLite |
@@ -110,15 +111,21 @@ uvicorn contentflow.api:app --reload --port 8000
 # ── LLM 金鑰（必填）────────────────────────────────────
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-GEMINI_API_KEY=...             # Hero Image 生圖（google-generativeai）
+GEMINI_API_KEY=...             # 主要 LLM（gemini-3-flash-preview）+ 圖片生成（gemini-3.1-flash-image-preview）
 
 # ── 搜尋 API（擇一填入）─────────────────────────────────
 SERPAPI_KEY=...                # https://serpapi.com
 SERPER_API_KEY=...             # https://serper.dev（較便宜）
 
-# ── DataForSEO（排名追蹤 / SERP 補充，可選）──────────────
+# ── DataForSEO（排名追蹤 / SERP 補充 / 反向連結監控，可選）──
 DATAFORSEO_LOGIN=...
 DATAFORSEO_PASSWORD=...
+BACKLINK_SYNC_ENABLED=false    # true = 每週同步反向連結摘要
+
+# ── Google Business Profile（本地 SEO 監控，可選）──────────
+GBP_LOCATION_IDS=              # GBP location ID，多個以逗號分隔
+GBP_LOCATION_PROJECT_MAP=      # location_id:project_id，例：123456789:2,987654321:5
+GBP_OAUTH_ACCESS_TOKEN=...     # Business Profile API OAuth access token
 
 # ── 資料庫（正式環境必填）──────────────────────────────
 DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/contentflow
@@ -156,8 +163,8 @@ NCBI_EMAIL=your@email.com
 CHROMA_PERSIST_DIR=/app/data/chroma
 
 # ── LLM 模型選擇（可選，有預設值）──────────────────────
-LLM_LITE_MODEL=gpt-4o-mini          # 研究/策略/SEO QA 使用
-LLM_WRITING_MODEL=claude-sonnet-4-5 # 文章撰寫使用
+LLM_LITE_MODEL=gemini-3-flash-preview    # 研究/策略/SEO QA 使用
+LLM_WRITING_MODEL=gemini-3-flash-preview # 文章撰寫使用（DALL-E 圖片生成改用 Gemini）
 
 # ── 行為控制（可選）────────────────────────────────────
 LLM_SEO_QA_MAX_COMPLETION_TOKENS=4096
@@ -232,7 +239,7 @@ uvicorn contentflow.api:app --reload --port 8000
 
 - **Admin 後台** `/admin`：完整管理介面，含 AI Pipeline 觸發、排程監控、SEO 報表
 - **Public Reference Site** `/`：SEO 驗證前端，支援 JSON-LD schema、BreadcrumbList、TOC、FAQ 手風琴、E-E-A-T 信號
-- **Scheduler**：APScheduler 驅動 15 個排程任務（GSC/GA4 同步、策略分析、自動發布、反思學習等）
+- **Scheduler**：APScheduler 驅動 20 個排程任務（GSC/GA4 同步、反向連結監控、GBP 整合、策略分析、自動發布、索引健康監控、反思學習等）
 
 管理員登入：`API_SECRET_KEY`；未設定時開發 fallback 為 `admin`
 
@@ -243,7 +250,7 @@ uvicorn contentflow.api:app --reload --port 8000
 - 公網主站已部署在 `https://goodbone.com.tw/`
 - Admin 後台：`https://goodbone.com.tw/admin`
 - 資料庫：PostgreSQL 16（Docker）
-- Scheduler：已啟用，共 15 個排程任務
+- Scheduler：已啟用，共 20 個排程任務
 - 自動發布：Project id=2「好骨科診所」已啟用，最低分數 85 分
 
 ---
@@ -326,7 +333,7 @@ ContentFlow/
 │   ├── config.py                # 全域設定（pydantic-settings，讀取 .env）
 │   ├── db.py                    # DB 引擎、Session、自動 schema 補丁
 │   ├── api.py                   # FastAPI 主應用（掛載 site + admin）
-│   ├── scheduler.py             # APScheduler — 15 個排程任務
+    ├── scheduler.py             # APScheduler — 20 個排程任務
 │   ├── project_context.py       # 載入品牌資訊並注入 Agent prompt
 │   ├── llm_client.py            # 多 Provider LLM（OpenAI → Anthropic failover）
 │   ├── cli.py                   # CLI 入口（contentflow 指令）
@@ -398,15 +405,15 @@ ContentFlow/
  [Step 1] Research Agent
    ├── SERP API → 競品前 10 篇文章結構 + PAA + 相關搜尋
    ├── PubMed API → 學術文獻（健康/醫療類專案自動啟用）
-   └── GPT-4o-mini → 彙整 ResearchReport + 建議關鍵字
+   └── Gemini → 彙整 ResearchReport + 建議關鍵字
        │
        ▼
  [Step 2] Strategy Agent
-   └── GPT-4o-mini + 知識庫（ChromaDB）→ 搜尋意圖 / 讀者痛點 / 架構 / FAQ 建議
+   └── Gemini + 知識庫（ChromaDB）→ 搜尋意圖 / 讀者痛點 / 架構 / FAQ 建議
        │
        ▼
  [Step 3] Writing Agent
-   └── Claude Sonnet（或 OpenAI fallback）→ 大綱 → 段落 → 完整 Markdown
+   └── Gemini（或 OpenAI / Anthropic fallback）→ 大綱 → 段落 → 完整 Markdown
        含：FAQ schema / HowTo schema / Article schema JSON-LD
        │
        ▼
@@ -418,7 +425,7 @@ ContentFlow/
        ▼
  [Step 5] FactCheck Agent
    └── 禁用詞比對（product 模式嚴格；educational 模式降級處理）
-       └── GPT-4o-mini 對照 PubMed 摘要核實聲明
+       └── Gemini 對照 PubMed 摘要核實聲明
        │
        ▼
  [Step 6] Budget Guard
@@ -444,21 +451,26 @@ ContentFlow/
    └─ 人工審閱（Admin 後台）→ 手動發布
 ```
 
-### Scheduler 排程任務（共 15 個）
+### Scheduler 排程任務（共 20 個）
 
 | 任務 | 排程 | 說明 |
 |------|------|------|
 | `sync_gsc_all_projects` | 每日 03:00 | 同步 Google Search Console 排名 |
 | `sync_ga4_all_projects` | 每日 03:30 | 同步 GA4 頁面指標（含分頁，上限 500 筆）|
 | `sync_keyword_trends` | 每月 1 號 03:45 | 更新關鍵字 Google Trends 熱度分數 |
+| `sync_gbp_metrics` | 每日 03:50 | 同步 Google Business Profile 每日曝光 / 點擊指標 |
 | `backfill_action_outcomes` | 每日 04:00 | 歸因分析：回填文章行動成效 |
 | `check_scheduled_publishes` | 每日 04:05 | 定時發布排程文章 |
+| `check_published_noindex` | 每日 04:10 | 發布後驗證：確認文章 HTML 無 noindex、robots.txt 無誤封鎖 |
 | `run_auto_pipeline` | 每日 08:00 | Strategic Agent → 每日自動 AI Pipeline |
 | `run_render_verification` | 每日 10:00 | 驗證前台實際渲染輸出（schema/meta/cws） |
+| `check_gsc_sitemap_health` | 每週一 04:45 | 稽核 GSC 已提交 Sitemap 狀態，偵測「無法擷取」並告警 |
 | `run_competitor_serp_check` | 每週一 04:30 | 追蹤競品 SERP 排名 |
 | `run_attribution_engine` | 每週一 05:00 | 計算文章 ROI + 推薦行動 |
 | `check_refresh_triggers` | 每週二 04:00 | 偵測需更新的文章（排名下滑/陳舊/低 CTR）|
+| `sync_backlink_metrics` | 每週二 05:30 | DataForSEO 反向連結摘要同步，大量失去時告警 |
 | `check_ranking_drops` | 每週三 06:00 | 偵測7日內排名下滑 > 5 位的關鍵字，寫知識庫 |
+| `run_index_coverage_check` | 每週五 05:00 | Index Coverage 掃描，偵測新失索頁面並寫入知識庫 |
 | `run_weekly_reflection` | 每週日 08:00 | 週級反思：彙整學習成果，更新寫作規範 |
 | `send_weekly_report` | 每週日 09:00 | 產出 Slack 週報摘要 |
 | `run_l1_pattern_analysis` | 每月 1 號 06:00 | L1 學習：統計高分文章格式模式 |
@@ -466,7 +478,7 @@ ContentFlow/
 
 **專案上下文注入**：每個 Agent 均透過 `project_context.py` 載入品牌名稱、撰寫原則、法規詞庫、ChromaDB 知識庫，確保輸出符合品牌調性。
 
-**LLM Provider Failover**：`llm_client.py` 實作三層 failover — OpenAI（主）→ Anthropic（備）→ OpenAI fallback model，任一 Provider rate limit 後自動 60 秒 cooldown 並切換。
+**LLM Provider Failover**：`llm_client.py` 實作三層 failover — Gemini（主，`gemini-3-flash-preview`）→ OpenAI（備）→ Anthropic（備），任一 Provider rate limit 後自動 60 秒 cooldown 並切換。圖片生成使用 `gemini-3.1-flash-image-preview`。
 
 **SEO Check 評分項目（11 項規則引擎）**：
 
@@ -590,18 +602,13 @@ ContentFlow/
 
 ---
 
-### ⚠️ TD-06：Image Agent DALL-E 生成預設關閉，且無法透過設定啟用
+### ✅ TD-06：Image Agent 已遷移至 Gemini 圖片生成（已解決）
 
-**現況：** `image_agent.py` 中 `generate_images` 參數預設為 `False`，且沒有對應的 config 欄位或 UI 開關。若要啟用 DALL-E 圖片生成，需直接修改程式碼。
+**解決時間：** 本 session
 
-**風險：** 非技術人員無法自行啟用；且目前只有 Prompt 生成邏輯，尚未完整實作圖片儲存與 URL 回寫至 `articles.image_url`。
+**現況：** `image_agent.py` 已移除 DALL-E，改用 `gemini-3.1-flash-image-preview`（`response_modalities=["IMAGE"]`，輸出 WebP）。圖片生成使用與其他 Agent 相同的 `GEMINI_API_KEY`，無需額外 OpenAI 費用。
 
-**建議做法：**
-1. 在 `config.py` 新增 `ENABLE_IMAGE_GENERATION=false` 欄位
-2. `image_agent.py` 改為讀取此設定
-3. 補齊圖片下載並存至 `data/images/`，將路徑寫回 DB
-
-**影響評估：** 低。範圍侷限於 `image_agent.py` 與 `config.py`。
+**此項技術債已解決，無需進一步行動。**
 
 ---
 
@@ -673,13 +680,13 @@ Admin 後台：`http://localhost:8000/admin`，Password = `API_SECRET_KEY` 環�
 
 **Q: Scheduler 排程如何開啟？**
 
-`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Admin → 排程管理頁可查看所有 15 個任務的執行狀態，並可手動觸發個別任務。
+`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Admin → 排程管理頁可查看所有 20 個任務的執行狀態，並可手動觸發個別任務。
 
 ---
 
 **Q: Pipeline 費用大概多少？**
 
-以 GPT-4o-mini 為主力，一篇約 1,500 字的文章（含研究、策略、SEO QA）約 **$0.02–0.05 USD**。若 Writing Agent 設定為 Claude Sonnet，寫作階段額外約 **$0.05–0.15 USD**。Budget Guard 設定上限為每次 Pipeline 15 次 LLM 呼叫 / $2.00，超限時保留草稿不強制棄稿。
+以 `gemini-3-flash-preview` 為主力，一篇約 1,500 字的文章（含研究、策略、SEO QA）約 **$0.01–0.03 USD**。圖片生成使用 `gemini-3.1-flash-image-preview`，每張約 **$0.001 USD**。Budget Guard 設定上限為每次 Pipeline 15 次 LLM 呼叫 / $2.00，超限時保留草稿不強制棄稿。
 
 ---
 

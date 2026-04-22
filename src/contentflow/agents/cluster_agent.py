@@ -244,8 +244,7 @@ async def _llm_cluster_keywords(
         return []
 
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        from ..llm_client import achat
 
         kw_text = "\n".join(
             f"- {item['keyword']} (搜尋量: {item['volume']:.0f})"
@@ -267,14 +266,13 @@ async def _llm_cluster_keywords(
             "]"
         )
 
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw = await achat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=4000,
         )
 
-        raw = (response.choices[0].message.content or "[]").strip()
+        raw = raw.strip()
         if raw.startswith("```"):
             parts = raw.split("```")
             raw = parts[1] if len(parts) > 1 else raw

@@ -253,16 +253,10 @@ class TestRefreshDiffAnalyzer:
     def test_analyze_returns_refresh_plan(self, sample_fetched):
         """CF-06-02: analyze() 回傳 RefreshPlan 含 gaps + 分數"""
         analyzer = RefreshDiffAnalyzer()
-        mock_msg = MagicMock()
-        mock_msg.content = self._make_analyzer_response(2, 60, "patch")
-
-        with patch("contentflow.agents.refresh_agent._get_openai") as mock_openai:
-            mock_client = MagicMock()
-            mock_client.chat.completions.create.return_value = MagicMock(
-                choices=[MagicMock(message=mock_msg)]
-            )
-            mock_openai.return_value = mock_client
-
+        with patch(
+            "contentflow.agents.refresh_agent.chat_sync",
+            return_value=self._make_analyzer_response(2, 60, "patch"),
+        ):
             plan = analyzer.analyze(sample_fetched, "膝蓋疼痛", "競品摘要")
 
         assert isinstance(plan, RefreshPlan)
@@ -287,16 +281,7 @@ class TestRefreshDiffAnalyzer:
     def test_analyze_json_decode_error_fallback(self, sample_fetched):
         """CF-06-02: LLM 回傳無效 JSON → fallback 到 freshness=50, patch"""
         analyzer = RefreshDiffAnalyzer()
-        mock_msg = MagicMock()
-        mock_msg.content = "這不是 JSON"
-
-        with patch("contentflow.agents.refresh_agent._get_openai") as mock_openai:
-            mock_client = MagicMock()
-            mock_client.chat.completions.create.return_value = MagicMock(
-                choices=[MagicMock(message=mock_msg)]
-            )
-            mock_openai.return_value = mock_client
-
+        with patch("contentflow.agents.refresh_agent.chat_sync", return_value="這不是 JSON"):
             plan = analyzer.analyze(sample_fetched, "膝蓋疼痛", "摘要")
 
         assert plan.recommendation == "patch"
@@ -305,21 +290,15 @@ class TestRefreshDiffAnalyzer:
     def test_analyze_maintain_recommendation(self, sample_fetched):
         """CF-06-02: LLM 回傳 maintain → 無缺口"""
         analyzer = RefreshDiffAnalyzer()
-        mock_msg = MagicMock()
-        mock_msg.content = json.dumps({
-            "overall_freshness_score": 95,
-            "recommendation": "maintain",
-            "gaps": [],
-            "competitor_advantages": [],
-        })
-
-        with patch("contentflow.agents.refresh_agent._get_openai") as mock_openai:
-            mock_client = MagicMock()
-            mock_client.chat.completions.create.return_value = MagicMock(
-                choices=[MagicMock(message=mock_msg)]
-            )
-            mock_openai.return_value = mock_client
-
+        with patch(
+            "contentflow.agents.refresh_agent.chat_sync",
+            return_value=json.dumps({
+                "overall_freshness_score": 95,
+                "recommendation": "maintain",
+                "gaps": [],
+                "competitor_advantages": [],
+            }),
+        ):
             plan = analyzer.analyze(sample_fetched, "膝蓋疼痛", "摘要")
 
         assert plan.recommendation == "maintain"
@@ -355,16 +334,10 @@ class TestApplyLocalPatches:
 
     def test_patch_with_generated_content(self, sample_fetched, sample_plan):
         """CF-06-03: generate_content=True → 呼叫 GPT 產出真實補充"""
-        mock_msg = MagicMock()
-        mock_msg.content = "### 常見問題\n\nQ: 膝蓋疼痛怎麼辦？\nA: 休息並就醫。"
-
-        with patch("contentflow.agents.refresh_agent._get_openai") as mock_openai:
-            mock_client = MagicMock()
-            mock_client.chat.completions.create.return_value = MagicMock(
-                choices=[MagicMock(message=mock_msg)]
-            )
-            mock_openai.return_value = mock_client
-
+        with patch(
+            "contentflow.agents.refresh_agent.chat_sync",
+            return_value="### 常見問題\n\nQ: 膝蓋疼痛怎麼辦？\nA: 休息並就醫。",
+        ):
             result = apply_local_patches(sample_fetched, sample_plan, "膝蓋疼痛",
                                          generate_content=True)
 

@@ -873,3 +873,130 @@ class GSCMobileUsabilityMonitor:
                 logger.error(f"[MobileUsability] 通知發送失敗：{e}")
 
         return messages
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FB-07: URL 重複頁面 / Canonical 衝突偵測
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def check_url_canonical_conflicts(
+    site_url: str,
+    timeout: int = 15,
+) -> list[SiteAuditIssue]:
+    """
+    偵測 www / non-www、HTTP / HTTPS、trailing-slash 等變體 URL 是否存在 canonical 衝突。
+
+    共探測 8 種變體組合，檢查：
+    1. 是否所有可存取的變體都 301 導向同一個正規 URL
+    2. 正規 URL 的 canonical tag 是否指向自身
+
+    Args:
+        site_url: 網站根 URL（例：https://example.com）
+        timeout: 單次 HTTP 請求逾時（秒）
+
+    Returns:
+        list[SiteAuditIssue]，空列表表示無衝突
+    """
+    issues: list[SiteAuditIssue] = []
+
+    parsed = urlparse(site_url)
+    host_clean = parsed.netloc.lower()
+    if host_clean.startswith("www."):
+        host_clean = host_clean[4:]
+    base_path = parsed.path.rstrip("/") or ""
+
+    # 建立 8 種變體：www/non-www × http/https × trailing-slash/no-slash
+    variants: list[str] = []
+    for scheme in ("https", "http"):
+        for host in (host_clean, f"www.{host_clean}"):
+            for slash in ("", "/"):
+                variants.append(f"{scheme}://{host}{base_path}{slash}")
+
+    # 去重：避免 base_path 本身就是 "/" 時的重複
+    variants = list(dict.fromkeys(variants))
+
+    final_urls: dict[str, str] = {}   # variant → 最終落點 URL
+    canonical_tags: dict[str, str] = {}  # url → canonical href
+
+    _ua = "Mozilla/5.0 (compatible; ContentFlow-CanonicalChecker/1.0)"
+
+    async def _probe(client: httpx.AsyncClient, url: str) -> None:
+        try:
+            # 跟隨重定向（最多 5 跳）
+            r = await client.get(url, follow_redirects=True, headers={"User-Agent": _ua})
+            final_url = str(r.url)
+            final_urls[url] = final_url
+
+            # 嘗試解析 canonical tag
+            if "text/html" in r.headers.get("content-type", ""):
+                text = r.text[:8192]  # 只讀 head 區域
+                canon_match = re.search(
+                    r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
+                    text,
+                    re.IGNORECASE,
+                )
+                if not canon_match:
+                    canon_match = re.search(
+                        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']canonical["\']',
+                        text,
+                        re.IGNORECASE,
+                    )
+                if canon_match:
+                    canonical_tags[final_url] = canon_match.group(1)
+
+        except Exception as e:
+            logger.debug(f"[CanonicalCheck] 探測 {url} 失敗（跳過）：{e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            import asyncio
+            await asyncio.gather(*[_probe(client, v) for v in variants])
+    except Exception as e:
+        logger.error(f"[CanonicalCheck] 批次探測失敗：{e}")
+        return issues
+
+    # 分析結果
+    valid_finals = {v: u for v, u in final_urls.items() if u}
+    if not valid_finals:
+        return issues
+
+    # 1. 多個不同的最終落點 → canonical 衝突
+    unique_finals = set(valid_finals.values())
+    if len(unique_finals) > 1:
+        detail = (
+            f"偵測到多個不同的最終落點：{', '.join(sorted(unique_finals)[:4])} "
+            f"（來源變體共 {len(valid_finals)} 個）"
+        )
+        issues.append(SiteAuditIssue(
+            issue_type="canonical_conflict",
+            url=site_url,
+            detail=detail,
+            severity="error",
+        ))
+
+    # 2. canonical tag 不指向自身
+    for final_url, canon_href in canonical_tags.items():
+        # canonical 應與 final_url 相同（允許 trailing-slash 差異）
+        canon_normalized = canon_href.rstrip("/")
+        final_normalized = final_url.rstrip("/")
+        if canon_normalized and canon_normalized != final_normalized:
+            # 若 canonical 指向正確的唯一版本，可能是刻意設計；
+            # 若 canonical 指向完全不同域名或 path，則是問題
+            canon_parsed = urlparse(canon_href)
+            final_parsed = urlparse(final_url)
+            if canon_parsed.netloc != final_parsed.netloc:
+                issues.append(SiteAuditIssue(
+                    issue_type="canonical_conflict",
+                    url=final_url,
+                    detail=f"canonical tag 指向不同域名：{canon_href}（當前 URL：{final_url}）",
+                    severity="error",
+                ))
+            elif canon_parsed.path.rstrip("/") != final_parsed.path.rstrip("/"):
+                issues.append(SiteAuditIssue(
+                    issue_type="canonical_conflict",
+                    url=final_url,
+                    detail=f"canonical tag 路徑不一致：{canon_href}（當前 URL：{final_url}）",
+                    severity="warning",
+                ))
+
+    return issues
