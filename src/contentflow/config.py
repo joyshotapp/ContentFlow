@@ -97,6 +97,20 @@ class Settings(BaseSettings):
     # 通知（可選）
     slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
 
+    # Build metadata（部署版本追蹤）
+    contentflow_build_commit: str = Field(
+        default="unknown",
+        alias="CONTENTFLOW_BUILD_COMMIT",
+    )
+    contentflow_build_time: str = Field(
+        default="unknown",
+        alias="CONTENTFLOW_BUILD_TIME",
+    )
+    contentflow_build_source: str = Field(
+        default="unknown",
+        alias="CONTENTFLOW_BUILD_SOURCE",
+    )
+
     # Reference Site（SEO 閉環驗證前端）
     site_url: str = Field(
         default="http://localhost:8000/site",
@@ -144,6 +158,12 @@ class Settings(BaseSettings):
         default="",
         alias="GBP_LOCATION_PROJECT_MAP",
         description="GBP location_id 與 project_id 映射，格式如 123456789:2,987654321:5",
+    )
+
+    # Knowledge Base / Chroma
+    chroma_persist_dir: str = Field(
+        default="",
+        alias="CHROMA_PERSIST_DIR",
     )
 
 

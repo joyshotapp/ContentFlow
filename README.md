@@ -67,6 +67,9 @@ source .venv/bin/activate
 
 # 安裝套件（含開發工具）
 pip install -e ".[dev]"
+
+# 若需要 AgentOps 可觀測性
+pip install -e ".[dev,observability]"
 ```
 
 ### 3. 設定環境變數
@@ -90,7 +93,7 @@ docker-compose up -d
 - **Admin 後台**：`http://localhost:8000/admin`（密碼：`API_SECRET_KEY`）
 - **Public 站台**：`http://localhost:8000/`
 
-PostgreSQL 資料庫由 Docker Compose 自動建立，Alembic migrations 在容器啟動時自動執行。
+PostgreSQL 資料庫由 Docker Compose 自動建立；schema migration 請在容器啟動後執行 `alembic upgrade head`。
 
 ### 4b. 本地開發（不使用 Docker）
 
@@ -128,7 +131,7 @@ GBP_LOCATION_PROJECT_MAP=      # location_id:project_id，例：123456789:2,9876
 GBP_OAUTH_ACCESS_TOKEN=...     # Business Profile API OAuth access token
 
 # ── 資料庫（正式環境必填）──────────────────────────────
-DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/contentflow
+DATABASE_URL=postgresql+psycopg2://user:pass@db:5432/contentflow
 # 本地 SQLite 開發：sqlite+aiosqlite:///data/contentflow.db
 
 # ── Google Service Account（GSC + Google Indexing API）──
@@ -288,7 +291,7 @@ pytest tests/test_seo_check_agent.py -v
 | `test_image_agent.py` | Image Agent Prompt 生成 |
 | `test_pipeline_utils.py` | Pipeline 工具函式 |
 
-> 目前 126 個測試全數通過（`asyncio_mode = "auto"`）。
+> 目前 315 個測試通過（`asyncio_mode = "auto"`）。`AgentOps` 已改為可選依賴，不再阻塞測試收集。
 
 ---
 
@@ -321,7 +324,7 @@ ContentFlow/
 ├── .env                         # 本地環境變數（不提交 git）
 ├── .env.example                 # 環境變數範本
 ├── pyproject.toml               # 套件設定、依賴宣告、工具設定
-├── docker-compose.yml           # 正式環境容器編排（site + db）
+├── docker-compose.yml           # 本地開發容器編排（api + ui + db）
 ├── Dockerfile                   # 主服務映像
 ├── SYSTEM_OVERVIEW.md           # 進階系統技術文件
 │
@@ -389,7 +392,7 @@ ContentFlow/
 │   ├── migrate_sqlite_to_pg.py  # SQLite → PostgreSQL 遷移
 │   └── verify_db.py             # DB 健康檢查
 │
-└── tests/                       # pytest 測試套件（126 個測試）
+└── tests/                       # pytest 測試套件（315 個測試）
 ```
 
 ---
@@ -500,7 +503,7 @@ ContentFlow/
 
 ## 資料庫設計
 
-- 正式部署使用 **PostgreSQL 16**（Docker Compose 內建服務），`DATABASE_URL` 設定為 `postgresql+asyncpg://`
+- 正式部署使用 **PostgreSQL 16**（Docker Compose 內建服務），`DATABASE_URL` 設定為 `postgresql+psycopg2://`
 - 所有資料表均有 `project_id` 欄位，支援多個品牌/客戶共用同一資料庫
 - **Schema migrations** 由 Alembic 管理（`migrations/` 目錄）
 - 本地開發可使用 SQLite：`sqlite+aiosqlite:///data/contentflow.db`
@@ -554,7 +557,7 @@ ContentFlow/
 
 ### ⚠️ TD-02：部分非同步 DB Session 尚未統一
 
-**現況：** `db.py` 核心已遷移至 `AsyncSession` + `asyncpg`（PostgreSQL）；`async_sessionmaker` 供 API / Agent 使用。但 `app/` 目錄下的 Streamlit 頁面仍部分使用舊同步介面，透過 `asyncio.run()` 橋接。
+**現況：** `db.py` 使用同步 SQLAlchemy Session，正式部署的 PostgreSQL driver 為 `psycopg2`。`app/` 目錄下的 Streamlit 頁面屬輔助介面，主要後台與 scheduler 由 FastAPI 提供。
 
 **風險：** Streamlit 側尚未完整清除的同步橋接若在高並發下執行，可能阻塞事件迴圈。目前 Streamlit 作為輔助工具使用，與 FastAPI 隔離執行，風險可控。
 
@@ -596,7 +599,7 @@ ContentFlow/
 
 **解決時間：** 本 session
 
-**現況：** 正式部署已使用 PostgreSQL 16（Docker Compose 內建服務），`DATABASE_URL` 使用 `postgresql+asyncpg://`。Alembic 管理 schema migrations（`migrations/` 目錄）。SQLite 的 `_ensure_sqlite_columns()` 補丁已移除。
+**現況：** 正式部署已使用 PostgreSQL 16（Docker Compose 內建服務），`DATABASE_URL` 使用 `postgresql+psycopg2://`。Alembic 管理 schema migrations（`migrations/` 目錄）。SQLite 的 `_ensure_sqlite_columns()` 補丁仍保留，以兼容本地舊資料庫。
 
 **此項技術債已解決，無需進一步行動。**
 

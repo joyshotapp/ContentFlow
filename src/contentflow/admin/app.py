@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import uuid
 from collections import Counter, defaultdict
 from types import SimpleNamespace
@@ -64,13 +65,14 @@ from contentflow.models.database import (
     WritingRule,
     ContentStrategy,
 )
+from contentflow.utils.topic_hygiene import is_viable_topic
 
 # ── App ───────────────────────────────────────────────────────
 
 admin_app = FastAPI(title="ContentFlow Admin", docs_url=None, redoc_url=None)
 admin_app.add_middleware(
     SessionMiddleware,
-    secret_key=settings.api_secret_key or "dev-secret-change-me",
+    secret_key=settings.api_secret_key or secrets.token_urlsafe(32),
 )
 
 _here = Path(__file__).resolve().parent
@@ -85,6 +87,21 @@ templates.env.globals["site_url"] = settings.site_url
 
 def _db():
     return SessionLocal()
+
+
+def _native_blog_url(slug: str) -> str:
+    base = settings.site_url.rstrip("/")
+    return f"{base}/blog/{slug}"
+
+
+def _mark_article_published(art: Article, publish_url: str | None = None) -> None:
+    now = datetime.now(timezone.utc)
+    art.status = "published"
+    art.published_at = now
+    art.publish_date = now.strftime("%Y-%m-%d")
+    art.updated_at = now
+    if publish_url:
+        art.publish_url = publish_url
 
 
 def _get_agent_cost_metrics(db):
@@ -233,7 +250,16 @@ async def login_page(request: Request):
 
 @admin_app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, password: str = Form(...)):
-    if password == (settings.api_secret_key or "admin"):
+    if not settings.api_secret_key:
+        logger.error("[Admin] API_SECRET_KEY 未設定，拒絕登入")
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"request": request, "error": "API_SECRET_KEY 未設定，請先完成部署設定"},
+            status_code=503,
+        )
+
+    if secrets.compare_digest(password, settings.api_secret_key):
         request.session["admin_logged_in"] = True
         return RedirectResponse("/admin/", status_code=303)
     return templates.TemplateResponse(request, "login.html", {"request": request, "error": "密碼錯誤"})
@@ -393,6 +419,10 @@ async def create_article(
         raise HTTPException(status_code=403)
     db = _db()
     try:
+        ok, reason = is_viable_topic(title or keyword, keyword)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"無效的文章題目或關鍵字：{reason}")
+
         art = Article(
             title=title or keyword,
             primary_keyword=keyword,
@@ -421,6 +451,9 @@ async def bulk_create_articles(request: Request):
         for item in data:
             kw = item.get("keyword", "").strip()
             if not kw:
+                continue
+            ok, _ = is_viable_topic(item.get("title", kw), kw)
+            if not ok:
                 continue
             art = Article(
                 title=item.get("title", kw),
@@ -532,9 +565,8 @@ async def update_article_status(request: Request, article_id: int, status: str =
             art.updated_at = datetime.now(timezone.utc)
             # 發布到 goodbone.com.tw 時，記錄 publish_url 並提交 Google Indexing API
             if status == "published" and art.slug:
-                publish_url = f"https://goodbone.com.tw/blog/{art.slug}"
-                art.publish_url = publish_url
-                art.publish_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                publish_url = _native_blog_url(art.slug)
+                _mark_article_published(art, publish_url=publish_url)
                 db.commit()
                 asyncio.create_task(_submit_to_google_indexing(publish_url))
             else:
@@ -615,10 +647,7 @@ async def publish_to_wordpress(request: Request, article_id: int):
         result = await wp.publish_draft(draft)
 
         if result.success:
-            art.publish_url = result.publish_url or ""
-            art.status = "published"
-            art.publish_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            art.updated_at = datetime.now(timezone.utc)
+            _mark_article_published(art, publish_url=result.publish_url or "")
             db.commit()
             # Async: trigger Google Indexing API for faster crawl
             if art.publish_url:
@@ -863,6 +892,11 @@ async def create_calendar_entry(
         month_int = now.month
     db = _db()
     try:
+        project = db.get(Project, project_id) if project_id else None
+        ok, reason = is_viable_topic(title, keywords or title, project=project)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"無效的日曆題目或關鍵字：{reason}")
+
         entry = ContentCalendar(
             project_id=project_id or None,
             title=title.strip(),

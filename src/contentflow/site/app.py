@@ -33,6 +33,7 @@ from loguru import logger
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
+from contentflow.build_info import get_build_info
 from contentflow.config import settings
 from contentflow.db import SessionLocal
 from contentflow.models.database import Article, Category, TopicCluster
@@ -239,7 +240,7 @@ async def health():
     import os
     from pathlib import Path
 
-    checks: dict = {"service": "reference-site"}
+    checks: dict = {"service": "reference-site", **get_build_info()}
 
     # DB 連線
     try:
@@ -270,6 +271,11 @@ async def health():
     status_code = 200 if ok else 503
     from fastapi.responses import JSONResponse
     return JSONResponse(content=checks, status_code=status_code)
+
+
+@site_app.get("/version")
+async def version():
+    return get_build_info()
 
 
 # ─── Homepage ─────────────────────────────────────────────────

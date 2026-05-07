@@ -328,25 +328,54 @@ def _generate_meta(title: str, content: str, keywords: list[str]) -> dict:
 
 # ── Step 4: SEO URL Slug ──────────────────────────────────────
 
-def _generate_slug(article_title: str) -> str:
-    """將文章標題轉換為 SEO 友善的英文 URL slug。"""
+def _generate_slug(client_or_title, article_title: str | None = None) -> str:
+    """將文章標題轉換為 SEO 友善的英文 URL slug。
+
+    向後相容舊簽名 `_generate_slug(client, title)`，同時支援新簽名
+    `_generate_slug(title)`。
+    """
+    if article_title is None:
+        client = None
+        article_title = str(client_or_title)
+    else:
+        client = client_or_title
+
     try:
-        raw = chat_sync(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Convert the given Chinese article title to an SEO URL slug. "
-                        "Rules: lowercase English only, 3-5 words, hyphens between words, "
-                        "no stop words, no special characters. "
-                        "Return ONLY the slug. Example: 'bone-spur-causes-treatment'"
-                    ),
-                },
-                {"role": "user", "content": article_title},
-            ],
-            temperature=0.1,
-            max_tokens=64,
-        )
+        if client is not None:
+            resp = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Convert the given Chinese article title to an SEO URL slug. "
+                            "Rules: lowercase English only, 3-5 words, hyphens between words, "
+                            "no stop words, no special characters. "
+                            "Return ONLY the slug. Example: 'bone-spur-causes-treatment'"
+                        ),
+                    },
+                    {"role": "user", "content": article_title},
+                ],
+                temperature=0.1,
+                max_tokens=64,
+            )
+            raw = resp.choices[0].message.content or ""
+        else:
+            raw = chat_sync(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Convert the given Chinese article title to an SEO URL slug. "
+                            "Rules: lowercase English only, 3-5 words, hyphens between words, "
+                            "no stop words, no special characters. "
+                            "Return ONLY the slug. Example: 'bone-spur-causes-treatment'"
+                        ),
+                    },
+                    {"role": "user", "content": article_title},
+                ],
+                temperature=0.1,
+                max_tokens=64,
+            )
         slug = re.sub(r"[^a-z0-9-]", "-", raw.strip().lower())
         slug = re.sub(r"-{2,}", "-", slug).strip("-")
         return slug or "article"

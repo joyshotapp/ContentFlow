@@ -19,7 +19,6 @@ CF-05-04: KB query adapter（供 Strategy Agent 呼叫）
 from __future__ import annotations
 
 import json
-import os
 from typing import Optional
 
 from loguru import logger
@@ -42,7 +41,7 @@ def _get_chroma_client():
     try:
         import chromadb
 
-        persist_dir = getattr(settings, "chroma_persist_dir", None) or os.environ.get("CHROMA_PERSIST_DIR", "")
+        persist_dir = (settings.chroma_persist_dir or "").strip()
         if persist_dir:
             _chroma_client = chromadb.PersistentClient(path=persist_dir)
             logger.info(f"[KB] ChromaDB PersistentClient 初始化：{persist_dir}")
@@ -88,7 +87,7 @@ _EMBED_MODEL = "text-embedding-3-small"
 
 def _get_embedding(text: str) -> list[float] | None:
     """呼叫 OpenAI embedding API；若 embedding 不可用則回傳 None。"""
-    api_key = getattr(settings, "openai_api_key", None) or os.environ.get("OPENAI_API_KEY", "")
+    api_key = (settings.openai_api_key or "").strip()
     if not api_key or api_key.startswith("sk-placeholder"):
         logger.warning("[KB] 未設定有效 OpenAI API key，跳過 embedding，改走 DB fallback")
         return None

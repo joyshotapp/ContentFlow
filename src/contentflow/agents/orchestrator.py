@@ -24,7 +24,11 @@ from typing import Optional, Any
 from typing_extensions import TypedDict
 
 from loguru import logger
-import agentops
+
+try:
+    import agentops
+except ImportError:  # pragma: no cover - exercised by environments without AgentOps
+    agentops = None
 
 from ..config import settings
 from ..llm_client import reset_cost_tracker, get_cost_summary
@@ -32,6 +36,10 @@ from ..llm_client import reset_cost_tracker, get_cost_summary
 
 def _init_agentops() -> bool:
     """初始化 AgentOps（若未設定 API Key 則靜默跳過）。"""
+    if agentops is None:
+        logger.info("[AgentOps] 套件未安裝，略過可觀測性追蹤")
+        return False
+
     key = settings.agentops_api_key
     if not key:
         return False

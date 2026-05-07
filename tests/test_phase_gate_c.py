@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -16,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from contentflow.models.database import Base, SchedulerLog
+from contentflow.models.database import Article, Base, Project, SchedulerLog
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -214,3 +215,71 @@ def test_scheduler_has_20_jobs_defined():
     assert src.count("scheduler.add_job(") == 20
     for jid in expected_job_ids:
         assert jid in src, f"schedule_all_jobs 缺少 job id: {jid}"
+
+
+def test_check_scheduled_publishes_rescues_review_required_backlog(monkeypatch):
+    """接近門檻且無 factcheck 風險的 review_required 稿件，應先被補救升級為 approved。"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    project = Project(
+        slug="goodbone",
+        name="GoodBone",
+        auto_publish_enabled=True,
+        auto_publish_min_score=85,
+    )
+    session.add(project)
+    session.flush()
+
+    article = Article(
+        project_id=project.id,
+        title="膝蓋痛怎麼辦",
+        primary_keyword="膝蓋痛",
+        secondary_keywords="膝蓋痛原因, 膝蓋痛舒緩",
+        status="review_required",
+        slug="knee-pain-guide",
+        draft_content="# 膝蓋痛怎麼辦\n\n原始首段內容。\n\n## 原因\n\n說明。\n\n## 治療\n\n說明。\n\n## FAQ\n\n常見問題。",
+        meta_title="膝蓋痛處理",
+        meta_description="膝蓋痛處理方式整理",
+        seo_score=82,
+        factcheck_flags_json="[]",
+        research_report_json=json.dumps({"article_title": "膝蓋痛怎麼辦", "keywords": ["膝蓋痛"]}, ensure_ascii=False),
+        scheduled_publish_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    session.add(article)
+    session.commit()
+
+    monkeypatch.setattr("contentflow.scheduler.SessionLocal", Session)
+
+    seo_scores = iter([
+        {"score": 82, "checks": [{"name": "meta_description_has_primary_keyword", "passed": False, "detail": "缺主關鍵字"}]},
+        {"score": 87, "checks": []},
+    ])
+
+    def fake_seo_check_agent(*args, **kwargs):
+        return next(seo_scores)
+
+    async def fake_seo_qa_agent(draft, **kwargs):
+        draft.meta_title = "膝蓋痛｜處理重點"
+        draft.meta_description = "膝蓋痛常見原因與舒緩重點整理。"
+        draft.content_markdown = draft.content_markdown + "\n\n## 膝蓋痛怎麼辦？\n\n先冰敷並降低負重，再依症狀安排評估。"
+        return draft
+
+    monkeypatch.setattr("contentflow.agents.seo_check_agent.run_seo_check_agent", fake_seo_check_agent)
+    monkeypatch.setattr("contentflow.agents.seo_qa_agent.run_seo_qa_agent", fake_seo_qa_agent)
+
+    from contentflow.scheduler import check_scheduled_publishes
+
+    asyncio.run(check_scheduled_publishes())
+
+    refreshed = session.get(Article, article.id)
+    assert refreshed is not None
+    assert refreshed.status == "approved"
+    assert refreshed.seo_score == 87
+    assert "膝蓋痛" in refreshed.meta_title
+
+    session.close()
+    engine.dispose()

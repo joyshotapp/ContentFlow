@@ -1,8 +1,5 @@
-version: "3.9"
-
 # goodbone.com.tw 生產環境
-# 只部署 公開網站 (site sub-app) + PostgreSQL
-# ContentFlow AI 後台（Streamlit、Agents）維持在本機運行
+# 部署 FastAPI site_app（含 public site、admin、scheduler）+ PostgreSQL
 #
 # 使用方式：docker compose -f docker-compose.prod.yml up -d
 
@@ -40,6 +37,10 @@ services:
     env_file: .env.prod
     environment:
       DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@localhost:5432/contentflow
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      CONTENTFLOW_BUILD_COMMIT: ${CONTENTFLOW_BUILD_COMMIT:-unknown}
+      CONTENTFLOW_BUILD_TIME: ${CONTENTFLOW_BUILD_TIME:-unknown}
+      CONTENTFLOW_BUILD_SOURCE: ${CONTENTFLOW_BUILD_SOURCE:-unknown}
     depends_on:
       db:
         condition: service_healthy

@@ -16,6 +16,7 @@ Pipeline 完成後自動執行，分析結果 → 萃取學習 → 更新 Knowle
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -215,7 +216,14 @@ async def reflect_weekly(project_id: int) -> ReflectionLog | None:
         reflection = await _call_reflection_llm(context, "weekly_review")
     except Exception as e:
         logger.error(f"[ReflectiveLoop/weekly] LLM 失敗：{e}")
-        return None
+        reflection = _fallback_weekly_reflection(context)
+
+    if not reflection.get("knowledge_updates") and not reflection.get("writing_rule_updates"):
+        fallback = _fallback_weekly_reflection(context)
+        reflection["insights"] = reflection.get("insights") or fallback["insights"]
+        reflection["knowledge_updates"] = fallback["knowledge_updates"]
+        reflection["writing_rule_updates"] = fallback["writing_rule_updates"]
+        reflection["session_summary"] = reflection.get("session_summary") or fallback["session_summary"]
 
     insights = reflection.get("insights", [])
     summary = reflection.get("session_summary", "")
@@ -410,6 +418,152 @@ def _fallback_reflection(context: dict) -> dict:
         "knowledge_updates": [],
         "writing_rule_updates": [],
         "session_summary": f"Pipeline 完成，SEO={seo}，狀態={context.get('article', {}).get('status', 'unknown')}",
+    }
+
+
+def _fallback_weekly_reflection(context: dict) -> dict:
+    """當 weekly_review 無法產出有效更新時，以啟發式規則補上最基本學習輸出。"""
+    articles = context.get("articles_this_week", []) or []
+    rankings = context.get("ranking_performance", []) or []
+    existing_knowledge = context.get("existing_knowledge", []) or []
+
+    if not articles and not rankings:
+        return {
+            "insights": [{
+                "type": "issue",
+                "observation": "本週缺少可用的文章或排名資料，無法形成有效週反思。",
+                "confidence": "high",
+            }],
+            "knowledge_updates": [],
+            "writing_rule_updates": [],
+            "session_summary": "本週資料不足，weekly_review 未產出新的知識或規則。",
+        }
+
+    insights: list[dict[str, str]] = []
+    knowledge_updates: list[dict[str, str]] = []
+    writing_rule_updates: list[dict[str, str]] = []
+
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").strip())
+
+    known_patterns = {
+        _normalize_text(item.get("pattern", ""))
+        for item in existing_knowledge
+        if isinstance(item, dict) and item.get("pattern")
+    }
+    seen_rules: set[tuple[str, str]] = set()
+
+    def add_knowledge(category: str, pattern: str) -> None:
+        normalized = _normalize_text(pattern)
+        if not normalized or normalized in known_patterns:
+            return
+        known_patterns.add(normalized)
+        knowledge_updates.append({"category": category, "pattern": pattern})
+
+    def add_rule(rule_type: str, name: str, content: str) -> None:
+        key = (_normalize_text(name), _normalize_text(content))
+        if not key[0] or not key[1] or key in seen_rules:
+            return
+        seen_rules.add(key)
+        writing_rule_updates.append({
+            "rule_type": rule_type,
+            "name": name,
+            "content": content,
+        })
+
+    scored_articles = [article for article in articles if article.get("seo_score") is not None]
+    low_seo_articles = [article for article in scored_articles if (article.get("seo_score") or 0) < 85]
+    short_articles = [article for article in articles if (article.get("word_count") or 0) < 1200]
+    review_required = [article for article in articles if article.get("status") == "review_required"]
+    strong_rankings = [item for item in rankings if (item.get("position") or 999) <= 10]
+    average_seo = round(
+        sum((article.get("seo_score") or 0) for article in scored_articles) / len(scored_articles),
+        1,
+    ) if scored_articles else None
+
+    if strong_rankings:
+        best_keywords = [item.get("keyword") for item in strong_rankings if item.get("keyword")][:3]
+        keyword_text = "、".join(best_keywords) or "前段排名主題"
+        insights.append({
+            "type": "pattern",
+            "observation": f"本週已有 {len(strong_rankings)} 篇已發布文章進入前 10 名，代表 {keyword_text} 類題目具持續投入價值。",
+            "confidence": "medium",
+        })
+        add_knowledge(
+            "content_strategy",
+            f"weekly_review：本週前 10 名文章顯示 {keyword_text} 類題目具持續投入價值，可優先延伸相關內容群。",
+        )
+
+    if low_seo_articles:
+        weak_titles = "、".join(article.get("title") or "未命名" for article in low_seo_articles[:3])
+        insights.append({
+            "type": "issue",
+            "observation": f"本週有 {len(low_seo_articles)} 篇文章 SEO 分數低於 85，像是 {weak_titles}，發布前檢查仍需前移。",
+            "confidence": "high",
+        })
+        add_rule(
+            "principle",
+            "週反思 SEO 發布前檢查",
+            "若文章 SEO 分數低於 85，發布前必須重新檢查標題結構、FAQ 補強、meta 與關鍵字覆蓋，並優先補齊首段直答與至少一個含主關鍵字的 H2。",
+        )
+
+    if short_articles:
+        short_keywords = "、".join(article.get("keyword") or article.get("title") or "未命名" for article in short_articles[:3])
+        add_knowledge(
+            "content_depth",
+            f"weekly_review：本週有 {len(short_articles)} 篇文章字數低於 1200，包含 {short_keywords}，短文更容易在 SEO 檢查卡在 FAQ、內容深度或摘要段落不足。",
+        )
+        add_rule(
+            "architecture",
+            "短文補強基準",
+            "若草稿低於 1200 字，發布前至少補齊一段 80-140 字的直答首段、3 個以上 H2 與 FAQ 區塊，避免內容深度不足。",
+        )
+
+    if review_required:
+        priority_articles = sorted(
+            review_required,
+            key=lambda article: (-(article.get("seo_score") or 0), article.get("title") or ""),
+        )[:3]
+        priority_text = "、".join(
+            f"{article.get('title') or '未命名'}（{article.get('seo_score') or 'n/a'}）"
+            for article in priority_articles
+        )
+        add_knowledge(
+            "refresh_priority",
+            f"weekly_review：當週存在 {len(review_required)} 篇 review_required 文章，應優先處理 {priority_text} 這類高分接近發布門檻的稿件，以避免佇列堆積。",
+        )
+        add_rule(
+            "principle",
+            "待審稿優先處理順序",
+            "review_required 稿件應依 SEO 分數由高到低排序；距離專案發布門檻 5 分內者需在 48 小時內完成補強與複評，避免高分稿件長時間積壓。",
+        )
+
+    if not knowledge_updates and articles:
+        published_count = sum(1 for article in articles if article.get("status") == "published")
+        add_knowledge(
+            "content_strategy",
+            f"weekly_review：本週共觀察 {len(articles)} 篇文章，其中 {published_count} 篇已發布，需持續累積可重複的題型與格式模式。",
+        )
+
+    if not writing_rule_updates and articles:
+        add_rule(
+            "principle",
+            "週反思資料回填紀律",
+            "每週反思若無明確規則變更，仍應留下至少一條發布前檢查或結構優化原則，避免學習閉環空轉。",
+        )
+
+    summary_parts = [f"weekly_review fallback：分析 {len(articles)} 篇文章與 {len(rankings)} 筆排名資料"]
+    if average_seo is not None:
+        summary_parts.append(f"平均 SEO {average_seo}")
+    if review_required:
+        summary_parts.append(f"review_required {len(review_required)} 篇")
+    summary_parts.append(f"產出 {len(knowledge_updates)} 條知識與 {len(writing_rule_updates)} 條規則")
+
+    return {
+        "insights": insights,
+        "knowledge_updates": knowledge_updates,
+        "writing_rule_updates": writing_rule_updates,
+        "session_summary": "，".join(summary_parts) + "。",
     }
 
 

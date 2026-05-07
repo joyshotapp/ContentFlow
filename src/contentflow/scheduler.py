@@ -11,13 +11,18 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import os
+import re
 import time
 import traceback
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from typing import Callable, Awaitable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
 
 # 跨 process 排程鎖（多 worker 部署時只讓一個 worker 啟動排程）
 _scheduler_lock_fd = None
@@ -1029,8 +1034,176 @@ async def check_scheduled_publishes() -> None:
     3. status="review_required"，且 seo_score >= project.auto_publish_min_score
        （seo 分數符合自動發布門檻但因舊 bug 未被自動發布的文章，補救發布）
     """
+    from contentflow.agents.seo_check_agent import run_seo_check_agent
+    from contentflow.agents.seo_qa_agent import run_seo_qa_agent
     from contentflow.models.database import Article, Project
+    from contentflow.models.schemas import ArticleDraft, ResearchReport
     from sqlalchemy import or_
+    import json
+
+    def _parse_secondary_keywords(raw_keywords: str | None) -> list[str]:
+        if not raw_keywords:
+            return []
+
+        text = raw_keywords.strip()
+        if not text:
+            return []
+
+        if text.startswith("["):
+            try:
+                payload = json.loads(text)
+                if isinstance(payload, list):
+                    return [str(item).strip() for item in payload if str(item).strip()]
+            except (TypeError, ValueError):
+                pass
+
+        return [item.strip() for item in re.split(r"[,，、\n]+", text) if item.strip()]
+
+    def _article_has_factcheck_risk(article: Article) -> bool:
+        raw_flags = article.factcheck_flags_json or "[]"
+        try:
+            payload = json.loads(raw_flags)
+        except (TypeError, ValueError):
+            return True
+        return isinstance(payload, list) and len(payload) > 0
+
+    def _build_research_report(article: Article) -> ResearchReport:
+        payload: dict = {}
+        if article.research_report_json:
+            try:
+                loaded = json.loads(article.research_report_json)
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except (TypeError, ValueError):
+                payload = {}
+
+        primary_keyword = (article.primary_keyword or "").strip()
+        secondary_keywords = _parse_secondary_keywords(article.secondary_keywords)
+        keywords = payload.get("keywords") if isinstance(payload.get("keywords"), list) else []
+        suggested_keywords = payload.get("suggested_keywords") if isinstance(payload.get("suggested_keywords"), list) else []
+
+        if primary_keyword and primary_keyword not in keywords:
+            keywords = [primary_keyword, *keywords]
+        if secondary_keywords:
+            suggested_keywords = [*suggested_keywords, *secondary_keywords]
+
+        payload["article_title"] = payload.get("article_title") or article.title or primary_keyword or "Untitled"
+        payload["keywords"] = [item for item in keywords if item]
+        payload["suggested_keywords"] = [item for item in suggested_keywords if item]
+        payload["paa_questions"] = payload.get("paa_questions") if isinstance(payload.get("paa_questions"), list) else []
+        payload["competitor_headings"] = payload.get("competitor_headings") if isinstance(payload.get("competitor_headings"), list) else []
+
+        try:
+            return ResearchReport.model_validate(payload)
+        except Exception:
+            return ResearchReport(
+                article_title=article.title or primary_keyword or "Untitled",
+                keywords=[primary_keyword] if primary_keyword else [],
+                suggested_keywords=secondary_keywords,
+            )
+
+    async def _rescue_review_required_backlog(project_thresholds: dict[int, int]) -> int:
+        if not project_thresholds:
+            return 0
+
+        score_gap_limit = 8
+        stale_before = now - timedelta(days=2)
+
+        with SessionLocal() as session:
+            candidates = (
+                session.query(Article)
+                .filter(
+                    Article.status == "review_required",
+                    Article.project_id.in_(list(project_thresholds.keys())),
+                    Article.seo_score.isnot(None),
+                    Article.slug.isnot(None),
+                    Article.updated_at <= stale_before,
+                )
+                .all()
+            )
+
+            candidate_ids = [
+                article.id
+                for article in sorted(
+                    [
+                        article
+                        for article in candidates
+                        if 0 < project_thresholds.get(article.project_id, 85) - (article.seo_score or 0) <= score_gap_limit
+                    ],
+                    key=lambda article: (
+                        project_thresholds.get(article.project_id, 85) - (article.seo_score or 0),
+                        article.updated_at or datetime.now(timezone.utc),
+                    ),
+                )[:5]
+            ]
+
+        rescued_count = 0
+        for article_id in candidate_ids:
+            with SessionLocal() as session:
+                article = session.get(Article, article_id)
+                if not article or not (article.draft_content or "").strip() or _article_has_factcheck_risk(article):
+                    continue
+
+                primary_keyword = (article.primary_keyword or article.title or "").strip()
+                secondary_keywords = _parse_secondary_keywords(article.secondary_keywords)
+                threshold = project_thresholds.get(article.project_id, 85)
+                draft = ArticleDraft(
+                    title=article.title or primary_keyword or "Untitled",
+                    meta_title=article.meta_title or article.title or "",
+                    meta_description=article.meta_description or "",
+                    content_markdown=article.draft_content or "",
+                    word_count=len(article.draft_content or ""),
+                    slug=article.slug or "",
+                    faq_schema_json=article.faq_schema_json or "",
+                    howto_schema_json=article.howto_schema_json or "",
+                    article_schema_json=article.article_schema_json or "",
+                    paa_questions_json=article.paa_questions_json or "[]",
+                    hero_image_url=article.hero_image_url or "",
+                    status=article.status,
+                    seo_score=article.seo_score or 0,
+                )
+                report = _build_research_report(article)
+
+                initial_result = run_seo_check_agent(
+                    draft=draft,
+                    primary_keyword=primary_keyword,
+                    secondary_keywords=secondary_keywords,
+                )
+                current_draft = draft
+                current_result = initial_result
+
+                if current_result["score"] < threshold and threshold - current_result["score"] <= score_gap_limit:
+                    current_draft = await run_seo_qa_agent(
+                        draft=current_draft,
+                        report=report,
+                        primary_keyword=primary_keyword,
+                        secondary_keywords=secondary_keywords,
+                        failed_checks=current_result.get("checks", []),
+                        project_id=article.project_id,
+                    )
+                    current_result = run_seo_check_agent(
+                        draft=current_draft,
+                        primary_keyword=primary_keyword,
+                        secondary_keywords=secondary_keywords,
+                    )
+
+                article.meta_title = current_draft.meta_title
+                article.meta_description = current_draft.meta_description
+                article.draft_content = current_draft.content_markdown
+                article.seo_score = current_result["score"] or None
+                if current_result["score"] >= threshold:
+                    article.status = "approved"
+                    rescued_count += 1
+                    logger.info(
+                        f"[ScheduledPublish] 補救 review_required 成功：article={article.id} score={current_result['score']} threshold={threshold}"
+                    )
+                else:
+                    logger.info(
+                        f"[ScheduledPublish] review_required 仍未達標：article={article.id} score={current_result['score']} threshold={threshold}"
+                    )
+                session.commit()
+
+        return rescued_count
 
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
@@ -1040,6 +1213,9 @@ async def check_scheduled_publishes() -> None:
             for p in session.query(Project).filter(Project.auto_publish_enabled.is_(True)).all()
         }
 
+    rescued_review_required = await _rescue_review_required_backlog(project_thresholds)
+
+    with SessionLocal() as session:
         # 條件 1 & 2：approved 文章（有排程且到期 OR 無排程）
         approved_articles = (
             session.query(Article)
@@ -1077,7 +1253,11 @@ async def check_scheduled_publishes() -> None:
         logger.info("[ScheduledPublish] 無到期排程文章")
         return
 
-    logger.info(f"[ScheduledPublish] 找到 {len(due_articles)} 篇待發布文章（approved={len(approved_articles)} 補救={len(review_rescue_articles)}）")
+    logger.info(
+        f"[ScheduledPublish] 找到 {len(due_articles)} 篇待發布文章"
+        f"（approved={len(approved_articles)} 補救={len(review_rescue_articles)}"
+        f" 近門檻修補={rescued_review_required}）"
+    )
     published_count = 0
 
     for article in due_articles:
@@ -1713,7 +1893,8 @@ def schedule_all_jobs() -> None:
     # 多 worker 部署：用檔案鎖確保只有一個 process 啟動排程
     try:
         _scheduler_lock_fd = open("/tmp/contentflow_scheduler.lock", "w")
-        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if fcntl is not None:
+            fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         _scheduler_lock_fd.write(str(os.getpid()))
         _scheduler_lock_fd.flush()
         os.fsync(_scheduler_lock_fd.fileno())

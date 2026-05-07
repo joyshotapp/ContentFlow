@@ -13,6 +13,7 @@ from contentflow.agents.reflective_agent import (
     _apply_knowledge_updates,
     _apply_writing_rule_updates,
     _fallback_reflection,
+    _fallback_weekly_reflection,
     reflect_on_pipeline,
     reflect_on_human_edit,
 )
@@ -151,6 +152,62 @@ class TestFallbackReflection:
         }
         result = _fallback_reflection(ctx)
         assert "reviewing" in result["session_summary"]
+
+
+class TestFallbackWeeklyReflection:
+    def test_generates_updates_when_week_has_data(self):
+        ctx = {
+            "articles_this_week": [
+                {"title": "A", "seo_score": 82, "status": "review_required", "keyword": "膝蓋痛", "word_count": 1200},
+                {"title": "B", "seo_score": 91, "status": "published", "keyword": "落枕", "word_count": 1500},
+            ],
+            "ranking_performance": [
+                {"title": "B", "keyword": "落枕", "position": 6, "impressions": 500, "clicks": 30},
+            ],
+            "existing_knowledge": [],
+        }
+
+        result = _fallback_weekly_reflection(ctx)
+
+        assert len(result["knowledge_updates"]) >= 1
+        assert len(result["writing_rule_updates"]) >= 1
+        assert "weekly_review fallback" in result["session_summary"]
+        assert "平均 SEO" in result["session_summary"]
+
+    def test_prioritizes_review_backlog_and_skips_duplicate_knowledge(self):
+        ctx = {
+            "articles_this_week": [
+                {"title": "A", "seo_score": 84, "status": "review_required", "keyword": "膝蓋痛", "word_count": 900},
+                {"title": "B", "seo_score": 81, "status": "review_required", "keyword": "落枕", "word_count": 1180},
+                {"title": "C", "seo_score": 91, "status": "published", "keyword": "落枕", "word_count": 1500},
+            ],
+            "ranking_performance": [
+                {"title": "C", "keyword": "落枕", "position": 4, "impressions": 800, "clicks": 55},
+            ],
+            "existing_knowledge": [
+                {
+                    "category": "content_strategy",
+                    "pattern": "weekly_review：本週前 10 名文章顯示 落枕 類題目具持續投入價值，可優先延伸相關內容群。",
+                }
+            ],
+        }
+
+        result = _fallback_weekly_reflection(ctx)
+
+        assert any(update["category"] == "refresh_priority" and "A（84）" in update["pattern"] for update in result["knowledge_updates"])
+        assert any(rule["name"] == "待審稿優先處理順序" for rule in result["writing_rule_updates"])
+        assert not any(update["category"] == "content_strategy" and "落枕 類題目具持續投入價值" in update["pattern"] for update in result["knowledge_updates"])
+
+    def test_returns_no_updates_when_data_missing(self):
+        result = _fallback_weekly_reflection({
+            "articles_this_week": [],
+            "ranking_performance": [],
+            "existing_knowledge": [],
+        })
+
+        assert result["knowledge_updates"] == []
+        assert result["writing_rule_updates"] == []
+        assert "資料不足" in result["session_summary"]
 
 
 # ── reflect_on_pipeline ──────────────────────────────────────

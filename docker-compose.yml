@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
@@ -25,6 +23,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
+      CHROMA_PERSIST_DIR: /app/data/chroma
     depends_on:
       db:
         condition: service_healthy
@@ -42,6 +41,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
+      CHROMA_PERSIST_DIR: /app/data/chroma
     depends_on:
       db:
         condition: service_healthy

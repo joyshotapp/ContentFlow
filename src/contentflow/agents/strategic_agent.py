@@ -36,6 +36,7 @@ from ..models.database import (
     TopicCluster,
     ClusterMember,
 )
+from ..utils.topic_hygiene import is_viable_topic
 
 
 def _configured_generate_ceiling() -> int:
@@ -265,6 +266,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
     week_ago = today - timedelta(days=7)
     current_month = today.month
     current_week = (today.day - 1) // 7 + 1
+    project = session.get(Project, project_id)
 
     # 1. 日曆中待執行的 planned 文章
     planned_calendar = (
@@ -276,17 +278,26 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         )
         .all()
     )
-    calendar_items = [
-        {
-            "calendar_id": c.id,
-            "title": c.title,
-            "keywords": c.keywords,
-            "month": c.month,
-            "week": c.week,
-            "article_id": c.article_id,
-        }
-        for c in planned_calendar
-    ]
+    calendar_items = []
+    skipped_invalid_topics = 0
+    for c in planned_calendar:
+        ok, _ = is_viable_topic(c.title, c.keywords or c.title, project=project)
+        if not ok:
+            skipped_invalid_topics += 1
+            continue
+        calendar_items.append(
+            {
+                "calendar_id": c.id,
+                "title": c.title,
+                "keywords": c.keywords,
+                "month": c.month,
+                "week": c.week,
+                "article_id": c.article_id,
+            }
+        )
+
+    if skipped_invalid_topics:
+        logger.warning(f"[StrategicAgent] 跳過 {skipped_invalid_topics} 個無效 planned 題目")
 
     # 1b. 自動補充日曆：若 planned 排程 < 最低閾值，從關鍵字庫選高優先詞建立條目
     #     條件：未有對應文章（無 published/planned 文章）+ 有搜尋量
@@ -324,6 +335,9 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
             if added >= needed:
                 break
             if kw_obj.keyword in existing_kws:
+                continue
+            ok, _ = is_viable_topic(kw_obj.keyword, kw_obj.keyword, project=project)
+            if not ok:
                 continue
             # 建立 Article + ContentCalendar
             new_art = _Article(

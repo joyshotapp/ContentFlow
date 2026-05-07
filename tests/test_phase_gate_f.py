@@ -280,7 +280,7 @@ class TestKnowledgeAuditLog:
         session.add(audit)
         session.commit()
 
-        refreshed = session.query(KnowledgeEntry).get(entry.id)
+        refreshed = session.get(KnowledgeEntry, entry.id)
         assert refreshed.confidence_level == "unverified"
         assert not refreshed.is_active
 
@@ -506,6 +506,6 @@ class TestKBInfluencesStrategy:
         session.commit()
 
         # 透過 relationship 反查
-        refreshed = session.query(KnowledgeEntry).get(entry.id)
+        refreshed = session.get(KnowledgeEntry, entry.id)
         assert len(refreshed.audit_logs) == 1
         assert refreshed.audit_logs[0].action == "note"

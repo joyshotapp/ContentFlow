@@ -1,4 +1,4 @@
-"""資料庫引擎、Session 管理"""
+"""Database engine and session management."""
 
 from pathlib import Path
 
@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from contentflow.config import settings
 from contentflow.models.database import Base
 
-# 確保 data/ 目錄存在
+# Ensure the data directory exists for SQLite files.
 _db_url = settings.database_url
 if _db_url.startswith("sqlite:///"):
     db_path = Path(_db_url.replace("sqlite:///", ""))
@@ -20,7 +20,7 @@ _SCHEMA_LOCK_KEY = 2026042201
 
 
 def _ensure_sqlite_columns(conn) -> None:
-    """為既有 SQLite 資料庫補上新欄位，避免舊 schema 直接炸掉。"""
+    """Patch legacy SQLite databases with required columns."""
     tables = {
         "articles": {
             "article_type": 'ALTER TABLE articles ADD COLUMN article_type VARCHAR DEFAULT ""',
@@ -46,7 +46,7 @@ def _ensure_sqlite_columns(conn) -> None:
 
     for table_name, columns in tables.items():
         rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-        if not rows:          # table doesn't exist yet — skip
+        if not rows:          # table does not exist yet
             continue
         existing_cols = {row[1] for row in rows}
         for column_name, ddl in columns.items():
@@ -55,9 +55,9 @@ def _ensure_sqlite_columns(conn) -> None:
 
 
 def init_db():
-    """建立所有資料表（若尚不存在）"""
+    """Create all ORM tables when missing."""
     if _db_url.startswith("postgresql"):
-        # 多 worker 啟動時，用 DB advisory lock 序列化 DDL，避免 create_all 競態。
+        # Serialize DDL when multiple workers boot at the same time.
         with engine.begin() as conn:
             conn.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _SCHEMA_LOCK_KEY})
             Base.metadata.create_all(bind=conn)
@@ -69,7 +69,7 @@ def init_db():
 
 
 def get_session():
-    """取得 DB session（搭配 with 使用）"""
+    """Yield a database session for request-scoped use."""
     session = SessionLocal()
     try:
         yield session
@@ -82,5 +82,5 @@ def get_session():
 
 
 def get_db():
-    """直接取得 session 實例（Streamlit 用）"""
+    """Return a database session instance for direct callers."""
     return SessionLocal()
