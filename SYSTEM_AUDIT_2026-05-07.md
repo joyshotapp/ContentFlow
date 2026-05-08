@@ -1,6 +1,6 @@
 # ContentFlow 系統深度盤點
 
-更新日期：2026-05-07
+更新日期：2026-05-08
 
 ## 範圍與方法
 
@@ -20,9 +20,9 @@
 最新已驗證狀態：
 
 - 本機測試：`315 passed`
-- production：`site` / `db` healthy，`/health` 與 `/version` 正常回傳最新 build metadata（`build_time=2026-05-07T08:37:36Z`），對外首頁 / admin / robots / sitemap 正常
+- production：`site` / `scheduler` / `db` healthy，`/health` 與 `/version` 正常回傳最新 build metadata（`build_time=2026-05-08T01:41:59Z`），對外首頁 / admin / robots / sitemap 正常
 - production 資料：`published_missing=0`、`invalid_planned=0`
-- production 排程：新版 `scheduler.py` 已上線；`run_weekly_reflection` 已於 production 手動實測成功，LLM 失敗時 fallback 仍可完成產出
+- production 排程：已改為獨立 `scheduler` service；`/health` 以共享 heartbeat 驗證 scheduler 活性，不再只看 PID；`run_weekly_reflection` 已於 production 手動實測成功，LLM 失敗時 fallback 仍可完成產出
 - deploy 腳本：已支援 `docker compose` / `docker-compose`、`.env.prod` BOM/CRLF 清洗、以及沒有 `rsync` 時的 `tar + scp` fallback
 
 ## 修復結果總表
@@ -81,6 +81,10 @@
 狀態：已修復
 結果：production nginx 已改為直接代理到 app root 路由，`https://goodbone.com.tw/`、`/admin/login`、`/robots.txt`、`/sitemap.xml` 皆實測回 200，`http://goodbone.com.tw/` 會 301 導向 HTTPS。
 
+14. production scheduler 健康檢查存在假陽性，且多 worker 內嵌排程有停滯風險
+狀態：已修復
+結果：2026-05-08 重新稽核時發現 `site` container 與 `/health` 仍顯示正常，但最近 12 小時 `SchedulerLog` 為 0，代表原本只依賴 `/tmp/contentflow_scheduler.pid` 與 `os.kill(pid, 0)` 的檢查會把「持鎖 worker 還活著」誤判成「scheduler 仍在正常 dispatch job」。現已改為將 scheduler 拆成獨立 `scheduler` service，`site` 不再內嵌排程；同時新增 `scheduler_heartbeat.json` 與每分鐘 heartbeat job，`/health` 改為檢查 heartbeat 新鮮度。production 已於 2026-05-08 01:50 驗證 `site` / `scheduler` / `db` 全部 healthy，`scheduler_reason=tick`、`scheduler_heartbeat_age_seconds=1.7`，確認排程 loop 持續運作。
+
 ### 已緩解，但屬架構或營運性議題
 
 1. 生產不是 git repository
@@ -89,7 +93,7 @@
 
 2. 生產 image 偏重
 狀態：已部分改善
-說明：已移除 `agentops` 的強制安裝，但 production 仍由同一個 service 承載 public site、admin、scheduler 與 pipeline 依賴。若要真正大幅瘦身，需要把 site 與 scheduler/pipeline 拆 service，這屬架構重整，不適合在本輪直接熱改。
+說明：已移除 `agentops` 的強制安裝，且 production 現已拆成 `site` 與 `scheduler` 兩個 service，消除了「多 worker web process 內嵌 scheduler」的主要風險。不過兩者仍共用同一個 image 與大部分 pipeline 依賴；若要真正大幅瘦身，仍需進一步拆 image 與執行環境。
 
 3. production 單租戶，無法證明多租戶真實運行
 狀態：無法以程式碼單獨消除
@@ -103,15 +107,19 @@
 狀態：列為營運性待辦
 說明：排程本身正常，且 production 已於 2026-05-07 手動驗證 fallback 可在 LLM 解析失敗時產出 summary；但實際新增 KB / writing rule 筆數仍可能因去重而維持 0，這仍屬 prompt 與策略品質議題，不是 job 故障。
 
+6. build metadata 仍帶 `-dirty`
+狀態：已知但不影響運作
+說明：2026-05-08 這次熱修復已正確部署並驗證，但部署來源仍顯示 `34c77c0-dirty`，代表本輪修正尚未整理為乾淨 commit 後再重新部署。這不影響目前 production 運作，但會降低版本追蹤精確度。
+
 ## 驗證結果
 
 - 本機：`python -m pytest -q` → `315 passed`
-- production compose：`site` / `db` 皆為 healthy
-- production `/health`：回傳 `status=ok`、`db=ok`、`scheduler=running`，最新 `build_time=2026-05-07T08:37:36Z`
+- production compose：`site` / `scheduler` / `db` 皆為 healthy
+- production `/health`：回傳 `status=ok`、`db=ok`、`scheduler=running`，並帶 `scheduler_last_heartbeat`、`scheduler_heartbeat_age_seconds`、`scheduler_reason=tick`，最新 `build_time=2026-05-08T01:41:59Z`
 - production `/version`：回傳最新 build metadata
 - production 資料審核：`published_missing=0`、`invalid_planned=0`
 - production 對外端點：`https://goodbone.com.tw/`、`/admin/login`、`/robots.txt`、`/sitemap.xml` 實測 200；`http://goodbone.com.tw/` 實測 301 → HTTPS
-- production 排程稽核：`scheduler.py` 已確認包含 `import re` hotfix；近期 daily jobs 正常；`run_weekly_reflection` 已於 2026-05-07 08:44 手動實測成功，fallback summary 寫入 `ReflectionLog#53`；`check_scheduled_publishes` 已於 2026-05-07 08:47 手動完整跑完，backlog rescue 正常執行且未誤發佈未達標文章
+- production 排程稽核：`scheduler.py` 已確認包含 `import re` hotfix；`run_weekly_reflection` 已於 2026-05-07 08:44 手動實測成功，fallback summary 寫入 `ReflectionLog#53`；`check_scheduled_publishes` 已於 2026-05-07 08:47 手動完整跑完，backlog rescue 正常執行且未誤發佈未達標文章；2026-05-08 已完成 `site` / `scheduler` service 拆分、heartbeat 機制與 `/health` 真實活性檢查，確認 scheduler 週期性 heartbeat 持續更新。
 
 ## 附註
 

@@ -65,6 +65,34 @@ _md = md_module.Markdown(
 )
 
 
+def _read_scheduler_heartbeat(now: datetime | None = None) -> dict:
+    if not settings.scheduler_required:
+        return {"scheduler": "disabled"}
+
+    now = now or datetime.now(timezone.utc)
+    heartbeat_path = Path(settings.scheduler_heartbeat_path)
+    if not heartbeat_path.exists():
+        return {"scheduler": "missing_heartbeat"}
+
+    try:
+        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        heartbeat_at = datetime.fromisoformat(payload["timestamp"])
+        if heartbeat_at.tzinfo is None:
+            heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+        age_seconds = (now - heartbeat_at).total_seconds()
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {"scheduler": f"invalid_heartbeat: {exc}"}
+
+    status = "running" if age_seconds <= settings.scheduler_heartbeat_max_age_seconds else "stale_heartbeat"
+    return {
+        "scheduler": status,
+        "scheduler_last_heartbeat": heartbeat_at.isoformat(),
+        "scheduler_heartbeat_age_seconds": round(age_seconds, 1),
+        "scheduler_pid": payload.get("pid"),
+        "scheduler_reason": payload.get("reason"),
+    }
+
+
 def _to_html(text: str) -> str:
     """Convert Markdown to HTML, stripping the first H1 to avoid duplicate."""
     _md.reset()
@@ -222,8 +250,8 @@ async def _startup():
     from contentflow.scheduler import scheduler, schedule_all_jobs
 
     init_db()
-    # 多 worker 模式下只啟動一次 scheduler
-    if not scheduler.running:
+    # site service 可選擇不持有 scheduler，避免多 worker 下的假健康狀態。
+    if settings.scheduler_enabled and not scheduler.running:
         schedule_all_jobs()
 
 
@@ -237,9 +265,6 @@ async def _shutdown():
 @site_app.get("/health")
 async def health():
     """健康檢查：驗證 DB 連線 + 排程器運行狀態。"""
-    import os
-    from pathlib import Path
-
     checks: dict = {"service": "reference-site", **get_build_info()}
 
     # DB 連線
@@ -251,21 +276,10 @@ async def health():
     except Exception as e:
         checks["db"] = f"error: {e}"
 
-    # 排程器 — 多 worker 下只有 1 個 worker 持有鎖，透過 PID 檔案檢查
-    pid_path = Path("/tmp/contentflow_scheduler.pid")
-    if pid_path.exists():
-        try:
-            pid = int(pid_path.read_text().strip())
-            # 檢查該 PID 是否仍存活
-            os.kill(pid, 0)
-            checks["scheduler"] = "running"
-            checks["scheduler_pid"] = pid
-        except (ValueError, ProcessLookupError, PermissionError):
-            checks["scheduler"] = "stale_pid"
-    else:
-        checks["scheduler"] = "no_pid_file"
+    checks.update(_read_scheduler_heartbeat())
 
-    ok = checks["db"] == "ok" and checks["scheduler"] == "running"
+    scheduler_ok = checks["scheduler"] in {"running", "disabled"}
+    ok = checks["db"] == "ok" and scheduler_ok
     checks["status"] = "ok" if ok else "degraded"
 
     status_code = 200 if ok else 503

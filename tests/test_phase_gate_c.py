@@ -12,6 +12,7 @@ import asyncio
 import json
 import pytest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import create_engine
@@ -186,7 +187,7 @@ def test_with_retry_failure_writes_failed_log(monkeypatch):
 # ── 5. cron 排程數量確認 ──────────────────────────────────────────────────
 
 def test_scheduler_has_20_jobs_defined():
-    """scheduler.py 中應定義 20 個 job，並包含本次新增的 SEO health / off-site 監控。"""
+    """scheduler.py 中應定義 21 個 job，包含 scheduler heartbeat。"""
     expected_job_ids = {
         "gsc_sync",
         "ga4_sync",
@@ -208,13 +209,87 @@ def test_scheduler_has_20_jobs_defined():
         "weekly_report",
         "l1_learn",
         "l2_learn",
+        "scheduler_heartbeat",
     }
     import inspect
     from contentflow import scheduler as sched_mod
     src = inspect.getsource(sched_mod.schedule_all_jobs)
-    assert src.count("scheduler.add_job(") == 20
+    assert src.count("scheduler.add_job(") == 21
     for jid in expected_job_ids:
         assert jid in src, f"schedule_all_jobs 缺少 job id: {jid}"
+
+
+def test_write_scheduler_heartbeat(tmp_path, monkeypatch):
+    heartbeat_path = tmp_path / "scheduler_heartbeat.json"
+
+    from contentflow.config import settings
+    original = settings.scheduler_heartbeat_path
+    settings.scheduler_heartbeat_path = str(heartbeat_path)
+    try:
+        from contentflow.scheduler import _write_scheduler_heartbeat
+
+        _write_scheduler_heartbeat("startup")
+
+        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        assert payload["reason"] == "startup"
+        assert isinstance(payload["pid"], int)
+        assert payload["timestamp"]
+    finally:
+        settings.scheduler_heartbeat_path = original
+
+
+def test_read_scheduler_heartbeat_running(tmp_path, monkeypatch):
+    heartbeat_path = tmp_path / "scheduler_heartbeat.json"
+    heartbeat_path.write_text(json.dumps({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pid": 123,
+        "reason": "tick",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from contentflow.config import settings
+    original_path = settings.scheduler_heartbeat_path
+    original_required = settings.scheduler_required
+    original_max_age = settings.scheduler_heartbeat_max_age_seconds
+    settings.scheduler_heartbeat_path = str(heartbeat_path)
+    settings.scheduler_required = True
+    settings.scheduler_heartbeat_max_age_seconds = 180
+    try:
+        from contentflow.site.app import _read_scheduler_heartbeat
+
+        result = _read_scheduler_heartbeat()
+        assert result["scheduler"] == "running"
+        assert result["scheduler_pid"] == 123
+        assert result["scheduler_reason"] == "tick"
+    finally:
+        settings.scheduler_heartbeat_path = original_path
+        settings.scheduler_required = original_required
+        settings.scheduler_heartbeat_max_age_seconds = original_max_age
+
+
+def test_read_scheduler_heartbeat_stale(tmp_path):
+    heartbeat_path = tmp_path / "scheduler_heartbeat.json"
+    heartbeat_path.write_text(json.dumps({
+        "timestamp": datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),
+        "pid": 123,
+        "reason": "tick",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from contentflow.config import settings
+    original_path = settings.scheduler_heartbeat_path
+    original_required = settings.scheduler_required
+    original_max_age = settings.scheduler_heartbeat_max_age_seconds
+    settings.scheduler_heartbeat_path = str(heartbeat_path)
+    settings.scheduler_required = True
+    settings.scheduler_heartbeat_max_age_seconds = 180
+    try:
+        from contentflow.site.app import _read_scheduler_heartbeat
+
+        result = _read_scheduler_heartbeat(now=datetime(2020, 1, 1, 0, 5, tzinfo=timezone.utc))
+        assert result["scheduler"] == "stale_heartbeat"
+    finally:
+        settings.scheduler_heartbeat_path = original_path
+        settings.scheduler_required = original_required
+        settings.scheduler_heartbeat_max_age_seconds = original_max_age
 
 
 def test_check_scheduled_publishes_rescues_review_required_backlog(monkeypatch):

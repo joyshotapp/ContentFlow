@@ -38,6 +38,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@localhost:5432/contentflow
       CHROMA_PERSIST_DIR: /app/data/chroma
+      SCHEDULER_ENABLED: "false"
+      SCHEDULER_REQUIRED: "true"
+      SCHEDULER_HEARTBEAT_PATH: /app/data/scheduler_heartbeat.json
+      SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS: "180"
       CONTENTFLOW_BUILD_COMMIT: ${CONTENTFLOW_BUILD_COMMIT:-unknown}
       CONTENTFLOW_BUILD_TIME: ${CONTENTFLOW_BUILD_TIME:-unknown}
       CONTENTFLOW_BUILD_SOURCE: ${CONTENTFLOW_BUILD_SOURCE:-unknown}
@@ -55,6 +59,38 @@ services:
       - ./data:/app/data
       - ./credentials:/app/credentials
       - ./src:/app/src  # live-reload Python source — restart only (no rebuild) after code changes
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.site
+    restart: unless-stopped
+    command: python -m contentflow.scheduler_runner
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@localhost:5432/contentflow
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      SCHEDULER_ENABLED: "true"
+      SCHEDULER_REQUIRED: "false"
+      SCHEDULER_HEARTBEAT_PATH: /app/data/scheduler_heartbeat.json
+      SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS: "180"
+      CONTENTFLOW_BUILD_COMMIT: ${CONTENTFLOW_BUILD_COMMIT:-unknown}
+      CONTENTFLOW_BUILD_TIME: ${CONTENTFLOW_BUILD_TIME:-unknown}
+      CONTENTFLOW_BUILD_SOURCE: ${CONTENTFLOW_BUILD_SOURCE:-unknown}
+    depends_on:
+      db:
+        condition: service_healthy
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,sys; from pathlib import Path; from datetime import datetime,timezone; p=Path('/app/data/scheduler_heartbeat.json'); data=json.loads(p.read_text(encoding='utf-8')); ts=datetime.fromisoformat(data['timestamp']); age=(datetime.now(timezone.utc)-ts).total_seconds(); sys.exit(0 if age <= 180 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./data:/app/data
+      - ./credentials:/app/credentials
+      - ./src:/app/src
 
 volumes:
   pgdata:

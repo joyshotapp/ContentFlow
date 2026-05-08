@@ -26,6 +26,7 @@ credentials/
 # 資料庫
 data/*.db
 data/*.sqlite
+data/scheduler_heartbeat.json
 
 # 輸出檔案（自動生成）
 output/

@@ -92,7 +92,16 @@ class Settings(BaseSettings):
 
     # 排程
     scheduler_enabled: bool = Field(default=False, alias="SCHEDULER_ENABLED")
+    scheduler_required: bool = Field(default=True, alias="SCHEDULER_REQUIRED")
     scheduler_timezone: str = Field(default="Asia/Taipei", alias="SCHEDULER_TIMEZONE")
+    scheduler_heartbeat_path: str = Field(
+        default="./data/scheduler_heartbeat.json",
+        alias="SCHEDULER_HEARTBEAT_PATH",
+    )
+    scheduler_heartbeat_max_age_seconds: int = Field(
+        default=180,
+        alias="SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS",
+    )
 
     # 通知（可選）
     slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")

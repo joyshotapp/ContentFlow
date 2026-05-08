@@ -11,12 +11,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
 import traceback
 from datetime import datetime, timezone, timedelta
 from functools import wraps
+from pathlib import Path
 from typing import Callable, Awaitable
 
 try:
@@ -29,6 +31,7 @@ _scheduler_lock_fd = None
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
 from contentflow.config import settings
@@ -42,6 +45,22 @@ scheduler = AsyncIOScheduler(
     timezone=settings.scheduler_timezone,
     job_defaults={"misfire_grace_time": 60 * 10},  # 10 分鐘內的 misfire 仍執行
 )
+
+
+def _scheduler_heartbeat_path() -> Path:
+    return Path(settings.scheduler_heartbeat_path)
+
+
+def _write_scheduler_heartbeat(reason: str) -> None:
+    """更新 scheduler heartbeat，供跨 container 健康檢查使用。"""
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pid": os.getpid(),
+        "reason": reason,
+    }
+    heartbeat_path = _scheduler_heartbeat_path()
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 # ── SchedulerLog 寫入 helper ──────────────────────────────────
 
@@ -70,6 +89,10 @@ def _write_log(
         session.commit()
 
 
+async def _scheduler_heartbeat_job() -> None:
+    _write_scheduler_heartbeat("tick")
+
+
 async def _send_failure_alert(job_name: str, error: str) -> None:
     """排程任務超過最大重試次數時發 Slack 通知。"""
     import httpx
@@ -95,6 +118,8 @@ def with_retry(max_retries: int = 3, base_delay: int = 300):
             started_at = datetime.now(timezone.utc)
             t0 = time.monotonic()
 
+            _write_scheduler_heartbeat(f"job_start:{job_name}")
+
             for attempt in range(max_retries + 1):
                 try:
                     await fn(*args, **kwargs)
@@ -107,6 +132,7 @@ def with_retry(max_retries: int = 3, base_delay: int = 300):
                         retry_count=attempt,
                         duration_seconds=duration,
                     )
+                    _write_scheduler_heartbeat(f"job_success:{job_name}")
                     logger.info(f"[Scheduler] ✅ {job_name} 完成（{duration:.1f}s）")
                     return
                 except Exception as exc:
@@ -130,6 +156,7 @@ def with_retry(max_retries: int = 3, base_delay: int = 300):
                             error_message=(error_msg + "\n\n" + tb)[:4000],
                             duration_seconds=duration,
                         )
+                        _write_scheduler_heartbeat(f"job_failed:{job_name}")
                         logger.error(f"[Scheduler] ❌ {job_name} 超過最大重試次數")
                         await _send_failure_alert(job_name, error_msg)
 
@@ -1922,8 +1949,10 @@ def schedule_all_jobs() -> None:
     scheduler.add_job(run_index_coverage_check,    CronTrigger(day_of_week="fri", hour=5, minute=0),            id="index_coverage",  replace_existing=True)
     scheduler.add_job(sync_gbp_metrics,            CronTrigger(hour=3,  minute=50),                             id="gbp_sync",        replace_existing=True)
     scheduler.add_job(sync_backlink_metrics,       CronTrigger(day_of_week="tue", hour=5, minute=30),           id="backlink_sync",   replace_existing=True)
+    scheduler.add_job(_scheduler_heartbeat_job,    IntervalTrigger(minutes=1),                                  id="scheduler_heartbeat", replace_existing=True)
 
     scheduler.start()
+    _write_scheduler_heartbeat("startup")
     # 寫入獨立的心跳檔案（繞過 flock 的 overlay fs 問題）
     with open("/tmp/contentflow_scheduler.pid", "w") as pf:
         pf.write(str(os.getpid()))
