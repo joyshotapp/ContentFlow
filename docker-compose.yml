@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    restart: "no"
+    command: python -m contentflow.db_bootstrap
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
+      CHROMA_PERSIST_DIR: /app/data/chroma
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
     restart: unless-stopped
@@ -27,6 +39,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     volumes:
@@ -45,6 +59,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8501:8501"
     volumes:

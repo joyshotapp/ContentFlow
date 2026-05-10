@@ -16,7 +16,6 @@ if _db_url.startswith("sqlite:///"):
 
 engine = create_engine(_db_url, echo=False)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-_SCHEMA_LOCK_KEY = 2026042201
 
 
 def _ensure_sqlite_columns(conn) -> None:
@@ -55,14 +54,18 @@ def _ensure_sqlite_columns(conn) -> None:
 
 
 def init_db():
-    """Create all ORM tables when missing."""
+    """Initialize database access.
+
+    SQLite keeps the legacy create_all bootstrap for local/test workflows.
+    PostgreSQL schema is owned by Alembic migrations and must not be created
+    implicitly at app startup.
+    """
     if _db_url.startswith("postgresql"):
-        # Serialize DDL when multiple workers boot at the same time.
         with engine.begin() as conn:
-            conn.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _SCHEMA_LOCK_KEY})
-            Base.metadata.create_all(bind=conn)
-    else:
-        Base.metadata.create_all(engine)
+            conn.execute(text("SELECT 1"))
+        return
+
+    Base.metadata.create_all(engine)
     if _db_url.startswith("sqlite:///"):
         with engine.begin() as conn:
             _ensure_sqlite_columns(conn)

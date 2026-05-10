@@ -133,7 +133,7 @@ docker-compose up -d
 - **Admin 後台**：`http://localhost:8000/admin`（密碼：`API_SECRET_KEY`）
 - **Public 站台**：`http://localhost:8000/`
 
-PostgreSQL 資料庫由 Docker Compose 自動建立；schema migration 請在容器啟動後執行 `alembic upgrade head`。
+PostgreSQL 資料庫由 Docker Compose 自動建立；`migrate` service 會在 `api` / `ui` 啟動前自動執行 bootstrap runner。空庫會自動建 schema 並對齊 Alembic revision，既有庫則會升級到最新 head。
 
 ### 4b. 本地開發（不使用 Docker）
 
@@ -141,6 +141,7 @@ PostgreSQL 資料庫由 Docker Compose 自動建立；schema migration 請在容
 source .venv/bin/activate
 pip install -e ".[dev]"
 # 確保 DATABASE_URL 指向本地 PostgreSQL 或 SQLite
+python -m contentflow.db_bootstrap  # 使用 PostgreSQL 時先跑 bootstrap / migration
 uvicorn contentflow.api:app --reload --port 8000
 ```
 

@@ -1,10 +1,13 @@
 """測試 DB models + 多專案隔離 + excel_importer 基本邏輯"""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from contentflow.db import _ensure_sqlite_columns
+from contentflow.db import _ensure_sqlite_columns, init_db
+from contentflow.db_bootstrap import _bootstrap_mode
 from contentflow.models.database import (
     Base, Project, Keyword, Article, ContentCalendar,
     LegalTerm, WritingRule, ContentStrategy, Competitor,
@@ -82,6 +85,33 @@ class TestSchemaPatches:
         for col in ("slug", "meta_title", "meta_description",
                      "faq_schema_json", "article_schema_json", "seo_score"):
             assert col in columns, f"migration 缺少 {col} 欄位"
+
+
+class TestInitDbBootstrap:
+    def test_postgres_init_db_does_not_create_tables(self):
+        conn = MagicMock()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = conn
+        ctx.__exit__.return_value = False
+
+        with patch("contentflow.db._db_url", "postgresql+psycopg2://contentflow:pw@db:5432/contentflow"), \
+             patch("contentflow.db.engine.begin", return_value=ctx) as mock_begin, \
+             patch("contentflow.db.Base.metadata.create_all") as mock_create_all:
+            init_db()
+
+        mock_begin.assert_called_once()
+        mock_create_all.assert_not_called()
+        conn.execute.assert_called_once()
+        assert "SELECT 1" in str(conn.execute.call_args.args[0])
+
+    def test_bootstrap_mode_for_empty_database(self):
+        assert _bootstrap_mode(set()) == "create_and_stamp"
+
+    def test_bootstrap_mode_for_pre_alembic_database(self):
+        assert _bootstrap_mode({"articles", "projects"}) == "stamp"
+
+    def test_bootstrap_mode_for_managed_database(self):
+        assert _bootstrap_mode({"articles", "projects", "alembic_version"}) == "upgrade"
 
 
 class TestArticleSEOColumns:
