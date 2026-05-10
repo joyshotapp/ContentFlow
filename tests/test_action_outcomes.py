@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from contentflow.models.database import (
     Base, Project, Article, SEORanking, ActionOutcome, StrategicPlan, PipelineRun,
 )
+from contentflow.scheduler import _get_gsc_snapshot, backfill_action_outcomes
 
 
 @pytest.fixture()
@@ -208,6 +209,120 @@ class TestOutcomeBackfill:
             if outcome.rank_after_28d and outcome.rank_after_28d <= 50:
                 outcome.success_flag = "improved"
                 outcome.learning_confidence = "medium"
+        assert outcome.success_flag == "improved"
+
+    def test_get_gsc_snapshot_prefers_latest_date_and_matching_path(self, db_session, project_and_article):
+        p, a = project_and_article
+        a.publish_url = "https://goodbone.com.tw/blog/test"
+        db_session.commit()
+
+        target = date.today() - timedelta(days=2)
+        db_session.add_all([
+            SEORanking(
+                project_id=p.id,
+                keyword="膝蓋骨刺",
+                position=8.0,
+                impressions=100,
+                clicks=4,
+                ctr=0.04,
+                landing_page=a.publish_url,
+                tracked_date=target - timedelta(days=1),
+            ),
+            SEORanking(
+                project_id=p.id,
+                keyword="膝蓋骨刺",
+                position=6.0,
+                impressions=120,
+                clicks=6,
+                ctr=0.05,
+                landing_page=a.publish_url,
+                tracked_date=target,
+            ),
+            SEORanking(
+                project_id=p.id,
+                keyword="膝蓋骨刺",
+                position=25.0,
+                impressions=999,
+                clicks=1,
+                ctr=0.001,
+                landing_page="https://goodbone.com.tw/blog/other",
+                tracked_date=target,
+            ),
+        ])
+        db_session.commit()
+
+        snapshot = _get_gsc_snapshot(
+            db_session,
+            p.id,
+            "膝蓋骨刺",
+            target,
+            landing_page=a.publish_url,
+        )
+
+        assert snapshot["rank"] == 6.0
+        assert snapshot["impressions"] == 120
+        assert snapshot["clicks"] == 6
+
+    @pytest.mark.asyncio
+    async def test_backfill_uses_article_path_and_click_ctr_signal(self, db_session, project_and_article):
+        p, a = project_and_article
+        a.publish_url = "https://goodbone.com.tw/blog/test"
+        db_session.commit()
+
+        action_date = date.today() - timedelta(days=30)
+        outcome = ActionOutcome(
+            project_id=p.id,
+            article_id=a.id,
+            action_type="refresh",
+            action_date=action_date,
+            primary_keyword="膝蓋骨刺",
+            baseline_rank=10.0,
+            baseline_clicks=5,
+            baseline_ctr=0.02,
+            success_flag="too_early",
+        )
+        db_session.add(outcome)
+        db_session.commit()
+
+        target = action_date + timedelta(days=28)
+        db_session.add_all([
+            SEORanking(
+                project_id=p.id,
+                keyword="膝蓋骨刺",
+                position=10.0,
+                impressions=200,
+                clicks=12,
+                ctr=0.06,
+                landing_page=a.publish_url,
+                tracked_date=target,
+            ),
+            SEORanking(
+                project_id=p.id,
+                keyword="膝蓋骨刺",
+                position=30.0,
+                impressions=500,
+                clicks=1,
+                ctr=0.002,
+                landing_page="https://goodbone.com.tw/blog/other",
+                tracked_date=target,
+            ),
+        ])
+        db_session.commit()
+
+        class _SessionFactory:
+            def __enter__(self):
+                return db_session
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("contentflow.scheduler.SessionLocal", return_value=_SessionFactory()):
+            await backfill_action_outcomes()
+
+        db_session.refresh(outcome)
+        assert outcome.rank_after_28d == 10.0
+        assert outcome.clicks_after_28d == 12
+        assert outcome.ctr_after_28d == 0.06
         assert outcome.success_flag == "improved"
 
 

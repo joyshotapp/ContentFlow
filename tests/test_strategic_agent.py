@@ -85,6 +85,49 @@ class TestCollectProjectContext:
         ctx = _collect_project_context(pid, db_session)
         assert ctx["rank_groups_summary"]["F"]["count"] == 1
 
+    def test_collects_gsc_ctr_and_query_opportunities(self, db_session, sample_project):
+        pid = sample_project.id
+        art = Article(
+            project_id=pid,
+            title="骨刺文章",
+            slug="bone-spur",
+            publish_url="https://test.example.com/blog/bone-spur",
+            primary_keyword="膝蓋骨刺",
+            status="published",
+            draft_content="old content",
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        db_session.add_all([
+            SEORanking(
+                project_id=pid,
+                keyword="膝蓋骨刺",
+                landing_page=art.publish_url,
+                position=5.0,
+                impressions=120,
+                clicks=2,
+                ctr=0.016,
+                tracked_date=date.today(),
+            ),
+            SEORanking(
+                project_id=pid,
+                keyword="膝蓋骨刺復健",
+                landing_page=art.publish_url,
+                position=6.0,
+                impressions=90,
+                clicks=1,
+                ctr=0.011,
+                tracked_date=date.today(),
+            ),
+        ])
+        db_session.commit()
+
+        ctx = _collect_project_context(pid, db_session)
+
+        assert ctx["gsc_meta_opportunities"][0]["article_id"] == art.id
+        assert ctx["gsc_query_opportunities"][0]["gsc_queries"][0]["query"] == "膝蓋骨刺"
+
 
 # ── _fallback_plan ────────────────────────────────────────────
 
@@ -209,6 +252,27 @@ class TestFallbackPlan:
         alerts = [a for a in plan["actions"] if a["action"] == "alert"]
         assert len(alerts) == 1
         assert "7" in alerts[0]["message"]
+
+    def test_generates_optimize_meta_from_gsc_ctr_opportunities(self):
+        ctx = {
+            "calendar_items": [],
+            "ranking_changes_top10": [],
+            "article_stats": {"reviewing": 0},
+            "gsc_meta_opportunities": [
+                {
+                    "article_id": 5,
+                    "reason": "CTR 偏低",
+                    "gsc_queries": [{"query": "膝蓋骨刺復健", "impressions": 88, "ctr": 0.009}],
+                }
+            ],
+            "gsc_query_opportunities": [],
+        }
+
+        plan = _fallback_plan(ctx)
+        optimize_actions = [a for a in plan["actions"] if a["action"] == "optimize_meta"]
+        assert len(optimize_actions) == 1
+        assert optimize_actions[0]["article_id"] == 5
+        assert optimize_actions[0]["gsc_queries"][0]["query"] == "膝蓋骨刺復健"
 
     def test_empty_context_returns_no_actions(self):
         """空數據 → 空計畫"""
@@ -423,3 +487,63 @@ class TestExecuteStrategicPlan:
         assert kwargs["generate_content"] is True
         assert kwargs["publish"] is True
         assert mock_record.called
+
+    @pytest.mark.asyncio
+    async def test_optimize_meta_passes_gsc_feedback_to_seo_qa(self, db_session, sample_project):
+        pid = sample_project.id
+        art = Article(
+            project_id=pid,
+            title="待優化文章",
+            primary_keyword="膝蓋骨刺",
+            status="published",
+            draft_content="舊內容",
+            meta_title="舊標題",
+            meta_description="舊描述",
+            publish_url="https://test.example.com/blog/bone",
+        )
+        db_session.add(art)
+        db_session.commit()
+        db_session.add(SEORanking(
+            project_id=pid,
+            keyword="膝蓋骨刺復健",
+            landing_page=art.publish_url,
+            position=5.0,
+            impressions=120,
+            clicks=2,
+            ctr=0.016,
+            tracked_date=date.today(),
+        ))
+        db_session.commit()
+
+        plan = StrategicPlan(
+            project_id=pid,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {
+                    "action": "optimize_meta",
+                    "article_id": art.id,
+                    "priority": 1,
+                    "gsc_queries": [{"query": "膝蓋骨刺復健", "impressions": 120, "ctr": 0.016}],
+                }
+            ]),
+            total_count=1,
+            status="pending",
+        )
+        db_session.add(plan)
+        db_session.commit()
+
+        optimized_draft = SimpleNamespace(meta_title="新標題", meta_description="新描述")
+
+        with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.seo_qa_agent.run_seo_qa_agent", new_callable=AsyncMock) as mock_qa:
+
+            mock_qa.return_value = optimized_draft
+            mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
+            mock_sl.return_value.__exit__ = MagicMock(return_value=False)
+
+            await execute_strategic_plan(plan.id)
+
+        kwargs = mock_qa.await_args.kwargs
+        assert kwargs["secondary_keywords"] == ["膝蓋骨刺復健"]
+        assert any(check["name"] == "gsc_query_gap" for check in kwargs["failed_checks"])

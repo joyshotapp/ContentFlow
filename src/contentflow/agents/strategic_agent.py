@@ -52,6 +52,196 @@ def _normalize_url_path(url: str) -> str:
     return path.rstrip("/") or "/"
 
 
+def _candidate_article_paths(article: Article) -> list[str]:
+    paths: list[str] = []
+    publish_path = _normalize_url_path(article.publish_url or "")
+    if publish_path:
+        paths.append(publish_path)
+    if article.slug:
+        slug = article.slug.strip("/")
+        paths.extend([f"/blog/{slug}", f"/{slug}"])
+    seen: set[str] = set()
+    unique_paths: list[str] = []
+    for path in paths:
+        if path and path not in seen:
+            unique_paths.append(path)
+            seen.add(path)
+    return unique_paths
+
+
+def _build_article_gsc_feedback(article: Article, ranking_rows: list[Any]) -> dict[str, Any] | None:
+    candidate_paths = _candidate_article_paths(article)
+    if not candidate_paths:
+        return None
+
+    matched_rows = [
+        row for row in ranking_rows
+        if _normalize_url_path(getattr(row, "landing_page", "") or "") in candidate_paths
+    ]
+    if not matched_rows:
+        return None
+
+    latest_date = max((row.tracked_date for row in matched_rows if row.tracked_date), default=None)
+    if latest_date is None:
+        return None
+
+    latest_rows = [row for row in matched_rows if row.tracked_date == latest_date]
+    if not latest_rows:
+        return None
+
+    impressions = sum(int(row.impressions or 0) for row in latest_rows)
+    clicks = sum(int(row.clicks or 0) for row in latest_rows)
+    positions = [float(row.position) for row in latest_rows if row.position is not None]
+    ctr = round((clicks / impressions), 4) if impressions > 0 else 0.0
+    avg_position = round(sum(positions) / len(positions), 1) if positions else None
+
+    low_ctr_queries: list[dict[str, Any]] = []
+    for row in sorted(latest_rows, key=lambda item: (item.impressions or 0, -(item.clicks or 0)), reverse=True):
+        row_impressions = int(row.impressions or 0)
+        row_clicks = int(row.clicks or 0)
+        row_ctr = float(row.ctr or 0.0)
+        if row_impressions < 20:
+            continue
+        if row_ctr >= 0.03 and row_clicks > 0:
+            continue
+        low_ctr_queries.append({
+            "query": row.keyword,
+            "impressions": row_impressions,
+            "clicks": row_clicks,
+            "ctr": round(row_ctr, 4),
+            "position": round(float(row.position), 1) if row.position is not None else None,
+        })
+
+    return {
+        "article_id": article.id,
+        "title": article.title,
+        "publish_path": _normalize_url_path(article.publish_url or ""),
+        "tracked_date": latest_date.isoformat(),
+        "position": avg_position,
+        "impressions": impressions,
+        "clicks": clicks,
+        "ctr": ctr,
+        "low_ctr_queries": low_ctr_queries[:5],
+    }
+
+
+def _summarize_gsc_feedback_opportunities(
+    articles: list[Article],
+    ranking_rows: list[Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    meta_opportunities: list[dict[str, Any]] = []
+    query_opportunities: list[dict[str, Any]] = []
+
+    for article in articles:
+        feedback = _build_article_gsc_feedback(article, ranking_rows)
+        if not feedback:
+            continue
+
+        position = feedback.get("position")
+        impressions = int(feedback.get("impressions", 0) or 0)
+        ctr = float(feedback.get("ctr", 0.0) or 0.0)
+        query_gaps = feedback.get("low_ctr_queries", []) or []
+
+        if position is not None and position <= 12 and impressions >= 50 and ctr < 0.03:
+            meta_opportunities.append({
+                "article_id": feedback["article_id"],
+                "title": feedback["title"],
+                "position": position,
+                "impressions": impressions,
+                "clicks": feedback["clicks"],
+                "ctr": ctr,
+                "gsc_queries": query_gaps[:3],
+                "reason": (
+                    f"GSC 顯示排名 P{position} 但 CTR 僅 {round(ctr * 100, 2)}%，"
+                    f"近 28 天曝光 {impressions}，適合優先優化 meta"
+                ),
+            })
+
+        if query_gaps:
+            query_opportunities.append({
+                "article_id": feedback["article_id"],
+                "title": feedback["title"],
+                "position": position,
+                "impressions": impressions,
+                "clicks": feedback["clicks"],
+                "ctr": ctr,
+                "gsc_queries": query_gaps[:3],
+                "reason": (
+                    "GSC 查詢詞顯示高曝光低 CTR，適合把這些搜尋意圖補進 refresh 內容"
+                ),
+            })
+
+    meta_opportunities.sort(key=lambda item: (item["impressions"], -item["ctr"]), reverse=True)
+    query_opportunities.sort(key=lambda item: (len(item["gsc_queries"]), item["impressions"]), reverse=True)
+    return meta_opportunities[:5], query_opportunities[:5]
+
+
+def _load_article_gsc_feedback(session, article: Article, lookback_days: int = 14) -> dict[str, Any] | None:
+    cutoff = date.today() - timedelta(days=lookback_days)
+    rows = (
+        session.query(
+            SEORanking.keyword,
+            SEORanking.position,
+            SEORanking.impressions,
+            SEORanking.clicks,
+            SEORanking.ctr,
+            SEORanking.landing_page,
+            SEORanking.tracked_date,
+        )
+        .filter(
+            SEORanking.project_id == article.project_id,
+            SEORanking.tracked_date >= cutoff,
+        )
+        .all()
+    )
+    return _build_article_gsc_feedback(article, rows)
+
+
+def _merge_action_gsc_queries(
+    feedback: dict[str, Any] | None,
+    action_queries: list[dict[str, Any]] | None,
+    *,
+    article: Article,
+) -> dict[str, Any] | None:
+    if not action_queries:
+        return feedback
+    merged = dict(feedback or {})
+    merged.setdefault("article_id", article.id)
+    merged.setdefault("title", article.title)
+    merged.setdefault("position", None)
+    merged.setdefault("impressions", 0)
+    merged.setdefault("clicks", 0)
+    merged.setdefault("ctr", 0.0)
+    merged["low_ctr_queries"] = action_queries[:5]
+    return merged
+
+
+def _build_gsc_feedback_summary(feedback: dict[str, Any] | None) -> str:
+    if not feedback:
+        return ""
+
+    parts = []
+    position = feedback.get("position")
+    impressions = int(feedback.get("impressions", 0) or 0)
+    clicks = int(feedback.get("clicks", 0) or 0)
+    ctr = float(feedback.get("ctr", 0.0) or 0.0)
+    if position is not None:
+        parts.append(
+            f"GSC 最新快照：排名 P{position}、曝光 {impressions}、點擊 {clicks}、CTR {round(ctr * 100, 2)}%"
+        )
+
+    low_ctr_queries = feedback.get("low_ctr_queries", []) or []
+    if low_ctr_queries:
+        query_lines = []
+        for item in low_ctr_queries[:3]:
+            query_lines.append(
+                f"{item.get('query', '')}（曝光 {int(item.get('impressions', 0) or 0)}、CTR {round(float(item.get('ctr', 0.0) or 0.0) * 100, 2)}%）"
+            )
+        parts.append("高曝光低 CTR 查詢詞：" + "；".join(query_lines))
+
+    return "\n".join(parts)
+
+
 def _configured_generate_ceiling() -> int:
     candidates: list[int] = []
     for raw_value in (
@@ -473,13 +663,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         .all()
     )
     for art in articles_with_rank:
-        candidate_paths = []
-        publish_path = _normalize_url_path(art.publish_url or "")
-        if publish_path:
-            candidate_paths.append(publish_path)
-        if art.slug:
-            slug = art.slug.strip("/")
-            candidate_paths.extend([f"/blog/{slug}", f"/{slug}"])
+        candidate_paths = _candidate_article_paths(art)
 
         pos = next(
             (latest_rank_by_path[path][1] for path in candidate_paths if path in latest_rank_by_path),
@@ -498,6 +682,11 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
             rank_groups["D"].append(info)
         else:
             rank_groups["E"].append(info)
+
+    gsc_meta_opportunities, gsc_query_opportunities = _summarize_gsc_feedback_opportunities(
+        articles_with_rank,
+        recent_rankings,
+    )
 
     # 4. Refresh 候選（KnowledgeEntry category=refresh_priority）
     refresh_candidates = (
@@ -633,6 +822,8 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
             k: {"count": len(v), "articles": v[:3]}
             for k, v in rank_groups.items()
         },
+        "gsc_meta_opportunities": gsc_meta_opportunities,
+        "gsc_query_opportunities": gsc_query_opportunities,
         "refresh_candidates": refresh_items[:10],
         "last_session_summary": last_summary,
         "article_stats": {
@@ -679,6 +870,8 @@ STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，�
 - 如果有很多待審閱文章（≥5），提醒人工優先處理
 - 參考上次執行摘要，避免重複工作
 - `planning_recommendations` 是規則引擎算出的 deterministic 建議，優先參考
+- `gsc_meta_opportunities` 是 GSC 已確認的高曝光低 CTR 文章，優先安排 optimize_meta
+- `gsc_query_opportunities` 是 GSC 已確認的 query-level 缺口；若安排 refresh，優先參考其中的 `gsc_queries`
 - 如果 `cannibalization_risks` 不為空，發送 alert 告知哪些關鍵字有自蝕風險
 - 如果 `cluster_gaps` 不為空，優先將高价値缺口關鍵字納入 generate 計劃- 如果 `keyword_trends` 中有 direction="up" 的關鍵字且尚無文章，納入 generate 候選
 - 如果 `seasonal_opportunities` 不為空，**立即將高優先項目納入 generate 計畫**，並在 reason 中標注「季節高峰提前佈局」；urgency="高優先" 的項目須排在其他 generate 之前
@@ -694,9 +887,9 @@ STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，�
 {
   "actions": [
     {"action": "generate", "calendar_id": 7, "reason": "日曆排程已到期", "priority": 1},
-      {"action": "refresh", "article_id": 3, "reason": "排名從 8 掉到 15，屬於 B→C 群", "priority": 2},
+            {"action": "refresh", "article_id": 3, "reason": "排名從 8 掉到 15，屬於 B→C 群", "priority": 2, "gsc_queries": [{"query": "膝蓋骨刺症狀", "impressions": 120, "ctr": 0.011}]},
     {"action": "alert", "message": "有 6 篇文章待審閱，建議今日優先處理", "priority": 0},
-    {"action": "optimize_meta", "article_id": 5, "reason": "CTR 1.2% 但排名 P5，活化 meta 可提升點擊率", "priority": 3}
+        {"action": "optimize_meta", "article_id": 5, "reason": "CTR 1.2% 但排名 P5，活化 meta 可提升點擊率", "priority": 3, "gsc_queries": [{"query": "膝蓋骨刺復健", "impressions": 88, "ctr": 0.009}]}
   ],
   "summary": "今日計畫：產出 1 篇新文、Refresh 1 篇排名下滑文章。6 篇待審閱需儘快處理。",
   "outcome_insight": "過去 refresh 動作成功率 75%，generate 成功率 60%，本次優先安排 refresh。"
@@ -858,6 +1051,24 @@ def _fallback_plan(context: dict) -> dict:
                 "reason": f"排名下滑 {rc['delta']} 位（{rc['previous_position']} → {rc['current_position']}）",
                 "priority": 2,
             })
+
+    for item in context.get("gsc_query_opportunities", [])[:2]:
+        actions.append({
+            "action": "refresh",
+            "article_id": item["article_id"],
+            "reason": item.get("reason", "GSC 查詢詞缺口補強"),
+            "priority": 2,
+            "gsc_queries": item.get("gsc_queries", []),
+        })
+
+    for item in context.get("gsc_meta_opportunities", [])[:2]:
+        actions.append({
+            "action": "optimize_meta",
+            "article_id": item["article_id"],
+            "reason": item.get("reason", "GSC 高曝光低 CTR"),
+            "priority": 3,
+            "gsc_queries": item.get("gsc_queries", []),
+        })
     # 待審閱堆積 → alert
     reviewing = context.get("article_stats", {}).get("reviewing", 0)
     if reviewing >= 5:
@@ -1305,15 +1516,22 @@ async def _execute_refresh(action: dict, project_id: int, *, plan_id: int | None
             if not art:
                 logger.warning(f"[StrategicExecutor/refresh] 找不到文章 #{article.id}")
                 return
+            gsc_feedback = _merge_action_gsc_queries(
+                _load_article_gsc_feedback(session, art),
+                action.get("gsc_queries"),
+                article=art,
+            )
 
             refresh_result = await run_refresh_pipeline(
                 article=art,
                 keyword=art.primary_keyword or art.title,
                 session=session,
+                serp_summary=_build_gsc_feedback_summary(gsc_feedback),
                 platform=platform,
                 post_id=post_id,
                 generate_content=True,
                 publish=True,
+                gsc_context=gsc_feedback,
             )
 
             diff_result = refresh_result.get("plan")
@@ -1388,6 +1606,11 @@ async def _execute_optimize_meta(action: dict, project_id: int) -> None:
         art_wp_id = article.wp_post_id
         art_fb_id = article.forgebase_id
         art_pub_url = article.publish_url or ""
+        gsc_feedback = _merge_action_gsc_queries(
+            _load_article_gsc_feedback(session, article),
+            action.get("gsc_queries"),
+            article=article,
+        )
 
     logger.info(f"[StrategicExecutor/optimize_meta] 文章：'{art_title}' 原因={action.get('reason', '')}")
 
@@ -1396,18 +1619,50 @@ async def _execute_optimize_meta(action: dict, project_id: int) -> None:
         draft_obj = ArticleDraft(
             title=art_title,
             content_markdown=draft_content,
-            meta_title="",
-            meta_description="",
+            meta_title=article.meta_title or "",
+            meta_description=article.meta_description or "",
         )
+        suggested_keywords = [art_kw]
+        failed_checks: list[dict[str, Any]] = []
+        if gsc_feedback:
+            low_ctr_queries = gsc_feedback.get("low_ctr_queries", []) or []
+            suggested_keywords.extend(
+                query.get("query", "") for query in low_ctr_queries if query.get("query")
+            )
+            position = gsc_feedback.get("position")
+            impressions = int(gsc_feedback.get("impressions", 0) or 0)
+            ctr = float(gsc_feedback.get("ctr", 0.0) or 0.0)
+            if position is not None and impressions >= 50 and ctr < 0.03:
+                failed_checks.append({
+                    "name": "gsc_ctr_gap",
+                    "detail": (
+                        f"GSC 顯示排名 P{position}、曝光 {impressions}、CTR {round(ctr * 100, 2)}% 偏低，"
+                        "請讓 meta 與首段更直接回應搜尋意圖"
+                    ),
+                    "passed": False,
+                })
+            for query in low_ctr_queries[:3]:
+                failed_checks.append({
+                    "name": "gsc_query_gap",
+                    "detail": (
+                        f"查詢詞「{query.get('query', '')}」曝光 {int(query.get('impressions', 0) or 0)}、"
+                        f"CTR {round(float(query.get('ctr', 0.0) or 0.0) * 100, 2)}% 偏低"
+                    ),
+                    "passed": False,
+                })
+
         empty_report = ResearchReport(
-            topic=art_kw,
-            suggested_keywords=[art_kw],
-            summary="",
+            article_title=art_title,
+            keywords=[art_kw],
+            suggested_keywords=[kw for kw in suggested_keywords if kw][:10],
         )
         optimized = await run_seo_qa_agent(
             draft=draft_obj,
             report=empty_report,
             primary_keyword=art_kw,
+            secondary_keywords=[kw for kw in suggested_keywords if kw and kw != art_kw][:5],
+            failed_checks=failed_checks,
+            project_id=project_id,
         )
         new_title = optimized.meta_title
         new_desc = optimized.meta_description

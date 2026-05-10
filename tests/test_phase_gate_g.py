@@ -345,6 +345,29 @@ class TestApplyLocalPatches:
         # 補充段落已附加（結果比原文更長）
         assert len(result) > len(sample_fetched.content_text)
 
+    def test_generate_patch_content_includes_gsc_query_context(self, sample_fetched):
+        captured = {}
+
+        def _fake_chat(*, messages, **kwargs):
+            captured["user"] = messages[1]["content"]
+            return "補充內容"
+
+        gap = ContentGap("missing_section", "補強搜尋意圖", "常見復健方式")
+        with patch("contentflow.agents.refresh_agent.chat_sync", side_effect=_fake_chat):
+            result = generate_patch_content(
+                sample_fetched,
+                gap,
+                "膝蓋疼痛",
+                gsc_context={
+                    "low_ctr_queries": [
+                        {"query": "膝蓋骨刺復健", "impressions": 88, "ctr": 0.009},
+                    ]
+                },
+            )
+
+        assert result == "補充內容"
+        assert "膝蓋骨刺復健" in captured["user"]
+
     def test_patch_empty_gaps_no_change(self, sample_fetched):
         """CF-06-03: 無缺口 → 回傳原文"""
         plan = RefreshPlan(
@@ -715,6 +738,35 @@ class TestRunRefreshPipeline:
 
         assert result["publish_result"] is not None
         assert result["publish_result"]["success"] is True
+
+    def test_pipeline_merges_gsc_context_into_analyzer_input(self, db_session, sample_project):
+        article = self._make_article(db_session, sample_project)
+
+        with (
+            patch.object(ContentFetcher, "fetch_forgebase",
+                         new=AsyncMock(return_value=self._mock_fetched())),
+            patch.object(RefreshDiffAnalyzer, "analyze",
+                         return_value=self._mock_plan()) as mock_analyze,
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                run_refresh_pipeline(
+                    article=article,
+                    keyword="膝蓋疼痛",
+                    session=db_session,
+                    serp_summary="競品普遍有 FAQ",
+                    platform="forgebase",
+                    post_id="knee-pipeline",
+                    generate_content=False,
+                    publish=False,
+                    gsc_context={
+                        "low_ctr_queries": [
+                            {"query": "膝蓋骨刺復健", "impressions": 88, "ctr": 0.009},
+                        ]
+                    },
+                )
+            )
+
+        assert "膝蓋骨刺復健" in mock_analyze.call_args.args[2]
 
     def test_pipeline_maintain_no_patch(self, db_session, sample_project):
         """CF-06-07: 分析結果為 maintain → patched_content 為原始內容"""

@@ -21,7 +21,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from loguru import logger
@@ -367,6 +367,7 @@ def generate_patch_content(
     fetched: FetchedArticle,
     gap: ContentGap,
     keyword: str,
+    gsc_context: dict[str, Any] | None = None,
 ) -> str:
     """
     針對單一缺口（ContentGap）產出補充段落（CF-06-03）。
@@ -385,9 +386,20 @@ def generate_patch_content(
     system = """你是繁體中文 SEO 文章寫手。你的任務是針對指定缺口產出局部補充內容。
 只輸出補充內容本身（Markdown 格式），不要解釋、不要前言。"""
 
+    gsc_note = ""
+    if gsc_context:
+        query_lines = []
+        for query in (gsc_context.get("low_ctr_queries", []) or [])[:3]:
+            query_lines.append(
+                f"- {query.get('query', '')}：曝光 {int(query.get('impressions', 0) or 0)}、CTR {round(float(query.get('ctr', 0.0) or 0.0) * 100, 2)}%"
+            )
+        if query_lines:
+            gsc_note = "\nGSC 查詢詞缺口：\n" + "\n".join(query_lines)
+
     user = f"""關鍵字：{keyword}
 文章標題：{fetched.title}
 缺口描述：{gap.description}
+{gsc_note}
 請產出：{task}"""
 
     content = _simple_chat(system, user)
@@ -399,6 +411,7 @@ def apply_local_patches(
     plan: RefreshPlan,
     keyword: str,
     generate_content: bool = True,
+    gsc_context: dict[str, Any] | None = None,
 ) -> str:
     """
     根據 RefreshPlan 對原文做局部增補，回傳新的 Markdown 內容（CF-06-03）。
@@ -421,7 +434,7 @@ def apply_local_patches(
         heading = gap.suggested_heading or f"【補充：{gap.gap_type}】"
         if generate_content:
             try:
-                content = generate_patch_content(fetched, gap, keyword)
+                content = generate_patch_content(fetched, gap, keyword, gsc_context=gsc_context)
                 patches.append(f"\n\n## {heading}\n\n{content}")
             except Exception as e:
                 logger.warning(f"[RefreshPatch] 產出 {gap.gap_type} 失敗：{e}")
@@ -702,6 +715,7 @@ async def run_refresh_pipeline(
     post_id: str | None = None,
     generate_content: bool = False,
     publish: bool = False,
+    gsc_context: dict[str, Any] | None = None,
 ) -> dict:
     """
     執行完整的 Content Refresh 流程。
@@ -736,10 +750,24 @@ async def run_refresh_pipeline(
     else:
         fetched = await fetcher.fetch_forgebase(pid)
 
+    gsc_summary = ""
+    if gsc_context:
+        query_lines = []
+        for query in (gsc_context.get("low_ctr_queries", []) or [])[:3]:
+            query_lines.append(
+                f"- {query.get('query', '')}：曝光 {int(query.get('impressions', 0) or 0)}、CTR {round(float(query.get('ctr', 0.0) or 0.0) * 100, 2)}%"
+            )
+        if query_lines:
+            gsc_summary = "GSC 顯示的高曝光低 CTR 查詢詞：\n" + "\n".join(query_lines)
+
+    combined_serp_summary = serp_summary.strip()
+    if gsc_summary:
+        combined_serp_summary = "\n\n".join(part for part in [combined_serp_summary, gsc_summary] if part)
+
     # Step 2: AI 分析差距
     logger.info(f"[RefreshPipeline] Step 2 — 分析差距")
     analyzer = RefreshDiffAnalyzer()
-    plan = analyzer.analyze(fetched, keyword, serp_summary)
+    plan = analyzer.analyze(fetched, keyword, combined_serp_summary)
 
     logger.info(f"[RefreshPipeline] 新鮮度分數={plan.overall_freshness_score} "
                 f"建議={plan.recommendation} 缺口={len(plan.gaps)} 個")
@@ -748,8 +776,13 @@ async def run_refresh_pipeline(
     patched_content = ""
     if plan.recommendation in ("patch", "rewrite") and plan.gaps:
         logger.info(f"[RefreshPipeline] Step 3 — 局部增補 {len(plan.gaps)} 個缺口")
-        patched_content = apply_local_patches(fetched, plan, keyword,
-                                              generate_content=generate_content)
+        patched_content = apply_local_patches(
+            fetched,
+            plan,
+            keyword,
+            generate_content=generate_content,
+            gsc_context=gsc_context,
+        )
     else:
         patched_content = fetched.content_text
 

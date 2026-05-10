@@ -106,6 +106,94 @@ async def _send_failure_alert(job_name: str, error: str) -> None:
         logger.warning(f"[Scheduler] Slack 通知失敗：{exc}")
 
 
+def _normalize_url_path(url: str) -> str:
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    path = (parsed.path or url).strip()
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path.lstrip('/')}"
+    return path.rstrip("/") or "/"
+
+
+def _get_gsc_snapshot(
+    session,
+    project_id: int,
+    keyword: str,
+    target_date,
+    *,
+    landing_page: str | None = None,
+    window_days: int = 2,
+):
+    from contentflow.models.database import SEORanking
+
+    window_start = target_date - timedelta(days=window_days)
+    window_end = target_date + timedelta(days=window_days)
+    rows = (
+        session.query(SEORanking)
+        .filter(
+            SEORanking.project_id == project_id,
+            SEORanking.keyword == keyword,
+            SEORanking.tracked_date >= window_start,
+            SEORanking.tracked_date <= window_end,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    target_path = _normalize_url_path(landing_page or "")
+    if target_path:
+        path_rows = [row for row in rows if _normalize_url_path(row.landing_page or "") == target_path]
+        if path_rows:
+            rows = path_rows
+
+    latest_date = max((row.tracked_date for row in rows if row.tracked_date), default=None)
+    if latest_date is None:
+        return None
+
+    latest_rows = [row for row in rows if row.tracked_date == latest_date]
+    positions = [float(row.position) for row in latest_rows if row.position is not None]
+    impressions = sum(int(row.impressions or 0) for row in latest_rows)
+    clicks = sum(int(row.clicks or 0) for row in latest_rows)
+    ctr = round((clicks / impressions), 4) if impressions > 0 else 0.0
+
+    return {
+        "rank": round(sum(positions) / len(positions), 1) if positions else None,
+        "impressions": impressions,
+        "clicks": clicks,
+        "ctr": ctr,
+        "tracked_date": latest_date,
+    }
+
+
+def _classify_outcome_success(outcome, snapshot: dict[str, object]) -> tuple[str, str, float | None]:
+    rank = snapshot.get("rank")
+    if rank is None:
+        return "stable", "low", None
+
+    if outcome.baseline_rank is None:
+        if rank <= 50:
+            return "improved", "medium", None
+        return "stable", "low", None
+
+    rank_delta = round(float(rank) - float(outcome.baseline_rank), 1)
+    click_delta = int(snapshot.get("clicks", 0) or 0) - int(outcome.baseline_clicks or 0)
+    ctr_delta = round(float(snapshot.get("ctr", 0.0) or 0.0) - float(outcome.baseline_ctr or 0.0), 4)
+
+    if rank_delta <= -3:
+        return "improved", "high", rank_delta
+    if rank_delta <= 0 and (click_delta > 0 or ctr_delta >= 0.01):
+        return "improved", "medium", rank_delta
+    if rank_delta <= 3 and (click_delta >= 0 or ctr_delta >= 0.0):
+        return "stable", "medium", rank_delta
+    return "declined", "high", rank_delta
+
+
 # ── Retry wrapper ─────────────────────────────────────────────
 
 def with_retry(max_retries: int = 3, base_delay: int = 300):
@@ -710,7 +798,7 @@ async def backfill_action_outcomes() -> None:
     查詢 GSC 排名數據回填，並在 28d 完成後判定 success_flag。
     """
     from datetime import date
-    from contentflow.models.database import ActionOutcome, SEORanking
+    from contentflow.models.database import ActionOutcome, Article
 
     today = date.today()
 
@@ -731,41 +819,20 @@ async def backfill_action_outcomes() -> None:
             days_since = (today - outcome.action_date).days
             kw = outcome.primary_keyword
             project_id = outcome.project_id
-
-            # 查詢指定時間窗口的 GSC 平均排名
-            def _avg_gsc(target_date):
-                """取 target_date ±2 天窗口的 GSC 平均數據。"""
-                window_start = target_date - timedelta(days=2)
-                window_end = target_date + timedelta(days=2)
-                rows = (
-                    session.query(
-                        func.avg(SEORanking.position),
-                        func.sum(SEORanking.impressions),
-                        func.sum(SEORanking.clicks),
-                        func.avg(SEORanking.ctr),
-                    )
-                    .filter(
-                        SEORanking.project_id == project_id,
-                        SEORanking.keyword == kw,
-                        SEORanking.tracked_date >= window_start,
-                        SEORanking.tracked_date <= window_end,
-                    )
-                    .first()
-                )
-                if rows and rows[0] is not None:
-                    return {
-                        "rank": round(float(rows[0]), 1),
-                        "impressions": int(rows[1] or 0),
-                        "clicks": int(rows[2] or 0),
-                        "ctr": round(float(rows[3] or 0), 4),
-                    }
-                return None
+            article = session.get(Article, outcome.article_id)
+            landing_page = article.publish_url if article else None
 
             now_ts = datetime.now(timezone.utc)
 
             # 7 天回填
             if days_since >= 7 and outcome.checked_7d_at is None:
-                data = _avg_gsc(outcome.action_date + timedelta(days=7))
+                data = _get_gsc_snapshot(
+                    session,
+                    project_id,
+                    kw,
+                    outcome.action_date + timedelta(days=7),
+                    landing_page=landing_page,
+                )
                 if data:
                     outcome.rank_after_7d = data["rank"]
                     outcome.impressions_after_7d = data["impressions"]
@@ -776,7 +843,13 @@ async def backfill_action_outcomes() -> None:
 
             # 14 天回填
             if days_since >= 14 and outcome.checked_14d_at is None:
-                data = _avg_gsc(outcome.action_date + timedelta(days=14))
+                data = _get_gsc_snapshot(
+                    session,
+                    project_id,
+                    kw,
+                    outcome.action_date + timedelta(days=14),
+                    landing_page=landing_page,
+                )
                 if data:
                     outcome.rank_after_14d = data["rank"]
                     outcome.impressions_after_14d = data["impressions"]
@@ -787,7 +860,13 @@ async def backfill_action_outcomes() -> None:
 
             # 28 天回填 + 成效判定
             if days_since >= 28 and outcome.checked_28d_at is None:
-                data = _avg_gsc(outcome.action_date + timedelta(days=28))
+                data = _get_gsc_snapshot(
+                    session,
+                    project_id,
+                    kw,
+                    outcome.action_date + timedelta(days=28),
+                    landing_page=landing_page,
+                )
                 if data:
                     outcome.rank_after_28d = data["rank"]
                     outcome.impressions_after_28d = data["impressions"]
@@ -795,30 +874,9 @@ async def backfill_action_outcomes() -> None:
                     outcome.ctr_after_28d = data["ctr"]
                     outcome.checked_28d_at = now_ts
 
-                    # 成效判定
-                    if outcome.baseline_rank is not None:
-                        delta = data["rank"] - outcome.baseline_rank
-                        outcome.rank_delta = round(delta, 1)
-                        if delta <= -3:
-                            outcome.success_flag = "improved"
-                            outcome.learning_confidence = "high"
-                        elif delta <= 0:
-                            outcome.success_flag = "improved"
-                            outcome.learning_confidence = "medium"
-                        elif delta <= 3:
-                            outcome.success_flag = "stable"
-                            outcome.learning_confidence = "medium"
-                        else:
-                            outcome.success_flag = "declined"
-                            outcome.learning_confidence = "high"
-                    else:
-                        # 新文章：有排名就算成功
-                        if data["rank"] <= 50:
-                            outcome.success_flag = "improved"
-                            outcome.learning_confidence = "medium"
-                        else:
-                            outcome.success_flag = "stable"
-                            outcome.learning_confidence = "low"
+                    outcome.success_flag, outcome.learning_confidence, outcome.rank_delta = (
+                        _classify_outcome_success(outcome, data)
+                    )
 
                     filled_count += 1
 
@@ -841,25 +899,17 @@ def record_action_outcome(
     由 strategic_agent._execute_generate / _execute_refresh 呼叫。
     """
     from datetime import date
-    from contentflow.models.database import ActionOutcome, SEORanking
+    from contentflow.models.database import ActionOutcome, Article
 
     today = date.today()
     with SessionLocal() as session:
-        # 取得當前 GSC 基線（最近 7 天平均）
-        week_ago = today - timedelta(days=7)
-        baseline = (
-            session.query(
-                func.avg(SEORanking.position),
-                func.sum(SEORanking.impressions),
-                func.sum(SEORanking.clicks),
-                func.avg(SEORanking.ctr),
-            )
-            .filter(
-                SEORanking.project_id == project_id,
-                SEORanking.keyword == primary_keyword,
-                SEORanking.tracked_date >= week_ago,
-            )
-            .first()
+        article = session.get(Article, article_id)
+        baseline = _get_gsc_snapshot(
+            session,
+            project_id,
+            primary_keyword,
+            today,
+            landing_page=article.publish_url if article else None,
         )
 
         outcome = ActionOutcome(
@@ -870,10 +920,10 @@ def record_action_outcome(
             action_type=action_type,
             action_date=today,
             primary_keyword=primary_keyword,
-            baseline_rank=round(float(baseline[0]), 1) if baseline and baseline[0] else None,
-            baseline_impressions=int(baseline[1] or 0) if baseline else None,
-            baseline_clicks=int(baseline[2] or 0) if baseline else None,
-            baseline_ctr=round(float(baseline[3] or 0), 4) if baseline else None,
+            baseline_rank=baseline.get("rank") if baseline else None,
+            baseline_impressions=int(baseline.get("impressions", 0) or 0) if baseline else None,
+            baseline_clicks=int(baseline.get("clicks", 0) or 0) if baseline else None,
+            baseline_ctr=float(baseline.get("ctr", 0.0) or 0.0) if baseline else None,
             success_flag="too_early",
         )
         session.add(outcome)
