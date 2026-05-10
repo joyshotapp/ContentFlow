@@ -47,16 +47,6 @@ class StrategyReport:
             fmt = "faq"
         else:
             fmt = "guide"
-        # 從 writing_architecture 推導目標字數
-        wc = 2500
-        if "2000" in arch:
-            wc = 2000
-        elif "3000" in arch:
-            wc = 3000
-        elif "4000" in arch or "長" in arch:
-            wc = 4000
-        elif "1500" in arch:
-            wc = 1500
         return {
             "search_intent": self.search_intent,
             "target_audience": self.target_audience,
@@ -64,7 +54,6 @@ class StrategyReport:
             "content_angle": self.content_angle,
             "competitor_gap": self.competitor_gap,
             "format_type": fmt,
-            "target_word_count": wc,
             "faq_questions": " ".join(
                 f"{i+1}.{q}" for i, q in enumerate(self.faq_questions[:6])
             ),

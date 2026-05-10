@@ -173,8 +173,9 @@ class AttributionEngine:
 
         latest = recent_rows[0]
         current_rank = latest.position or 0.0
-        impressions_28d = sum(r.impressions or 0 for r in recent_rows)
-        clicks_28d = sum(r.clicks or 0 for r in recent_rows)
+        # SEORanking 目前儲存的是「最近 28 天聚合值」，不能再對 28 天內的列做加總。
+        impressions_28d = latest.impressions or 0
+        clicks_28d = latest.clicks or 0
         ctr = latest.ctr or 0.0
 
         # 7 天排名變化：latest vs 7 天前

@@ -22,7 +22,7 @@ def test_article_task_defaults():
     task = ArticleTask(task_id="t001", title="刺五加的骨關節炎研究")
     assert task.status == ArticleStatus.PENDING
     assert task.keywords == []
-    assert task.target_word_count == 3000
+    assert task.target_word_count == 1200
 
 
 def test_research_report_creation():

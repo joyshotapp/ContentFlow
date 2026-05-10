@@ -27,6 +27,38 @@ def _chat(system: str, user: str, temperature: float = 0.7) -> str:
     )
 
 
+def _count_chinese_chars(text: str) -> int:
+    """計算文字中的純中文字數（CJK 範圍），用於字數硬限制。"""
+    return len(re.findall(r'[\u4e00-\u9fff]', text))
+
+
+def _hard_truncate_sections(parts: list[str], max_chinese: int) -> list[str]:
+    """字數超出預算時，從後面依序捨棄段落，但保留 FAQ 段落。
+
+    邏輯：
+    1. 找出 FAQ 段落索引（含「FAQ」或「常見問題」的 H2）
+    2. 把 FAQ 暫時移出，對其餘段落做尾端截斷
+    3. 把 FAQ 補回最後
+    """
+    if not parts:
+        return parts
+
+    faq_idx = next(
+        (i for i, p in enumerate(parts) if '## FAQ' in p or '## 常見問題' in p),
+        -1,
+    )
+    faq_part = parts[faq_idx] if faq_idx >= 0 else None
+    main = [p for i, p in enumerate(parts) if i != faq_idx]
+
+    while main and sum(_count_chinese_chars(p) for p in main) > max_chinese:
+        dropped = main.pop()
+        logger.info(f"[Writing Agent] 字數超限，捨棄段落：{dropped[:40].strip()}...")
+
+    if faq_part is not None:
+        main.append(faq_part)
+    return main
+
+
 def _load_project_author_metadata(project_id: int | None) -> dict[str, str]:
     """讀取專案作者與醫療審閱者；沒有真實資料時回傳空字串。"""
     if not project_id:
@@ -151,7 +183,7 @@ def _generate_outline(
     report: ResearchReport,
     brand_context: str,
     writing_arch: str = "",
-    target_word_count: int = 1800,
+    target_word_count: int = 1200,
     strategy_context: dict | None = None,
 ) -> str:
     # 組裝策略指引區塊
@@ -168,12 +200,13 @@ def _generate_outline(
 要求：
 1. 產出 JSON 格式，包含 title, meta_description, sections
 2. 每個 section 包含 h2, h3s (array), keywords (array)
-3. 建議字數 {target_word_count} 字
-4. 必須包含 FAQ 段落（回答 People Also Ask 問題）
-5. meta_description 控制在 120-155 字元
-6. 標題包含主關鍵字、吸引點擊
-7. 使用繁體中文
-8. 嚴禁使用法規紅線中列出的禁用詞彙
+3. 總字數嚴格控制在 {target_word_count} 字以內（中文字），寧可精簡不膨脹
+4. 段落數量最多 5 個（含 FAQ），每段預計 {target_word_count // 5} 字左右；勿規劃過多 H3
+5. 必須包含 FAQ 段落（回答 People Also Ask 問題）
+6. meta_description 控制在 120-155 字元
+7. 標題包含主關鍵字、吸引點擊
+8. 使用繁體中文
+9. 嚴禁使用法規紅線中列出的禁用詞彙
 
 回傳純 JSON，不要 markdown code block。"""
 
@@ -208,7 +241,7 @@ def _write_section(
 - 繁體中文，口吻溫暖專業、像朋友聊天但有根據
 - 如有學術文獻，適度引用（用括號標注來源）
 - 使用短句、分段清楚、條列重點用 Markdown 清單（- 或 1.）
-- 每段 200-400 字
+- 每段嚴格控制在 150–250 字（中文字）；禁止膨脹，寧可精簡，寫完即止
 - 嚴格遵守品牌核心原則與法規紅線
 
 輸出格式規定（嚴格遵守）：
@@ -719,7 +752,7 @@ def _append_eeat_section(
 
 async def run_writing_agent(
     report: ResearchReport,
-    target_word_count: int = 1800,
+    target_word_count: int = 1200,
     writing_architecture: str = "",
     strategy_context: dict | None = None,
     project_id: int | None = None,
@@ -778,6 +811,15 @@ async def run_writing_agent(
         )
         content_parts.append(section_content)
         prev_summary = section_content[:200]
+
+    # Hard truncation：若 LLM 仍然超出字數預算，從後面截掉多餘段落（保留 FAQ）
+    max_chinese = target_word_count + 300  # 允許 300 字緩衝
+    actual_chinese = sum(_count_chinese_chars(p) for p in content_parts)
+    if actual_chinese > max_chinese:
+        logger.warning(
+            f"[Writing Agent] 字數超限（{actual_chinese} 字 > 上限 {max_chinese} 字），執行段落截斷"
+        )
+        content_parts = _hard_truncate_sections(content_parts, max_chinese)
 
     full_content = _clean_gpt_artifacts("\n\n".join(content_parts))
     word_count = len(full_content)

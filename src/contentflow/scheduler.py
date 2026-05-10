@@ -1781,6 +1781,10 @@ async def sync_gbp_metrics() -> None:
     """每日同步 Google Business Profile 指標（Business Profile API v4）。"""
     from datetime import date, timedelta
 
+    if not getattr(settings, "gbp_sync_enabled", False):
+        logger.info("[GBP] GBP_SYNC_ENABLED=false，跳過")
+        return
+
     gbp_location_ids_raw = getattr(settings, "gbp_location_ids", "")
     gbp_oauth_access_token = getattr(settings, "gbp_oauth_access_token", "")
     gbp_location_project_map_raw = getattr(settings, "gbp_location_project_map", "")

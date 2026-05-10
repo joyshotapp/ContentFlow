@@ -3,10 +3,11 @@
 import json
 import pytest
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from contentflow.models.database import (
-    Base, Project, Article, ContentCalendar,
+    Base, Project, Article, ContentCalendar, SEORanking,
     StrategicPlan, PipelineRun,
 )
 from contentflow.agents.strategic_agent import (
@@ -59,6 +60,30 @@ class TestCollectProjectContext:
         ctx = _collect_project_context(pid, db_session)
         assert len(ctx["calendar_items"]) == 1
         assert ctx["calendar_items"][0]["title"] == "測試文章"
+
+    def test_rank_group_uses_exact_publish_url_path(self, db_session, sample_project):
+        pid = sample_project.id
+        art = Article(
+            project_id=pid,
+            title="骨文章",
+            slug="bone",
+            publish_url="https://test.example.com/blog/bone",
+            status="published",
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        db_session.add(SEORanking(
+            project_id=pid,
+            keyword="骨文章",
+            landing_page="https://test.example.com/blog/bone-spur",
+            position=6,
+            tracked_date=date.today(),
+        ))
+        db_session.commit()
+
+        ctx = _collect_project_context(pid, db_session)
+        assert ctx["rank_groups_summary"]["F"]["count"] == 1
 
 
 # ── _fallback_plan ────────────────────────────────────────────
@@ -251,8 +276,10 @@ class TestRunStrategicAgent:
         }
 
         with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.planning_agent.generate_content_plan", new_callable=AsyncMock) as mock_plan, \
              patch("contentflow.agents.strategic_agent._call_strategic_llm", new_callable=AsyncMock) as mock_llm:
 
+            mock_plan.return_value = SimpleNamespace(recommendations=[])
             mock_llm.return_value = llm_response
             # SessionLocal 回傳 db_session
             mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
@@ -271,8 +298,10 @@ class TestRunStrategicAgent:
         pid = sample_project.id
 
         with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.planning_agent.generate_content_plan", new_callable=AsyncMock) as mock_plan, \
              patch("contentflow.agents.strategic_agent._call_strategic_llm", new_callable=AsyncMock) as mock_llm:
 
+            mock_plan.return_value = SimpleNamespace(recommendations=[])
             mock_llm.side_effect = Exception("API down")
             mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
             mock_sl.return_value.__exit__ = MagicMock(return_value=False)
@@ -282,6 +311,37 @@ class TestRunStrategicAgent:
         # fallback 不應崩潰
         assert plan.status == "pending"
         assert plan.total_count >= 0
+
+    @pytest.mark.asyncio
+    async def test_injects_planning_recommendations_into_context(self, db_session, sample_project):
+        pid = sample_project.id
+        captured = {}
+
+        async def _fake_llm(context_snapshot):
+            captured.update(context_snapshot)
+            return {"actions": [], "summary": "ok"}
+
+        with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.planning_agent.generate_content_plan", new_callable=AsyncMock) as mock_plan, \
+             patch("contentflow.agents.strategic_agent._call_strategic_llm", side_effect=_fake_llm):
+
+            mock_plan.return_value = SimpleNamespace(
+                recommendations=[
+                    SimpleNamespace(
+                        action="refresh",
+                        priority="high",
+                        keyword="骨刺",
+                        article_id=5,
+                        reason="排名下滑",
+                    )
+                ]
+            )
+            mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
+            mock_sl.return_value.__exit__ = MagicMock(return_value=False)
+
+            await run_strategic_agent(pid)
+
+        assert captured["planning_recommendations"][0]["action"] == "refresh"
 
 
 # ── execute_strategic_plan ────────────────────────────────────
@@ -318,3 +378,48 @@ class TestExecuteStrategicPlan:
         db_session.refresh(plan)
         assert plan.status == "completed"
         assert plan.executed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_action_runs_full_refresh_pipeline(self, db_session, sample_project):
+        pid = sample_project.id
+        art = Article(
+            project_id=pid,
+            title="待更新文章",
+            primary_keyword="骨刺",
+            status="published",
+            draft_content="舊內容",
+            publish_url="https://test.example.com/blog/bone",
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        plan = StrategicPlan(
+            project_id=pid,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {"action": "refresh", "article_id": art.id, "priority": 1, "reason": "test"}
+            ]),
+            total_count=1,
+            status="pending",
+        )
+        db_session.add(plan)
+        db_session.commit()
+
+        refresh_plan = SimpleNamespace(overall_freshness_score=40, recommendation="patch")
+
+        with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.refresh_agent.run_refresh_pipeline", new_callable=AsyncMock) as mock_refresh, \
+             patch("contentflow.scheduler.record_action_outcome") as mock_record:
+
+            mock_refresh.return_value = {"plan": refresh_plan, "publish_result": {"success": True}}
+            mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
+            mock_sl.return_value.__exit__ = MagicMock(return_value=False)
+
+            await execute_strategic_plan(plan.id)
+
+        assert mock_refresh.await_count == 1
+        kwargs = mock_refresh.await_args.kwargs
+        assert kwargs["generate_content"] is True
+        assert kwargs["publish"] is True
+        assert mock_record.called

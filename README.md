@@ -2,7 +2,7 @@
 
 > SEO 自主優化閉環系統（Autonomous SEO Optimization Loop）
 
-ContentFlow AI 是一套**全自動 SEO 閉環系統**，整合 AI 策略決策、內容生產、自動發布、數據回饋與持續學習，形成完整的自我優化迴路，無需人工介入即可持續提升搜尋排名。
+ContentFlow AI 是一套**全自動 SEO 閉環系統**，整合 AI 策略決策、內容生產、自動發布、數據回饋與持續學習，形成完整的自我優化迴路，每日自動選題、研究、撰寫、審查、發布，並持續從排名回饋中學習優化。
 
 **核心閉環流程：**
 ```
@@ -10,6 +10,46 @@ ContentFlow AI 是一套**全自動 SEO 閉環系統**，整合 AI 策略決策�
        ↑                                                                    │
        └────────── 學習反思（排名回饋 → 知識庫 → 下一輪優化）─────────────────┘
 ```
+
+---
+
+## 系統定位與人機角色
+
+### 這套系統是什麼
+
+ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造的 SEO 內容自主運轉機器**。它的設計假設是：一個人可以操作，但不需要每天手動介入。
+
+| 面向 | 說明 |
+|------|------|
+| **設計對象** | 需要持續產出 SEO 內容的單一網站擁有者或小型團隊 |
+| **產能定位** | 每日自動生產 1 篇 SEO 文章，產能等同一個小型內容團隊 |
+| **部署現況** | 已在 Linode 生產環境服務 goodbone.com.tw（繁體中文骨科保健） |
+| **多租戶支援** | 程式碼層面支援多個 Project，共用同一資料庫 |
+
+### 人的角色：監督者，不是操作者
+
+系統設計的目標是讓「人」從「每天操作」退到「例外處理」：
+
+```
+自動（每日）                        人工（例外時）
+────────────────────────────────    ──────────────────────────────────
+• Strategic Agent 決定今天寫什麼    • 審閱 SEO 分數未達門檻的稿件
+• Research + Writing Agent 生產稿件 • 處理 FactCheck 標記的高風險聲明
+• SEO 評分 → 達標自動發布           • 確認 GSC 偵測到的新機會詞方向
+• 排名回饋 → 知識庫自動更新         • 調整品牌撰寫規範或關鍵字策略
+• 22 個排程任務靜默監控全站健康     • 在 Admin 後台查看週報摘要
+```
+
+### 與一般 AI 寫作工具的差異
+
+| 比較維度 | 一般工具（Jasper / Copy.ai） | ContentFlow AI |
+|---------|--------------------------|----------------|
+| 觸發方式 | 人給指令 → 輸出文字 | 系統自己看數據 → 自己決定寫什麼 |
+| 選題來源 | 人工輸入關鍵字 | GSC 排名數據 + 日曆策略自動選題 |
+| 品質把關 | 人工審閱 | SEO 規則引擎（11 項）+ LLM QA 最多 3 輪 |
+| 發布 | 人工複製貼上 | 自動發布 WordPress / ForgeBase + Google Indexing API |
+| 學習機制 | 無 | 每週反思 → 知識庫 → 下次寫得更好 |
+| 監控 | 無 | 22 個排程任務持續監控排名、索引、反向連結 |
 
 ---
 
@@ -242,19 +282,21 @@ uvicorn contentflow.api:app --reload --port 8000
 
 - **Admin 後台** `/admin`：完整管理介面，含 AI Pipeline 觸發、排程監控、SEO 報表
 - **Public Reference Site** `/`：SEO 驗證前端，支援 JSON-LD schema、BreadcrumbList、TOC、FAQ 手風琴、E-E-A-T 信號
-- **Scheduler**：APScheduler 驅動 20 個排程任務（GSC/GA4 同步、反向連結監控、GBP 整合、策略分析、自動發布、索引健康監控、反思學習等）
+- **Scheduler**：獨立 `scheduler` service，APScheduler 驅動 21 個排程任務（含每分鐘 heartbeat），涵蓋 GSC/GA4 同步、反向連結監控、GBP 整合、策略分析、自動發布、索引健康監控、反思學習等。Heartbeat 機制每分鐘寫入 `scheduler_heartbeat.json`，`/health` 端點透過 heartbeat 新鮮度驗證排程器真實活性（非僅 PID 存活）
 
-管理員登入：`API_SECRET_KEY`；未設定時開發 fallback 為 `admin`
+管理員登入密碼：`API_SECRET_KEY` 環境變數；**未設定時系統回傳 503 拒絕啟動，不提供任何 fallback 密碼**（安全設計）
 
 **自動發布機制**：每個 Project 可獨立設定 `auto_publish_enabled` 與 `auto_publish_min_score`（預設 85 分）。Pipeline 完成後若分數達標，系統自動發布至 WordPress 或 ForgeBase，並呼叫 Google Indexing API 主動請求收錄。
 
 ### 目前實際部署現況
 
-- 公網主站已部署在 `https://goodbone.com.tw/`
+- 公網主站：`https://goodbone.com.tw/`（繁體中文骨科保健）
 - Admin 後台：`https://goodbone.com.tw/admin`
 - 資料庫：PostgreSQL 16（Docker）
-- Scheduler：已啟用，共 20 個排程任務
+- Scheduler：獨立 service，21 個排程任務，heartbeat 機制確保真實活性
+- 已發布文章：23 篇（截至 2026-05）
 - 自動發布：Project id=2「好骨科診所」已啟用，最低分數 85 分
+- 建置驗證：`315 passed`，`/health` 回傳 `status=ok`、`scheduler=running`
 
 ---
 
@@ -336,7 +378,8 @@ ContentFlow/
 │   ├── config.py                # 全域設定（pydantic-settings，讀取 .env）
 │   ├── db.py                    # DB 引擎、Session、自動 schema 補丁
 │   ├── api.py                   # FastAPI 主應用（掛載 site + admin）
-    ├── scheduler.py             # APScheduler — 20 個排程任務
+    ├── scheduler.py             # APScheduler — 21 個排程任務（含 heartbeat）
+│   ├── scheduler_runner.py      # 獨立 Scheduler service 進入點
 │   ├── project_context.py       # 載入品牌資訊並注入 Agent prompt
 │   ├── llm_client.py            # 多 Provider LLM（OpenAI → Anthropic failover）
 │   ├── cli.py                   # CLI 入口（contentflow 指令）
@@ -454,16 +497,19 @@ ContentFlow/
    └─ 人工審閱（Admin 後台）→ 手動發布
 ```
 
-### Scheduler 排程任務（共 20 個）
+### Scheduler 排程任務（共 21 個）
+
+> Scheduler 以獨立 service 運行（`scheduler_runner.py`），不內嵌於 web workers。每分鐘 heartbeat 寫入 `scheduler_heartbeat.json`，`/health` 端點以 heartbeat 新鮮度驗證排程器真實活性，確保 job dispatch 持續正常運作。
 
 | 任務 | 排程 | 說明 |
 |------|------|------|
+| `_scheduler_heartbeat_job` | 每分鐘 | 寫入 heartbeat 時間戳，供 `/health` 驗證排程器活性 |
 | `sync_gsc_all_projects` | 每日 03:00 | 同步 Google Search Console 排名 |
 | `sync_ga4_all_projects` | 每日 03:30 | 同步 GA4 頁面指標（含分頁，上限 500 筆）|
 | `sync_keyword_trends` | 每月 1 號 03:45 | 更新關鍵字 Google Trends 熱度分數 |
 | `sync_gbp_metrics` | 每日 03:50 | 同步 Google Business Profile 每日曝光 / 點擊指標 |
 | `backfill_action_outcomes` | 每日 04:00 | 歸因分析：回填文章行動成效 |
-| `check_scheduled_publishes` | 每日 04:05 | 定時發布排程文章 |
+| `check_scheduled_publishes` | 每日 04:05 | 定時發布排程文章；含近門檻文章自動補跑 SEO QA 補救路徑 |
 | `check_published_noindex` | 每日 04:10 | 發布後驗證：確認文章 HTML 無 noindex、robots.txt 無誤封鎖 |
 | `run_auto_pipeline` | 每日 08:00 | Strategic Agent → 每日自動 AI Pipeline |
 | `run_render_verification` | 每日 10:00 | 驗證前台實際渲染輸出（schema/meta/cws） |
@@ -683,7 +729,7 @@ Admin 後台：`http://localhost:8000/admin`，Password = `API_SECRET_KEY` 環�
 
 **Q: Scheduler 排程如何開啟？**
 
-`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Admin → 排程管理頁可查看所有 20 個任務的執行狀態，並可手動觸發個別任務。
+`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Scheduler 以獨立 service 運行，Admin → 排程管理頁可查看所有 21 個任務的執行狀態與 heartbeat 健康，並可手動觸發個別任務。`/health` 端點的 `scheduler_heartbeat_age_seconds` 欄位可確認排程器真實活性。
 
 ---
 

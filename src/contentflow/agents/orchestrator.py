@@ -200,7 +200,7 @@ async def strategy_node(state: dict) -> dict:
         state, "strategy",
         (
             f"格式={strategy_context.get('format_type', 'unknown')}，"
-            f"字數={strategy_context.get('target_word_count', 0)}"
+            f"寫作架構={strategy_context.get('writing_architecture', '')[:40]}"
         ),
         "根據 SERP 分析",
         "data",

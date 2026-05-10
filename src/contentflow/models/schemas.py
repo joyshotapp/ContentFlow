@@ -132,7 +132,7 @@ class ArticleTask(BaseModel):
     task_id: str
     title: str
     keywords: list[str] = Field(default_factory=list)
-    target_word_count: int = 3000
+    target_word_count: int = 1200
     status: ArticleStatus = ArticleStatus.PENDING
     research_report: Optional[ResearchReport] = None
     draft: Optional[ArticleDraft] = None

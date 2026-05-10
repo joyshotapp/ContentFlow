@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, date, timezone, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -37,6 +38,18 @@ from ..models.database import (
     ClusterMember,
 )
 from ..utils.topic_hygiene import is_viable_topic
+
+
+def _normalize_url_path(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    path = (parsed.path or url).strip()
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path.lstrip('/')}"
+    return path.rstrip("/") or "/"
 
 
 def _configured_generate_ceiling() -> int:
@@ -196,6 +209,20 @@ def _normalize_plan_result(plan_result: dict[str, Any], context_snapshot: dict[s
     return normalized
 
 
+def _summarize_planning_recommendations(planning_plan: Any) -> list[dict[str, Any]]:
+    recommendations = getattr(planning_plan, "recommendations", []) or []
+    summary: list[dict[str, Any]] = []
+    for rec in recommendations[:10]:
+        summary.append({
+            "action": getattr(rec, "action", ""),
+            "priority": getattr(rec, "priority", ""),
+            "keyword": getattr(rec, "keyword", ""),
+            "article_id": getattr(rec, "article_id", None),
+            "reason": getattr(rec, "reason", ""),
+        })
+    return summary
+
+
 # ── 數據收集 ──────────────────────────────────────────────────
 
 def _detect_seasonal_opportunities(
@@ -324,6 +351,8 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
                 Keyword.search_volume > 0,
             )
             .order_by(
+                Keyword.trend_direction.desc(),
+                Keyword.trends_score.desc(),
                 Keyword.search_volume.desc(),
             )
             .limit(50)
@@ -423,6 +452,17 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
     ranking_changes.sort(key=lambda x: x["delta"], reverse=True)
 
     # 3. 排名分群（A-F，§8.3）
+    latest_rank_by_path: dict[str, tuple[date | None, float]] = {}
+    for row in recent_rankings:
+        if row.position is None:
+            continue
+        path = _normalize_url_path(row.landing_page or "")
+        if not path:
+            continue
+        existing = latest_rank_by_path.get(path)
+        if existing is None or (row.tracked_date and (existing[0] is None or row.tracked_date > existing[0])):
+            latest_rank_by_path[path] = (row.tracked_date, row.position)
+
     rank_groups = {"A": [], "B": [], "C": [], "D": [], "E": [], "F": []}
     articles_with_rank = (
         session.query(Article)
@@ -433,17 +473,18 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         .all()
     )
     for art in articles_with_rank:
-        # 取該文章最近一次排名
-        latest_rank = (
-            session.query(SEORanking)
-            .filter(
-                SEORanking.project_id == project_id,
-                SEORanking.landing_page.contains(art.slug) if art.slug else False,
-            )
-            .order_by(SEORanking.tracked_date.desc())
-            .first()
+        candidate_paths = []
+        publish_path = _normalize_url_path(art.publish_url or "")
+        if publish_path:
+            candidate_paths.append(publish_path)
+        if art.slug:
+            slug = art.slug.strip("/")
+            candidate_paths.extend([f"/blog/{slug}", f"/{slug}"])
+
+        pos = next(
+            (latest_rank_by_path[path][1] for path in candidate_paths if path in latest_rank_by_path),
+            None,
         )
-        pos = latest_rank.position if latest_rank else None
         info = {"article_id": art.id, "title": art.title, "position": pos}
         if pos is None:
             rank_groups["F"].append(info)
@@ -637,6 +678,7 @@ STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，�
 - refresh 仍控制在 2 個以內
 - 如果有很多待審閱文章（≥5），提醒人工優先處理
 - 參考上次執行摘要，避免重複工作
+- `planning_recommendations` 是規則引擎算出的 deterministic 建議，優先參考
 - 如果 `cannibalization_risks` 不為空，發送 alert 告知哪些關鍵字有自蝕風險
 - 如果 `cluster_gaps` 不為空，優先將高价値缺口關鍵字納入 generate 計劃- 如果 `keyword_trends` 中有 direction="up" 的關鍵字且尚無文章，納入 generate 候選
 - 如果 `seasonal_opportunities` 不為空，**立即將高優先項目納入 generate 計畫**，並在 reason 中標注「季節高峰提前佈局」；urgency="高優先" 的項目須排在其他 generate 之前
@@ -718,8 +760,19 @@ async def run_strategic_agent(project_id: int) -> StrategicPlan:
             logger.info(f"[StrategicAgent] 今日計畫已存在且狀態={existing.status}，跳過")
             return existing
 
+        planning_recommendations: list[dict[str, Any]] = []
+        try:
+            from .planning_agent import generate_content_plan
+
+            planning_plan = await generate_content_plan(project_id, session)
+            planning_recommendations = _summarize_planning_recommendations(planning_plan)
+        except Exception as exc:
+            logger.warning(f"[StrategicAgent] Planning Agent 失敗（降級繼續）：{exc}")
+
         # 收集數據
         context_snapshot = _collect_project_context(project_id, session)
+        if planning_recommendations:
+            context_snapshot["planning_recommendations"] = planning_recommendations
 
     # LLM 決策
     try:
@@ -780,6 +833,21 @@ def _fallback_plan(context: dict) -> dict:
             ),
             "priority": 0,
         })
+
+    for rec in context.get("planning_recommendations", []):
+        if rec.get("action") == "refresh" and rec.get("article_id"):
+            actions.append({
+                "action": "refresh",
+                "article_id": rec["article_id"],
+                "reason": rec.get("reason", "Planning Agent refresh 建議"),
+                "priority": 2,
+            })
+        elif rec.get("action") == "merge" and rec.get("keyword"):
+            actions.append({
+                "action": "alert",
+                "message": f"Planning Agent 建議處理關鍵字自蝕：{rec['keyword']}",
+                "priority": 0,
+            })
 
     # 排名下滑 > 5 位 → refresh
     for rc in context.get("ranking_changes_top10", []):
@@ -946,7 +1014,12 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
         session.commit()
         pr_id = pipeline_run.id
 
-    task = ArticleTask(task_id=run_id, title=art_title, keywords=[art_kw])
+    task = ArticleTask(
+        task_id=run_id,
+        title=art_title,
+        keywords=[art_kw],
+        target_word_count=1200,
+    )
     logger.info(f"[StrategicExecutor/generate] 啟動 pipeline：'{art_title}' run_id={run_id[:8]}")
 
     try:
@@ -1178,7 +1251,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
 async def _execute_refresh(action: dict, project_id: int, *, plan_id: int | None = None) -> None:
     """執行 refresh action：對指定文章觸發 Content Refresh。"""
-    from .refresh_agent import RefreshDiffAnalyzer
+    from .refresh_agent import run_refresh_pipeline
 
     article_id = action.get("article_id")
     keyword = action.get("keyword")
@@ -1217,17 +1290,40 @@ async def _execute_refresh(action: dict, project_id: int, *, plan_id: int | None
     logger.info(f"[StrategicExecutor/refresh] Refresh：'{art_title}' 原因={reason}")
 
     try:
-        analyzer = RefreshDiffAnalyzer()
-        diff_result = await analyzer.analyze(
-            current_content=article.draft_content,
-            keyword=article.primary_keyword or article.title,
-        )
+        if article.wp_post_id:
+            platform = "wordpress"
+            post_id = article.wp_post_id
+        elif article.publish_url:
+            platform = "url"
+            post_id = None
+        else:
+            platform = "forgebase"
+            post_id = article.forgebase_id or article.slug or str(article.id)
+
+        with SessionLocal() as session:
+            art = session.get(Article, article.id)
+            if not art:
+                logger.warning(f"[StrategicExecutor/refresh] 找不到文章 #{article.id}")
+                return
+
+            refresh_result = await run_refresh_pipeline(
+                article=art,
+                keyword=art.primary_keyword or art.title,
+                session=session,
+                platform=platform,
+                post_id=post_id,
+                generate_content=True,
+                publish=True,
+            )
+
+            diff_result = refresh_result.get("plan")
         logger.info(
             f"[StrategicExecutor/refresh] '{art_title}' "
-            f"新鮮度={diff_result.freshness_score}，建議={diff_result.recommendation}"
+            f"新鮮度={getattr(diff_result, 'overall_freshness_score', None)}，"
+            f"建議={getattr(diff_result, 'recommendation', None)}"
         )
 
-        if diff_result.recommendation in ("patch", "rewrite"):
+        if diff_result and getattr(diff_result, "recommendation", None) in ("patch", "rewrite"):
             with SessionLocal() as session:
                 art = session.get(Article, article.id)
                 if art:

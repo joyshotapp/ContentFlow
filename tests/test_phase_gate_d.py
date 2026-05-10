@@ -98,6 +98,20 @@ class TestArticlePerformance:
         perfs = eng.get_project_performance(p.id)
         assert perfs[0].performance_grade == "F"
 
+    def test_uses_latest_aggregate_row_instead_of_summing_28d_rows(self, session):
+        from contentflow.agents.analytics_agent import AttributionEngine
+
+        p = _make_project(session)
+        a = _make_article(session, p.id, "聚合文章", "聚合字")
+        _make_ranking(session, p.id, "聚合字", a.publish_url, position=60, impressions=500, clicks=10, tracked_days_ago=14)
+        _make_ranking(session, p.id, "聚合字", a.publish_url, position=60, impressions=5, clicks=0, tracked_days_ago=0)
+
+        eng = AttributionEngine(session)
+        perf = eng.get_article_performance(a.id)
+        assert perf is not None
+        assert perf.impressions_28d == 5
+        assert perf.performance_grade == "F"
+
 
 # ── 2. CannibalizationDetector ────────────────────────────────────────────
 

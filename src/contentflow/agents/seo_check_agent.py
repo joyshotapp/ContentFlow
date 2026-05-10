@@ -9,6 +9,10 @@ from loguru import logger
 from ..models import ArticleDraft
 
 
+def _count_chinese_chars(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text or ""))
+
+
 def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
@@ -152,6 +156,7 @@ def run_seo_check_agent(
     secondary_keywords = secondary_keywords or []
     first_paragraph = _get_first_paragraph(draft.content_markdown)
     h2s = _get_h2s(draft.content_markdown)
+    chinese_count = _count_chinese_chars(draft.content_markdown)
 
     checks = []
 
@@ -176,7 +181,7 @@ def run_seo_check_agent(
 
     # 標準權重（內容品質）
     add_check("faq_section_exists", _contains_faq(draft.content_markdown), "建議包含 FAQ / 常見問題 區塊", weight=1.0)
-    add_check("word_count_ok", draft.word_count >= 1200, f"文章長度目前 {draft.word_count} 字，建議至少 1200 字", weight=1.0)
+    add_check("word_count_ok", chinese_count >= 800, f"文章中文字數目前 {chinese_count} 字，建議至少 800 字", weight=1.0)
 
     if secondary_keywords:
         covered = sum(1 for keyword in secondary_keywords if _keyword_in_text(keyword, draft.content_markdown))

@@ -57,6 +57,13 @@ class TestSEOCheckAgent:
         wc_check = next(c for c in result["checks"] if c["name"] == "word_count_ok")
         assert wc_check["passed"] is False
 
+    def test_markdown_symbols_do_not_fake_word_count(self):
+        md = "# 標題\n\n" + ("**重點**\n\n" * 300)
+        draft = _make_draft(content_markdown=md, word_count=3000)
+        result = run_seo_check_agent(draft, primary_keyword="龜鹿二仙膠功效")
+        wc_check = next(c for c in result["checks"] if c["name"] == "word_count_ok")
+        assert wc_check["passed"] is False
+
     def test_no_faq_fails(self):
         md = "# 標題\n\n龜鹿二仙膠功效很好。\n\n## 段落一\n\n內容\n\n## 段落二\n\n內容\n\n## 段落三\n\n內容\n"
         draft = _make_draft(content_markdown=md, word_count=2000)

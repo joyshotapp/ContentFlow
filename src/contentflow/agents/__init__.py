@@ -7,6 +7,10 @@ from .factcheck_agent import run_factcheck_agent
 from .image_agent import run_image_agent
 from .orchestrator import run_orchestrator
 from .strategy_agent import run_strategy_agent
+from .strategic_agent import run_strategic_agent
+
+run_article_strategy_agent = run_strategy_agent
+run_daily_strategy_agent = run_strategic_agent
 
 __all__ = [
     "run_research_agent",
@@ -17,4 +21,7 @@ __all__ = [
     "run_image_agent",
     "run_orchestrator",
     "run_strategy_agent",
+    "run_strategic_agent",
+    "run_article_strategy_agent",
+    "run_daily_strategy_agent",
 ]

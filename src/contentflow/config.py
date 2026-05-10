@@ -163,6 +163,11 @@ class Settings(BaseSettings):
         alias="GBP_OAUTH_ACCESS_TOKEN",
         description="Business Profile API OAuth access token",
     )
+    gbp_sync_enabled: bool = Field(
+        default=False,
+        alias="GBP_SYNC_ENABLED",
+        description="啟用 Google Business Profile 指標同步",
+    )
     gbp_location_project_map: str = Field(
         default="",
         alias="GBP_LOCATION_PROJECT_MAP",
