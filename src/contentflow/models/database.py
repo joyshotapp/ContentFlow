@@ -684,9 +684,46 @@ class ActionOutcome(Base):
 
     project = relationship("Project")
     article = relationship("Article")
+    evaluation = relationship("ActionOutcomeEvaluation", back_populates="outcome", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<ActionOutcome {self.action_type} kw='{self.primary_keyword}' {self.success_flag or 'pending'}>"
+
+
+class ActionOutcomeEvaluation(Base):
+    """持久化 28 天成效評估快照，保留同專案控制基準與淨改善。"""
+    __tablename__ = "action_outcome_evaluations"
+
+    id = Column(Integer, primary_key=True)
+    action_outcome_id = Column(Integer, ForeignKey("action_outcomes.id"), nullable=False, unique=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=False, index=True)
+    action_type = Column(String, nullable=False, index=True)
+    evaluation_window_days = Column(Integer, default=28)
+    outcome_weight = Column(Float, nullable=True)
+
+    rank_delta = Column(Float, nullable=True)
+    click_delta = Column(Float, nullable=True)
+    ctr_delta = Column(Float, nullable=True)
+
+    control_rank_delta_median = Column(Float, nullable=True)
+    control_click_delta_median = Column(Float, nullable=True)
+    control_ctr_delta_median = Column(Float, nullable=True)
+
+    rank_advantage_vs_baseline = Column(Float, nullable=True)
+    click_advantage_vs_baseline = Column(Float, nullable=True)
+    ctr_advantage_vs_baseline = Column(Float, nullable=True)
+    control_adjustment = Column(Float, nullable=True)
+
+    evaluated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    outcome = relationship("ActionOutcome", back_populates="evaluation")
+    project = relationship("Project")
+    article = relationship("Article")
+
+    def __repr__(self):
+        return f"<ActionOutcomeEvaluation outcome={self.action_outcome_id} adj={self.control_adjustment}>"
 
 
 # ── 反向連結快照（SEO SOP 反向連結監控）─────────────────────────────────────────

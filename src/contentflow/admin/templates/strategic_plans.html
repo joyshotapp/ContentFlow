@@ -84,6 +84,9 @@
     {% if ac.refresh > 0 %}
     <span style="font-size:12px;background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-weight:600;">🔄 更新 {{ ac.refresh }}</span>
     {% endif %}
+    {% if ac.optimize_meta > 0 %}
+    <span style="font-size:12px;background:#dbeafe;color:#1d4ed8;padding:3px 10px;border-radius:20px;font-weight:600;">🏷️ Meta {{ ac.optimize_meta }}</span>
+    {% endif %}
     {% if ac.alert > 0 %}
     <span style="font-size:12px;background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:20px;font-weight:600;">⚠️ 告警 {{ ac.alert }}</span>
     {% endif %}
@@ -112,6 +115,7 @@
           <td>
             {% if a.action == 'generate' %}<span class="badge badge-neutral" style="font-size:10.5px;background:#ede9fe;color:#6d28d9;">✏️ 新增</span>
             {% elif a.action == 'refresh' %}<span class="badge badge-neutral" style="font-size:10.5px;background:#d1fae5;color:#065f46;">🔄 更新</span>
+            {% elif a.action == 'optimize_meta' %}<span class="badge badge-neutral" style="font-size:10.5px;background:#dbeafe;color:#1d4ed8;">🏷️ Meta</span>
             {% elif a.action == 'alert' %}<span class="badge badge-warning" style="font-size:10.5px;">⚠️ 告警</span>
             {% else %}<span class="badge badge-neutral" style="font-size:10.5px;">{{ a.action }}</span>
             {% endif %}
@@ -122,7 +126,46 @@
             <span style="font-weight:700;color:{% if a.priority >= 8 %}#ef4444{% elif a.priority >= 5 %}#f59e0b{% else %}#10b981{% endif %};">{{ a.priority }}</span>
             {% else %}—{% endif %}
           </td>
-          <td style="font-size:12px;color:#64748b;max-width:300px;">{{ a.reason or a.message or '—' }}</td>
+          <td style="font-size:12px;color:#64748b;max-width:360px;">
+            <div>{{ a.reason or a.message or '—' }}</div>
+            {% if a.evidence %}
+            {% set ev = a.evidence %}
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;font-size:11.5px;color:#2563eb;font-weight:600;list-style:none;">查看 evidence card</summary>
+              <div style="margin-top:8px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                {% if ev.summary %}
+                <div style="font-size:11.5px;color:#0f172a;font-weight:600;line-height:1.5;">{{ ev.summary }}</div>
+                {% endif %}
+                {% if ev.primary_signals %}
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+                  {% for signal in ev.primary_signals %}
+                  <span style="display:inline-flex;gap:4px;align-items:center;padding:4px 8px;border-radius:999px;background:#ffffff;border:1px solid #dbeafe;color:#1e3a8a;font-size:10.5px;">
+                    <strong>{{ signal.label }}</strong>
+                    <span>{{ signal.value }}</span>
+                  </span>
+                  {% endfor %}
+                </div>
+                {% endif %}
+                {% if ev.thresholds_triggered %}
+                <div style="margin-top:8px;font-size:10.5px;color:#065f46;line-height:1.6;">
+                  閾值：{{ ev.thresholds_triggered | join('、') }}
+                </div>
+                {% endif %}
+                {% if ev.counter_signals %}
+                <div style="margin-top:4px;font-size:10.5px;color:#92400e;line-height:1.6;">
+                  反向訊號：{{ ev.counter_signals | join('、') }}
+                </div>
+                {% endif %}
+                <div style="margin-top:6px;font-size:10.5px;color:#475569;line-height:1.6;">
+                  預期結果：{{ ev.expected_outcome or '—' }}
+                </div>
+                <div style="margin-top:4px;font-size:10.5px;color:#64748b;">
+                  信心：{{ ev.confidence or 'medium' }}
+                </div>
+              </div>
+            </details>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

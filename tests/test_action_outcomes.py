@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from contentflow.models.database import (
-    Base, Project, Article, SEORanking, ActionOutcome, StrategicPlan, PipelineRun,
+    Base, Project, Article, SEORanking, ActionOutcome, ActionOutcomeEvaluation, StrategicPlan, PipelineRun,
 )
 from contentflow.scheduler import _get_gsc_snapshot, backfill_action_outcomes
 
@@ -324,6 +324,79 @@ class TestOutcomeBackfill:
         assert outcome.clicks_after_28d == 12
         assert outcome.ctr_after_28d == 0.06
         assert outcome.success_flag == "improved"
+
+    @pytest.mark.asyncio
+    async def test_backfill_persists_evaluation_snapshot(self, db_session, project_and_article):
+        p, a = project_and_article
+        a.publish_url = "https://goodbone.com.tw/blog/test"
+        db_session.commit()
+
+        action_date = date.today() - timedelta(days=30)
+        older = ActionOutcome(
+            project_id=p.id,
+            article_id=a.id,
+            action_type="refresh",
+            action_date=action_date - timedelta(days=7),
+            primary_keyword="骨刺舊文",
+            baseline_rank=11.0,
+            baseline_clicks=8,
+            baseline_ctr=0.03,
+            rank_after_28d=9.0,
+            clicks_after_28d=10,
+            ctr_after_28d=0.04,
+            checked_28d_at=datetime.now(timezone.utc),
+            success_flag="improved",
+            rank_delta=-2.0,
+            learning_confidence="medium",
+        )
+        outcome = ActionOutcome(
+            project_id=p.id,
+            article_id=a.id,
+            action_type="refresh",
+            action_date=action_date,
+            primary_keyword="膝蓋骨刺",
+            baseline_rank=10.0,
+            baseline_clicks=5,
+            baseline_ctr=0.02,
+            success_flag="too_early",
+        )
+        db_session.add_all([older, outcome])
+        db_session.commit()
+
+        target = action_date + timedelta(days=28)
+        db_session.add(SEORanking(
+            project_id=p.id,
+            keyword="膝蓋骨刺",
+            position=6.0,
+            impressions=200,
+            clicks=12,
+            ctr=0.06,
+            landing_page=a.publish_url,
+            tracked_date=target,
+        ))
+        db_session.commit()
+
+        class _SessionFactory:
+            def __enter__(self):
+                return db_session
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("contentflow.scheduler.SessionLocal", return_value=_SessionFactory()):
+            await backfill_action_outcomes()
+
+        evaluation = (
+            db_session.query(ActionOutcomeEvaluation)
+            .filter(ActionOutcomeEvaluation.action_outcome_id == outcome.id)
+            .first()
+        )
+
+        assert evaluation is not None
+        assert evaluation.rank_delta == -4.0
+        assert evaluation.control_rank_delta_median == -3.0
+        assert evaluation.rank_advantage_vs_baseline > 0
+        assert evaluation.control_adjustment > 0
 
 
 # ── Strategic Agent Outcome Context Tests ─────────────────────

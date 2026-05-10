@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, date, timezone, timedelta
+from statistics import median
 from typing import Any
 from urllib.parse import urlparse
 
@@ -27,6 +28,7 @@ from ..config import settings
 from ..db import SessionLocal
 from ..models.database import (
     Article,
+    ActionOutcomeEvaluation,
     ContentCalendar,
     KnowledgeEntry,
     Project,
@@ -259,13 +261,248 @@ def _configured_generate_ceiling() -> int:
     return min(candidates) if candidates else 5
 
 
+def _action_outcome_weight(outcome: ActionOutcome) -> float:
+    confidence_weight = {
+        "low": 0.75,
+        "medium": 1.0,
+        "high": 1.25,
+    }.get((outcome.learning_confidence or "low").lower(), 0.75)
+    traffic_reference = max(
+        int(outcome.baseline_impressions or 0),
+        int(outcome.impressions_after_28d or 0),
+    )
+    traffic_weight = 1.0 + min(0.35, traffic_reference / 800.0)
+    rank_delta = abs(float(outcome.rank_delta or 0.0))
+    rank_weight = 1.0 + min(rank_delta, 10.0) * 0.03
+    return round(confidence_weight * traffic_weight * rank_weight, 4)
+
+
+def _clamp_score(value: float, lower: float = -1.0, upper: float = 1.0) -> float:
+    return max(lower, min(upper, value))
+
+
+def _action_outcome_effects(outcome: ActionOutcome) -> dict[str, float | None]:
+    rank_delta = float(outcome.rank_delta) if outcome.rank_delta is not None else None
+
+    baseline_clicks_raw = getattr(outcome, "baseline_clicks", None)
+    after_clicks_raw = getattr(outcome, "clicks_after_28d", None)
+    if baseline_clicks_raw is None and after_clicks_raw is None:
+        click_delta = None
+    else:
+        click_delta = int(after_clicks_raw or 0) - int(baseline_clicks_raw or 0)
+
+    baseline_ctr_raw = getattr(outcome, "baseline_ctr", None)
+    after_ctr_raw = getattr(outcome, "ctr_after_28d", None)
+    if baseline_ctr_raw is None and after_ctr_raw is None:
+        ctr_delta = None
+    else:
+        ctr_delta = round(float(after_ctr_raw or 0.0) - float(baseline_ctr_raw or 0.0), 4)
+
+    return {
+        "rank_delta": rank_delta,
+        "click_delta": click_delta,
+        "ctr_delta": ctr_delta,
+    }
+
+
+def _project_control_baseline(outcomes: list[ActionOutcome]) -> dict[str, float]:
+    rank_deltas: list[float] = []
+    click_deltas: list[float] = []
+    ctr_deltas: list[float] = []
+
+    for outcome in outcomes:
+        effects = _action_outcome_effects(outcome)
+        if effects["rank_delta"] is not None:
+            rank_deltas.append(float(effects["rank_delta"]))
+        if effects["click_delta"] is not None:
+            click_deltas.append(float(effects["click_delta"]))
+        if effects["ctr_delta"] is not None:
+            ctr_deltas.append(float(effects["ctr_delta"]))
+
+    return {
+        "rank_delta_median": round(float(median(rank_deltas)), 3) if rank_deltas else 0.0,
+        "click_delta_median": round(float(median(click_deltas)), 3) if click_deltas else 0.0,
+        "ctr_delta_median": round(float(median(ctr_deltas)), 4) if ctr_deltas else 0.0,
+    }
+
+
+def _control_adjustment_from_effects(
+    effects: dict[str, float | None],
+    control_baseline: dict[str, float],
+) -> tuple[float, float, float, float]:
+    rank_advantage = 0.0 if effects["rank_delta"] is None else control_baseline["rank_delta_median"] - float(effects["rank_delta"])
+    click_advantage = 0.0 if effects["click_delta"] is None else float(effects["click_delta"]) - control_baseline["click_delta_median"]
+    ctr_advantage = 0.0 if effects["ctr_delta"] is None else float(effects["ctr_delta"]) - control_baseline["ctr_delta_median"]
+
+    rank_component = _clamp_score(rank_advantage / 5.0)
+    click_component = _clamp_score(click_advantage / 10.0)
+    ctr_component = _clamp_score(ctr_advantage / 0.015)
+    control_adjustment = (rank_component * 0.35) + (click_component * 0.15) + (ctr_component * 0.2)
+    return rank_advantage, click_advantage, ctr_advantage, control_adjustment
+
+
+def _build_action_outcome_stats(
+    outcomes: list[ActionOutcome],
+    evaluations_by_outcome_id: dict[int, ActionOutcomeEvaluation] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    stats: dict[str, dict[str, Any]] = {}
+    policy_scores: dict[str, dict[str, Any]] = {}
+    control_baseline = _project_control_baseline(outcomes)
+    evaluations_by_outcome_id = evaluations_by_outcome_id or {}
+
+    for outcome in outcomes:
+        action_type = outcome.action_type or "unknown"
+        bucket = stats.setdefault(action_type, {
+            "total": 0,
+            "improved": 0,
+            "declined": 0,
+            "stable": 0,
+            "weighted_total": 0.0,
+            "weighted_improved": 0.0,
+            "weighted_declined": 0.0,
+            "weighted_stable": 0.0,
+            "weighted_rank_delta_sum": 0.0,
+            "weighted_rank_delta_total": 0.0,
+            "weighted_click_delta_sum": 0.0,
+            "weighted_click_delta_total": 0.0,
+            "weighted_ctr_delta_sum": 0.0,
+            "weighted_ctr_delta_total": 0.0,
+            "weighted_control_adjustment_sum": 0.0,
+        })
+        bucket["total"] += 1
+        if outcome.success_flag in ("improved", "declined", "stable"):
+            bucket[outcome.success_flag] += 1
+
+        weight = _action_outcome_weight(outcome)
+        bucket["weighted_total"] += weight
+        if outcome.success_flag == "improved":
+            bucket["weighted_improved"] += weight
+        elif outcome.success_flag == "declined":
+            bucket["weighted_declined"] += weight
+        elif outcome.success_flag == "stable":
+            bucket["weighted_stable"] += weight
+
+        outcome_id = getattr(outcome, "id", None)
+        persisted_eval = evaluations_by_outcome_id.get(outcome_id) if outcome_id is not None else None
+        effects = {
+            "rank_delta": persisted_eval.rank_delta if persisted_eval and persisted_eval.rank_delta is not None else None,
+            "click_delta": persisted_eval.click_delta if persisted_eval and persisted_eval.click_delta is not None else None,
+            "ctr_delta": persisted_eval.ctr_delta if persisted_eval and persisted_eval.ctr_delta is not None else None,
+        } if persisted_eval else _action_outcome_effects(outcome)
+
+        if persisted_eval:
+            control_adjustment = float(persisted_eval.control_adjustment or 0.0)
+        else:
+            _, _, _, control_adjustment = _control_adjustment_from_effects(effects, control_baseline)
+
+        bucket["weighted_control_adjustment_sum"] += control_adjustment * weight
+        if effects["rank_delta"] is not None:
+            bucket["weighted_rank_delta_sum"] += float(effects["rank_delta"]) * weight
+            bucket["weighted_rank_delta_total"] += weight
+        if effects["click_delta"] is not None:
+            bucket["weighted_click_delta_sum"] += float(effects["click_delta"]) * weight
+            bucket["weighted_click_delta_total"] += weight
+        if effects["ctr_delta"] is not None:
+            bucket["weighted_ctr_delta_sum"] += float(effects["ctr_delta"]) * weight
+            bucket["weighted_ctr_delta_total"] += weight
+
+    for action_type, bucket in stats.items():
+        weighted_total = float(bucket.get("weighted_total", 0.0) or 0.0)
+        if weighted_total > 0:
+            weighted_improved_rate = bucket["weighted_improved"] / weighted_total
+            weighted_declined_rate = bucket["weighted_declined"] / weighted_total
+            weighted_stable_rate = bucket["weighted_stable"] / weighted_total
+        else:
+            weighted_improved_rate = 0.0
+            weighted_declined_rate = 0.0
+            weighted_stable_rate = 0.0
+
+        avg_rank_delta = None
+        if bucket["weighted_rank_delta_total"] > 0:
+            avg_rank_delta = bucket["weighted_rank_delta_sum"] / bucket["weighted_rank_delta_total"]
+        avg_click_delta = None
+        if bucket["weighted_click_delta_total"] > 0:
+            avg_click_delta = bucket["weighted_click_delta_sum"] / bucket["weighted_click_delta_total"]
+        avg_ctr_delta = None
+        if bucket["weighted_ctr_delta_total"] > 0:
+            avg_ctr_delta = bucket["weighted_ctr_delta_sum"] / bucket["weighted_ctr_delta_total"]
+        rank_advantage, click_advantage, ctr_advantage, fallback_control_adjustment = _control_adjustment_from_effects(
+            {
+                "rank_delta": avg_rank_delta,
+                "click_delta": avg_click_delta,
+                "ctr_delta": avg_ctr_delta,
+            },
+            control_baseline,
+        )
+        control_adjustment = (
+            bucket["weighted_control_adjustment_sum"] / weighted_total
+            if weighted_total > 0
+            else fallback_control_adjustment
+        )
+
+        sample_factor = min(weighted_total / 4.0, 1.0) if weighted_total > 0 else 0.0
+        raw_score = _clamp_score(
+            (weighted_improved_rate - weighted_declined_rate + (weighted_stable_rate * 0.15))
+            + control_adjustment
+        )
+        policy_score = round(raw_score * sample_factor, 3)
+
+        if bucket["total"] < 2:
+            recommendation = "insufficient_data"
+        elif bucket["total"] < 4:
+            recommendation = "maintain"
+        elif policy_score >= 0.35:
+            recommendation = "scale"
+        elif policy_score <= -0.2:
+            recommendation = "deprioritize"
+        else:
+            recommendation = "maintain"
+
+        bucket.update({
+            "weighted_total": round(weighted_total, 3),
+            "weighted_improved_rate": round(weighted_improved_rate, 3),
+            "weighted_declined_rate": round(weighted_declined_rate, 3),
+            "weighted_stable_rate": round(weighted_stable_rate, 3),
+            "avg_rank_delta": round(float(avg_rank_delta), 3) if avg_rank_delta is not None else None,
+            "avg_click_delta": round(float(avg_click_delta), 3) if avg_click_delta is not None else None,
+            "avg_ctr_delta": round(float(avg_ctr_delta), 4) if avg_ctr_delta is not None else None,
+            "rank_advantage_vs_baseline": round(rank_advantage, 3),
+            "click_advantage_vs_baseline": round(click_advantage, 3),
+            "ctr_advantage_vs_baseline": round(ctr_advantage, 4),
+            "control_adjustment": round(control_adjustment, 3),
+            "policy_score": policy_score,
+            "recommendation": recommendation,
+        })
+        policy_scores[action_type] = {
+            "sample_count": bucket["total"],
+            "weighted_sample_size": round(weighted_total, 3),
+            "weighted_improved_rate": round(weighted_improved_rate, 3),
+            "weighted_declined_rate": round(weighted_declined_rate, 3),
+            "weighted_stable_rate": round(weighted_stable_rate, 3),
+            "avg_rank_delta": round(float(avg_rank_delta), 3) if avg_rank_delta is not None else None,
+            "avg_click_delta": round(float(avg_click_delta), 3) if avg_click_delta is not None else None,
+            "avg_ctr_delta": round(float(avg_ctr_delta), 4) if avg_ctr_delta is not None else None,
+            "rank_advantage_vs_baseline": round(rank_advantage, 3),
+            "click_advantage_vs_baseline": round(click_advantage, 3),
+            "ctr_advantage_vs_baseline": round(ctr_advantage, 4),
+            "control_adjustment": round(control_adjustment, 3),
+            "control_baseline": dict(control_baseline),
+            "policy_score": policy_score,
+            "recommendation": recommendation,
+        }
+
+    return stats, policy_scores
+
+
 def _calculate_generate_capacity(context: dict[str, Any]) -> dict[str, Any]:
     """依 backlog、待審稿壓力與歷史成效決定今日 generate 配額。"""
     backlog = len(context.get("calendar_items", []))
     reviewing = int(context.get("article_stats", {}).get("reviewing", 0) or 0)
     ranking_changes = context.get("ranking_changes_top10", [])
     outcome_stats = context.get("action_outcome_stats", {}) or {}
+    action_policy_scores = context.get("action_policy_scores", {}) or {}
     generate_stats = outcome_stats.get("generate", {}) or {}
+    generate_policy = action_policy_scores.get("generate", {}) or {}
     ceiling = _configured_generate_ceiling()
     signals: list[str] = []
 
@@ -307,17 +544,27 @@ def _calculate_generate_capacity(context: dict[str, Any]) -> dict[str, Any]:
     total_generate = int(generate_stats.get("total", 0) or 0)
     improved_generate = int(generate_stats.get("improved", 0) or 0)
     declined_generate = int(generate_stats.get("declined", 0) or 0)
-    success_rate = improved_generate / total_generate if total_generate else None
-    decline_rate = declined_generate / total_generate if total_generate else None
+    success_rate = generate_policy.get("weighted_improved_rate")
+    decline_rate = generate_policy.get("weighted_declined_rate")
+    policy_score = generate_policy.get("policy_score")
+    recommendation = generate_policy.get("recommendation")
+
+    if success_rate is None:
+        success_rate = improved_generate / total_generate if total_generate else None
+    if decline_rate is None:
+        decline_rate = declined_generate / total_generate if total_generate else None
 
     if total_generate >= 4 and decline_rate is not None and success_rate is not None:
-        if decline_rate >= 0.5:
+        if decline_rate >= 0.5 or (policy_score is not None and policy_score <= -0.2):
             quota = max(0, quota - 2)
-            signals.append("generate_decline_rate_high")
-        elif decline_rate >= 0.34 or success_rate < 0.25:
+            signals.append("generate_decline_rate_high" if decline_rate >= 0.5 else "generate_policy_deprioritize")
+        elif decline_rate >= 0.34 or success_rate < 0.25 or (policy_score is not None and policy_score < 0.05):
             quota = max(0, quota - 1)
             signals.append("generate_performance_soften")
-        elif success_rate >= 0.6 and decline_rate <= 0.2 and reviewing <= 2 and backlog > quota:
+        elif (
+            recommendation == "scale" or
+            (policy_score is not None and policy_score >= 0.35)
+        ) and success_rate >= 0.55 and decline_rate <= 0.2 and reviewing <= 2 and backlog > quota:
             quota = min(ceiling, quota + 1)
             signals.append("generate_performance_strong")
 
@@ -335,6 +582,8 @@ def _calculate_generate_capacity(context: dict[str, Any]) -> dict[str, Any]:
         "generate_outcome_total": total_generate,
         "generate_success_rate": round(success_rate, 3) if success_rate is not None else None,
         "generate_decline_rate": round(decline_rate, 3) if decline_rate is not None else None,
+        "generate_policy_score": round(float(policy_score), 3) if policy_score is not None else None,
+        "generate_policy_recommendation": recommendation,
         "signals": signals,
     }
 
@@ -397,6 +646,163 @@ def _normalize_plan_result(plan_result: dict[str, Any], context_snapshot: dict[s
     capacity_note = f"系統動態 generate 配額：{quota} 篇"
     normalized["summary"] = f"{summary}｜{capacity_note}" if summary else capacity_note
     return normalized
+
+
+def _find_calendar_item(context_snapshot: dict[str, Any], calendar_id: Any) -> dict[str, Any] | None:
+    for item in context_snapshot.get("calendar_items", []) or []:
+        if item.get("calendar_id") == calendar_id:
+            return item
+    return None
+
+
+def _find_ranking_change(context_snapshot: dict[str, Any], keyword: str) -> dict[str, Any] | None:
+    for item in context_snapshot.get("ranking_changes_top10", []) or []:
+        if item.get("keyword") == keyword:
+            return item
+    return None
+
+
+def _find_gsc_meta_opportunity(context_snapshot: dict[str, Any], article_id: Any) -> dict[str, Any] | None:
+    for item in context_snapshot.get("gsc_meta_opportunities", []) or []:
+        if item.get("article_id") == article_id:
+            return item
+    return None
+
+
+def _find_gsc_query_opportunity(
+    context_snapshot: dict[str, Any],
+    *,
+    article_id: Any = None,
+    keyword: str = "",
+) -> dict[str, Any] | None:
+    for item in context_snapshot.get("gsc_query_opportunities", []) or []:
+        if article_id is not None and item.get("article_id") == article_id:
+            return item
+        if keyword and any(query.get("query") == keyword for query in item.get("gsc_queries", []) or []):
+            return item
+    return None
+
+
+def _build_expected_outcome(action_type: str) -> str:
+    if action_type == "generate":
+        return "完成新文章產出並進入審閱或發布流程"
+    if action_type == "refresh":
+        return "在 28 天內改善排名或補齊高曝光查詢詞的點擊表現"
+    if action_type == "optimize_meta":
+        return "在不重寫全文的前提下提升 SERP CTR"
+    return "提醒管理者處理風險或瓶頸"
+
+
+def _build_action_evidence(action: dict[str, Any], context_snapshot: dict[str, Any]) -> dict[str, Any]:
+    existing = action.get("evidence")
+    if isinstance(existing, dict) and existing:
+        return existing
+
+    action_type = action.get("action", "")
+    evidence: dict[str, Any] = {
+        "summary": action.get("reason") or action.get("message") or "系統依據當前快照產生此 action",
+        "primary_signals": [],
+        "thresholds_triggered": [],
+        "counter_signals": [],
+        "expected_outcome": _build_expected_outcome(action_type),
+        "confidence": "medium",
+    }
+
+    if action_type == "generate":
+        item = _find_calendar_item(context_snapshot, action.get("calendar_id"))
+        capacity = context_snapshot.get("generate_capacity", {}) or {}
+        if item:
+            evidence["summary"] = f"日曆項目「{item.get('title') or item.get('keywords') or '未命名題目'}」已排程且在有效 backlog 內"
+            evidence["primary_signals"].append({"label": "日曆項目", "value": item.get("title") or item.get("keywords") or "—"})
+        backlog = capacity.get("backlog")
+        quota = capacity.get("quota")
+        if backlog is not None and quota is not None:
+            evidence["primary_signals"].append({"label": "產能配額", "value": f"backlog {backlog} / quota {quota}"})
+        for signal in capacity.get("signals", [])[:3]:
+            evidence["thresholds_triggered"].append(signal)
+        evidence["confidence"] = "high" if item else "medium"
+
+    elif action_type == "refresh":
+        keyword = action.get("keyword", "")
+        article_id = action.get("article_id")
+        ranking_change = _find_ranking_change(context_snapshot, keyword)
+        query_gap = _find_gsc_query_opportunity(context_snapshot, article_id=article_id, keyword=keyword)
+        if ranking_change:
+            evidence["primary_signals"].append({
+                "label": "排名變化",
+                "value": f"P{ranking_change.get('previous_position')} -> P{ranking_change.get('current_position')} (delta {ranking_change.get('delta')})",
+            })
+            if (ranking_change.get("delta") or 0) >= 5:
+                evidence["thresholds_triggered"].append("排名下滑 >= 5 位")
+        if query_gap:
+            queries = query_gap.get("gsc_queries", []) or []
+            if queries:
+                top_query = queries[0]
+                evidence["primary_signals"].append({
+                    "label": "GSC 查詢詞缺口",
+                    "value": f"{top_query.get('query')} / CTR {round(float(top_query.get('ctr', 0.0) or 0.0) * 100, 2)}% / 曝光 {int(top_query.get('impressions', 0) or 0)}",
+                })
+                evidence["thresholds_triggered"].append("存在高曝光低 CTR query gap")
+        if not ranking_change:
+            evidence["counter_signals"].append("未找到明確的排名下滑紀錄")
+        evidence["confidence"] = "high" if ranking_change and query_gap else "medium"
+
+    elif action_type == "optimize_meta":
+        article_id = action.get("article_id")
+        meta_gap = _find_gsc_meta_opportunity(context_snapshot, article_id)
+        if meta_gap:
+            position = meta_gap.get("position")
+            impressions = int(meta_gap.get("impressions", 0) or 0)
+            ctr = round(float(meta_gap.get("ctr", 0.0) or 0.0) * 100, 2)
+            evidence["summary"] = meta_gap.get("reason") or evidence["summary"]
+            evidence["primary_signals"].extend([
+                {"label": "平均排名", "value": f"P{position}" if position is not None else "—"},
+                {"label": "曝光與 CTR", "value": f"曝光 {impressions} / CTR {ctr}%"},
+            ])
+            evidence["thresholds_triggered"].extend([
+                "排名在 P1-P12 內",
+                "CTR 低於預期門檻",
+                "曝光量足以支撐 meta 測試",
+            ])
+            queries = meta_gap.get("gsc_queries", []) or []
+            if queries:
+                evidence["primary_signals"].append({
+                    "label": "代表查詢詞",
+                    "value": ", ".join(query.get("query", "") for query in queries[:3] if query.get("query")),
+                })
+            evidence["confidence"] = "high"
+        else:
+            evidence["counter_signals"].append("缺少 article-level GSC meta opportunity")
+
+    elif action_type == "alert":
+        reviewing = int(context_snapshot.get("article_stats", {}).get("reviewing", 0) or 0)
+        if reviewing:
+            evidence["primary_signals"].append({"label": "待審閱文章", "value": str(reviewing)})
+            if reviewing >= 5:
+                evidence["thresholds_triggered"].append("review backlog >= 5")
+        if context_snapshot.get("cannibalization_risks"):
+            evidence["counter_signals"].append("存在關鍵字自蝕風險，需要人工判斷")
+        evidence["confidence"] = "medium"
+
+    if not evidence["primary_signals"]:
+        evidence["primary_signals"].append({"label": "系統訊號", "value": evidence["summary"]})
+
+    evidence["thresholds_triggered"] = list(dict.fromkeys(evidence["thresholds_triggered"]))
+    evidence["counter_signals"] = list(dict.fromkeys(evidence["counter_signals"]))
+    return evidence
+
+
+def _attach_action_evidence(plan_result: dict[str, Any], context_snapshot: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(plan_result or {})
+    enriched_actions: list[dict[str, Any]] = []
+    for raw_action in enriched.get("actions", []) or []:
+        if not isinstance(raw_action, dict):
+            continue
+        action = dict(raw_action)
+        action["evidence"] = _build_action_evidence(action, context_snapshot)
+        enriched_actions.append(action)
+    enriched["actions"] = enriched_actions
+    return enriched
 
 
 def _summarize_planning_recommendations(planning_plan: Any) -> list[dict[str, Any]]:
@@ -755,14 +1161,18 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         })
 
     # 8. 成效統計摘要（按 action_type 分組）
-    outcome_stats = {}
-    for o in recent_outcomes:
-        at = o.action_type
-        if at not in outcome_stats:
-            outcome_stats[at] = {"total": 0, "improved": 0, "declined": 0, "stable": 0}
-        outcome_stats[at]["total"] += 1
-        if o.success_flag in outcome_stats[at]:
-            outcome_stats[at][o.success_flag] += 1
+    recent_evaluations = {}
+    if recent_outcomes:
+        recent_outcome_ids = [o.id for o in recent_outcomes if getattr(o, "id", None) is not None]
+        if recent_outcome_ids:
+            recent_evaluations = {
+                row.action_outcome_id: row
+                for row in session.query(ActionOutcomeEvaluation)
+                .filter(ActionOutcomeEvaluation.action_outcome_id.in_(recent_outcome_ids))
+                .all()
+            }
+
+    outcome_stats, action_policy_scores = _build_action_outcome_stats(recent_outcomes, recent_evaluations)
 
     # 9. 關鍵字自蝕偵測（CannibalizationDetector）
     from .analytics_agent import CannibalizationDetector
@@ -833,6 +1243,7 @@ def _collect_project_context(project_id: int, session) -> dict[str, Any]:
         },
         "action_outcome_history": outcome_summary[:10],
         "action_outcome_stats": outcome_stats,
+        "action_policy_scores": action_policy_scores,
         "cannibalization_risks": cannibalization_summary,
         "cluster_gaps": cluster_gaps_summary,
         "keyword_trends": keyword_trends_summary,
@@ -878,7 +1289,10 @@ STRATEGIC_SYSTEM_PROMPT_TEMPLATE = """你是 ContentFlow 的 Strategic Agent，�
 ## 因果學習（重要）：
 - 數據中包含 `action_outcome_history`，記錄過去動作的實際成效
 - `action_outcome_stats` 顯示各類動作（generate/refresh）的成功率統計
+- `action_policy_scores` 是 confidence / traffic / rank 變化加權後，並相對於同專案控制基準修正的 deterministic policy score
 - **優先安排成功率高的動作類型**
+- 如果 `action_policy_scores` 的 recommendation = `scale`，可提高該 action 類型優先級
+- 如果 `action_policy_scores` 的 recommendation = `deprioritize`，降低該 action 類型優先級並在 summary 說明
 - 如果某類動作 declined 比例高，降低其優先級並在 summary 中說明原因
 - 如果沒有 outcome 數據（系統初期），按照基本規則決策即可
 
@@ -976,6 +1390,7 @@ async def run_strategic_agent(project_id: int) -> StrategicPlan:
         plan_result = _fallback_plan(context_snapshot)
 
     plan_result = _normalize_plan_result(plan_result, context_snapshot)
+    plan_result = _attach_action_evidence(plan_result, context_snapshot)
     actions = plan_result.get("actions", [])
     summary = plan_result.get("summary", "")
 

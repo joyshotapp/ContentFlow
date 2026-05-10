@@ -161,4 +161,91 @@
   </div>
 </div>
 
+<!-- ── Operations health ─────────────────────────────────────── -->
+<div style="margin-top:20px;">
+  <div class="section-title" style="margin-bottom:14px;">🛟 Operations Dashboard</div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+    {% for card in operations_health.summary_cards %}
+    <div class="cf-card cf-card-p animate-up">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">{{ card.title }}</div>
+      <div style="font-size:24px;font-weight:800;color:{% if card.tone == 'success' %}#059669{% elif card.tone == 'warning' %}#d97706{% else %}#dc2626{% endif %};">{{ card.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if operations_health.alerts %}
+  <div class="cf-card cf-card-p animate-up" style="margin-bottom:20px;">
+    <div class="section-title" style="margin-bottom:12px;">🚨 Active Alerts</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      {% for alert in operations_health.alerts %}
+      <div style="padding:10px 12px;border-radius:8px;border-left:3px solid {% if alert.level == 'critical' %}#ef4444{% else %}#f59e0b{% endif %};background:{% if alert.level == 'critical' %}rgba(239,68,68,0.05){% else %}rgba(245,158,11,0.08){% endif %};font-size:12px;color:#475569;line-height:1.6;">
+        {{ alert.message }}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+    <div class="cf-card animate-up">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+        <div class="section-title">資料新鮮度</div>
+      </div>
+      <div style="padding:12px 18px;display:flex;flex-direction:column;gap:10px;">
+        {% for item in operations_health.freshness_items %}
+        <div style="padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ item.name }}</div>
+            <span class="badge badge-{{ item.tone }}" style="font-size:10px;">{{ item.label }}</span>
+          </div>
+          <div style="margin-top:4px;font-size:11.5px;color:#64748b;">{{ item.detail }}</div>
+          <div style="margin-top:2px;font-size:10.5px;color:#94a3b8;">延遲 {{ item.metric }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="cf-card animate-up d1">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+        <div class="section-title">執行健康</div>
+      </div>
+      <div style="padding:12px 18px;display:flex;flex-direction:column;gap:10px;">
+        {% for item in operations_health.execution_items %}
+        <div style="padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ item.name }}</div>
+            <span class="badge badge-{{ item.tone }}" style="font-size:10px;">{{ item.label }}</span>
+          </div>
+          <div style="margin-top:4px;font-size:20px;font-weight:800;color:#0f172a;">{{ item.metric }}</div>
+          <div style="margin-top:2px;font-size:11.5px;color:#64748b;">{{ item.detail }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="cf-card animate-up d2">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--cf-border);">
+        <div class="section-title">成效健康</div>
+      </div>
+      <div style="padding:12px 18px;display:flex;flex-direction:column;gap:10px;">
+        {% if operations_health.outcome_items %}
+        {% for item in operations_health.outcome_items %}
+        <div style="padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ item.name }}</div>
+            <span class="badge badge-{{ item.tone }}" style="font-size:10px;">{{ item.label }}</span>
+          </div>
+          <div style="margin-top:4px;font-size:20px;font-weight:800;color:#0f172a;">{{ item.metric }}</div>
+          <div style="margin-top:2px;font-size:11.5px;color:#64748b;">{{ item.detail }}</div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div style="padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;color:#94a3b8;">尚無已完成 28 天評估的 ActionOutcome</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

@@ -42,6 +42,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from contentflow.config import settings
 from contentflow.db import SessionLocal
 from contentflow.models.database import (
+    ActionOutcome,
     Article,
     AgentDecisionLog,
     Author,
@@ -166,6 +167,157 @@ def _get_agent_cost_metrics(db):
         "monthly_cost": round(float(monthly_cost_raw), 2) if monthly_cost_raw else None,
         "total_cost": round(float(total_cost_raw), 2) if total_cost_raw else None,
         "run_costs": run_costs,
+    }
+
+
+def _health_tone(status: str) -> tuple[str, str]:
+    if status == "healthy":
+        return "正常", "success"
+    if status == "warning":
+        return "注意", "warning"
+    return "異常", "danger"
+
+
+def _coerce_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    return None
+
+
+def _staleness_status(latest_value, now: datetime, *, warn_hours: int, critical_hours: int):
+    latest_dt = _coerce_datetime(latest_value)
+    if latest_dt is None:
+        status = "critical"
+        hours = None
+    else:
+        hours = max((now - latest_dt).total_seconds() / 3600, 0)
+        if hours > critical_hours:
+            status = "critical"
+        elif hours > warn_hours:
+            status = "warning"
+        else:
+            status = "healthy"
+    label, tone = _health_tone(status)
+    return SimpleNamespace(status=status, label=label, tone=tone, hours=hours, latest=latest_dt)
+
+
+def _build_operations_health(db, *, now: datetime | None = None):
+    now = now or datetime.now(timezone.utc)
+
+    latest_gsc = db.query(func.max(SEORanking.tracked_date)).scalar()
+    latest_ga4 = db.query(func.max(GAPageMetric.tracked_date)).scalar()
+    latest_scheduler = db.query(func.max(SchedulerLog.started_at)).scalar()
+    latest_pipeline = db.query(func.max(PipelineRun.started_at)).scalar()
+
+    gsc_freshness = _staleness_status(latest_gsc, now, warn_hours=60, critical_hours=108)
+    ga4_freshness = _staleness_status(latest_ga4, now, warn_hours=60, critical_hours=108)
+    scheduler_freshness = _staleness_status(latest_scheduler, now, warn_hours=24, critical_hours=48)
+    pipeline_freshness = _staleness_status(latest_pipeline, now, warn_hours=72, critical_hours=168)
+
+    freshness_items = [
+        SimpleNamespace(name="GSC 同步", detail=(gsc_freshness.latest.strftime("%Y-%m-%d") if gsc_freshness.latest else "尚無資料"), metric=(f"{gsc_freshness.hours:.0f}h" if gsc_freshness.hours is not None else "—"), **gsc_freshness.__dict__),
+        SimpleNamespace(name="GA4 同步", detail=(ga4_freshness.latest.strftime("%Y-%m-%d") if ga4_freshness.latest else "尚無資料"), metric=(f"{ga4_freshness.hours:.0f}h" if ga4_freshness.hours is not None else "—"), **ga4_freshness.__dict__),
+        SimpleNamespace(name="Scheduler 日誌", detail=(scheduler_freshness.latest.strftime("%Y-%m-%d %H:%M") if scheduler_freshness.latest else "尚無資料"), metric=(f"{scheduler_freshness.hours:.0f}h" if scheduler_freshness.hours is not None else "—"), **scheduler_freshness.__dict__),
+        SimpleNamespace(name="Pipeline 執行", detail=(pipeline_freshness.latest.strftime("%Y-%m-%d %H:%M") if pipeline_freshness.latest else "尚無資料"), metric=(f"{pipeline_freshness.hours:.0f}h" if pipeline_freshness.hours is not None else "—"), **pipeline_freshness.__dict__),
+    ]
+
+    scheduler_cutoff = now - timedelta(days=7)
+    scheduler_7d = db.query(SchedulerLog).filter(SchedulerLog.started_at >= scheduler_cutoff).all()
+    scheduler_ok = sum(1 for row in scheduler_7d if row.status == "success")
+    scheduler_fail = sum(1 for row in scheduler_7d if row.status == "failed")
+    scheduler_total = len(scheduler_7d)
+    scheduler_success_rate = (scheduler_ok / scheduler_total * 100) if scheduler_total else None
+    scheduler_status = "critical" if scheduler_fail >= 3 else ("warning" if scheduler_fail >= 1 else "healthy")
+    scheduler_label, scheduler_tone = _health_tone(scheduler_status)
+
+    pipeline_cutoff = now - timedelta(days=30)
+    pipeline_30d = db.query(PipelineRun).filter(PipelineRun.started_at >= pipeline_cutoff).all()
+    pipeline_ok = sum(1 for row in pipeline_30d if row.status == "completed")
+    pipeline_fail = sum(1 for row in pipeline_30d if row.status == "failed")
+    pipeline_running = sum(1 for row in pipeline_30d if row.status == "running")
+    pipeline_total = len(pipeline_30d)
+    pipeline_success_rate = (pipeline_ok / pipeline_total * 100) if pipeline_total else None
+    pipeline_status = "critical" if pipeline_fail >= 5 else ("warning" if pipeline_fail >= 1 else "healthy")
+    pipeline_label, pipeline_tone = _health_tone(pipeline_status)
+
+    execution_items = [
+        SimpleNamespace(name="Scheduler 7d 成功率", metric=(f"{scheduler_success_rate:.0f}%" if scheduler_success_rate is not None else "—"), detail=(f"成功 {scheduler_ok} / 失敗 {scheduler_fail}" if scheduler_total else "近 7 天無排程紀錄"), status=scheduler_status, label=scheduler_label, tone=scheduler_tone),
+        SimpleNamespace(name="Pipeline 30d 成功率", metric=(f"{pipeline_success_rate:.0f}%" if pipeline_success_rate is not None else "—"), detail=(f"完成 {pipeline_ok} / 失敗 {pipeline_fail} / 執行中 {pipeline_running}" if pipeline_total else "近 30 天無 pipeline 紀錄"), status=pipeline_status, label=pipeline_label, tone=pipeline_tone),
+    ]
+
+    outcome_cutoff = now - timedelta(days=90)
+    evaluated_outcomes = (
+        db.query(ActionOutcome)
+        .filter(
+            ActionOutcome.checked_28d_at.isnot(None),
+            ActionOutcome.action_date >= outcome_cutoff.date(),
+        )
+        .all()
+    )
+    overall_outcomes = len(evaluated_outcomes)
+    improved_total = sum(1 for row in evaluated_outcomes if row.success_flag == "improved")
+    overall_improved_rate = (improved_total / overall_outcomes * 100) if overall_outcomes else None
+
+    by_action: dict[str, list[ActionOutcome]] = defaultdict(list)
+    for row in evaluated_outcomes:
+        by_action[row.action_type or "unknown"].append(row)
+
+    outcome_items = []
+    for action_type in sorted(by_action.keys()):
+        rows = by_action[action_type]
+        total = len(rows)
+        improved = sum(1 for row in rows if row.success_flag == "improved")
+        stable = sum(1 for row in rows if row.success_flag == "stable")
+        declined = sum(1 for row in rows if row.success_flag == "declined")
+        improved_rate = (improved / total * 100) if total else None
+        status = "healthy"
+        if total >= 3 and improved_rate is not None:
+            if improved_rate < 35:
+                status = "critical"
+            elif improved_rate < 55:
+                status = "warning"
+        label, tone = _health_tone(status)
+        outcome_items.append(SimpleNamespace(
+            name=action_type,
+            metric=(f"{improved_rate:.0f}%" if improved_rate is not None else "—"),
+            detail=f"improved {improved} / stable {stable} / declined {declined}",
+            total=total,
+            status=status,
+            label=label,
+            tone=tone,
+        ))
+
+    alerts: list[SimpleNamespace] = []
+    for item in freshness_items:
+        if item.status == "critical":
+            alerts.append(SimpleNamespace(level="critical", message=f"{item.name} 超過新鮮度門檻：{item.detail}"))
+        elif item.status == "warning":
+            alerts.append(SimpleNamespace(level="warning", message=f"{item.name} 接近過期：{item.detail}"))
+    if scheduler_fail:
+        alerts.append(SimpleNamespace(level=("critical" if scheduler_fail >= 3 else "warning"), message=f"近 7 天 Scheduler 失敗 {scheduler_fail} 次"))
+    if pipeline_fail:
+        alerts.append(SimpleNamespace(level=("critical" if pipeline_fail >= 5 else "warning"), message=f"近 30 天 Pipeline 失敗 {pipeline_fail} 次"))
+    for item in outcome_items:
+        if item.status in ("warning", "critical"):
+            alerts.append(SimpleNamespace(level=item.status, message=f"{item.name} 近 90 天成效偏弱：{item.detail}"))
+
+    summary_cards = [
+        SimpleNamespace(title="資料新鮮度異常", value=sum(1 for item in freshness_items if item.status != "healthy"), tone=("danger" if any(item.status == "critical" for item in freshness_items) else "warning")),
+        SimpleNamespace(title="Scheduler 7d 成功率", value=(f"{scheduler_success_rate:.0f}%" if scheduler_success_rate is not None else "—"), tone=("success" if scheduler_status == "healthy" else ("warning" if scheduler_status == "warning" else "danger"))),
+        SimpleNamespace(title="Pipeline 30d 成功率", value=(f"{pipeline_success_rate:.0f}%" if pipeline_success_rate is not None else "—"), tone=("success" if pipeline_status == "healthy" else ("warning" if pipeline_status == "warning" else "danger"))),
+        SimpleNamespace(title="Outcome improved rate", value=(f"{overall_improved_rate:.0f}%" if overall_improved_rate is not None else "—"), tone=("success" if overall_improved_rate is not None and overall_improved_rate >= 55 else ("warning" if overall_improved_rate is not None and overall_improved_rate >= 35 else "danger"))),
+    ]
+
+    return {
+        "summary_cards": summary_cards,
+        "freshness_items": freshness_items,
+        "execution_items": execution_items,
+        "outcome_items": outcome_items,
+        "alerts": alerts,
     }
 
 
@@ -2303,6 +2455,7 @@ async def health_page(request: Request):
         avg_article_cost = cost_metrics["avg_run_cost"]
         month_cost = cost_metrics["monthly_cost"]
         total_cost = cost_metrics["total_cost"]
+        operations_health = _build_operations_health(db)
 
         recent_errors = db.query(SchedulerLog).filter(SchedulerLog.status == "failed").order_by(desc(SchedulerLog.started_at)).limit(5).all()
 
@@ -2319,6 +2472,7 @@ async def health_page(request: Request):
             "total_pipeline_runs": total_runs, "monthly_runs": monthly_runs,
             "avg_article_cost": avg_article_cost,
             "month_cost": month_cost, "total_cost": total_cost,
+            "operations_health": operations_health,
             "scheduler_enabled": settings.scheduler_enabled,
             "database_url": db_display,
             "now": datetime.now(timezone.utc),
@@ -3091,6 +3245,7 @@ async def strategic_plans_page(request: Request, page: int = 1):
                 "action_counts": {
                     "generate": sum(1 for a in actions if a.get("action") == "generate"),
                     "refresh":  sum(1 for a in actions if a.get("action") == "refresh"),
+                    "optimize_meta": sum(1 for a in actions if a.get("action") == "optimize_meta"),
                     "alert":    sum(1 for a in actions if a.get("action") == "alert"),
                 },
             })

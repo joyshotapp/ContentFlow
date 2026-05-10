@@ -8,10 +8,12 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 from contentflow.models.database import (
     Base, Project, Article, ContentCalendar, SEORanking,
-    StrategicPlan, PipelineRun,
+    StrategicPlan, PipelineRun, ActionOutcome, ActionOutcomeEvaluation,
 )
 from contentflow.agents.strategic_agent import (
     _calculate_generate_capacity,
+    _attach_action_evidence,
+    _build_action_outcome_stats,
     _collect_project_context,
     _fallback_plan,
     _normalize_plan_result,
@@ -128,6 +130,270 @@ class TestCollectProjectContext:
         assert ctx["gsc_meta_opportunities"][0]["article_id"] == art.id
         assert ctx["gsc_query_opportunities"][0]["gsc_queries"][0]["query"] == "膝蓋骨刺"
 
+    def test_collects_action_policy_scores(self, db_session, sample_project):
+        pid = sample_project.id
+        article = Article(
+            project_id=pid,
+            title="成效文章",
+            status="published",
+            primary_keyword="膝蓋骨刺",
+        )
+        db_session.add(article)
+        db_session.flush()
+        db_session.add_all([
+            ActionOutcome(
+                project_id=pid,
+                article_id=article.id,
+                action_type="generate",
+                action_date=date.today(),
+                primary_keyword="膝蓋骨刺",
+                success_flag="improved",
+                learning_confidence="high",
+                baseline_impressions=220,
+                impressions_after_28d=320,
+                rank_delta=-8.0,
+            ),
+            ActionOutcome(
+                project_id=pid,
+                article_id=article.id,
+                action_type="generate",
+                action_date=date.today(),
+                primary_keyword="膝蓋骨刺復健",
+                success_flag="improved",
+                learning_confidence="medium",
+                baseline_impressions=180,
+                impressions_after_28d=260,
+                rank_delta=-5.0,
+            ),
+            ActionOutcome(
+                project_id=pid,
+                article_id=article.id,
+                action_type="generate",
+                action_date=date.today(),
+                primary_keyword="膝蓋骨刺運動",
+                success_flag="stable",
+                learning_confidence="medium",
+                baseline_impressions=120,
+                impressions_after_28d=140,
+                rank_delta=-1.0,
+            ),
+        ])
+        db_session.commit()
+
+        ctx = _collect_project_context(pid, db_session)
+
+        assert ctx["action_outcome_stats"]["generate"]["weighted_improved_rate"] > 0.6
+        assert ctx["action_policy_scores"]["generate"]["policy_score"] > 0
+        assert ctx["action_policy_scores"]["generate"]["recommendation"] == "maintain"
+
+    def test_builds_weighted_action_policy_scores(self):
+        outcomes = [
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="improved",
+                learning_confidence="high",
+                baseline_impressions=280,
+                impressions_after_28d=340,
+                baseline_clicks=10,
+                clicks_after_28d=18,
+                baseline_ctr=0.03,
+                ctr_after_28d=0.051,
+                rank_delta=-9.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="declined",
+                learning_confidence="low",
+                baseline_impressions=30,
+                impressions_after_28d=25,
+                baseline_clicks=2,
+                clicks_after_28d=1,
+                baseline_ctr=0.02,
+                ctr_after_28d=0.012,
+                rank_delta=2.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="stable",
+                learning_confidence="medium",
+                baseline_impressions=120,
+                impressions_after_28d=110,
+                baseline_clicks=6,
+                clicks_after_28d=6,
+                baseline_ctr=0.025,
+                ctr_after_28d=0.026,
+                rank_delta=-1.0,
+            ),
+        ]
+
+        stats, policy_scores = _build_action_outcome_stats(outcomes)
+
+        assert stats["refresh"]["total"] == 3
+        assert stats["refresh"]["weighted_improved_rate"] > stats["refresh"]["weighted_declined_rate"]
+        assert policy_scores["refresh"]["policy_score"] > 0
+        assert policy_scores["refresh"]["control_baseline"]["rank_delta_median"] == -1.0
+        assert policy_scores["refresh"]["recommendation"] == "maintain"
+
+    def test_control_baseline_can_lift_true_outperformer_above_raw_success_rate(self):
+        outcomes = [
+            SimpleNamespace(
+                action_type="generate",
+                success_flag="improved",
+                learning_confidence="high",
+                baseline_impressions=260,
+                impressions_after_28d=420,
+                baseline_clicks=10,
+                clicks_after_28d=28,
+                baseline_ctr=0.03,
+                ctr_after_28d=0.067,
+                rank_delta=-6.0,
+            ),
+            SimpleNamespace(
+                action_type="generate",
+                success_flag="improved",
+                learning_confidence="high",
+                baseline_impressions=240,
+                impressions_after_28d=390,
+                baseline_clicks=9,
+                clicks_after_28d=24,
+                baseline_ctr=0.028,
+                ctr_after_28d=0.061,
+                rank_delta=-5.0,
+            ),
+            SimpleNamespace(
+                action_type="generate",
+                success_flag="stable",
+                learning_confidence="medium",
+                baseline_impressions=180,
+                impressions_after_28d=230,
+                baseline_clicks=8,
+                clicks_after_28d=13,
+                baseline_ctr=0.026,
+                ctr_after_28d=0.038,
+                rank_delta=-3.0,
+            ),
+            SimpleNamespace(
+                action_type="generate",
+                success_flag="stable",
+                learning_confidence="medium",
+                baseline_impressions=160,
+                impressions_after_28d=210,
+                baseline_clicks=7,
+                clicks_after_28d=11,
+                baseline_ctr=0.024,
+                ctr_after_28d=0.035,
+                rank_delta=-2.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="improved",
+                learning_confidence="medium",
+                baseline_impressions=150,
+                impressions_after_28d=158,
+                baseline_clicks=6,
+                clicks_after_28d=7,
+                baseline_ctr=0.026,
+                ctr_after_28d=0.028,
+                rank_delta=-1.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="improved",
+                learning_confidence="medium",
+                baseline_impressions=145,
+                impressions_after_28d=154,
+                baseline_clicks=6,
+                clicks_after_28d=7,
+                baseline_ctr=0.025,
+                ctr_after_28d=0.027,
+                rank_delta=-1.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="improved",
+                learning_confidence="low",
+                baseline_impressions=140,
+                impressions_after_28d=146,
+                baseline_clicks=5,
+                clicks_after_28d=6,
+                baseline_ctr=0.024,
+                ctr_after_28d=0.026,
+                rank_delta=0.0,
+            ),
+            SimpleNamespace(
+                action_type="refresh",
+                success_flag="stable",
+                learning_confidence="low",
+                baseline_impressions=138,
+                impressions_after_28d=140,
+                baseline_clicks=5,
+                clicks_after_28d=5,
+                baseline_ctr=0.023,
+                ctr_after_28d=0.023,
+                rank_delta=1.0,
+            ),
+        ]
+
+        stats, policy_scores = _build_action_outcome_stats(outcomes)
+
+        assert stats["refresh"]["weighted_improved_rate"] > stats["generate"]["weighted_improved_rate"]
+        assert policy_scores["generate"]["rank_advantage_vs_baseline"] > 0
+        assert policy_scores["generate"]["control_adjustment"] > policy_scores["refresh"]["control_adjustment"]
+        assert policy_scores["generate"]["policy_score"] > policy_scores["refresh"]["policy_score"]
+
+    def test_persisted_evaluations_can_drive_policy_scores(self):
+        generate_a = SimpleNamespace(
+            id=1,
+            action_type="generate",
+            success_flag="improved",
+            learning_confidence="high",
+            baseline_impressions=200,
+            impressions_after_28d=260,
+            rank_delta=-4.0,
+        )
+        generate_b = SimpleNamespace(
+            id=2,
+            action_type="generate",
+            success_flag="declined",
+            learning_confidence="high",
+            baseline_impressions=200,
+            impressions_after_28d=220,
+            rank_delta=2.0,
+        )
+        refresh_a = SimpleNamespace(
+            id=3,
+            action_type="refresh",
+            success_flag="improved",
+            learning_confidence="medium",
+            baseline_impressions=120,
+            impressions_after_28d=140,
+            rank_delta=-1.0,
+        )
+        refresh_b = SimpleNamespace(
+            id=4,
+            action_type="refresh",
+            success_flag="declined",
+            learning_confidence="medium",
+            baseline_impressions=120,
+            impressions_after_28d=118,
+            rank_delta=1.0,
+        )
+
+        evaluations = {
+            1: ActionOutcomeEvaluation(action_outcome_id=1, control_adjustment=0.42, rank_delta=-4.0, click_delta=8.0, ctr_delta=0.02),
+            2: ActionOutcomeEvaluation(action_outcome_id=2, control_adjustment=0.38, rank_delta=2.0, click_delta=-1.0, ctr_delta=-0.002),
+            3: ActionOutcomeEvaluation(action_outcome_id=3, control_adjustment=-0.12, rank_delta=-1.0, click_delta=1.0, ctr_delta=0.001),
+            4: ActionOutcomeEvaluation(action_outcome_id=4, control_adjustment=-0.15, rank_delta=1.0, click_delta=-1.0, ctr_delta=-0.001),
+        }
+
+        stats, policy_scores = _build_action_outcome_stats(
+            [generate_a, generate_b, refresh_a, refresh_b],
+            evaluations,
+        )
+
+        assert stats["generate"]["control_adjustment"] > 0.35
+        assert policy_scores["generate"]["policy_score"] > policy_scores["refresh"]["policy_score"]
+
 
 # ── _fallback_plan ────────────────────────────────────────────
 
@@ -182,6 +448,33 @@ class TestCollectProjectContext:
 
         assert capacity["quota"] == 1
         assert "generate_decline_rate_high" in capacity["signals"]
+
+    def test_increases_quota_when_generate_policy_score_is_strong(self):
+        ctx = {
+            "calendar_items": [{"calendar_id": index} for index in range(1, 13)],
+            "article_stats": {"reviewing": 0},
+            "ranking_changes_top10": [],
+            "action_outcome_stats": {
+                "generate": {"total": 5, "improved": 4, "declined": 0, "stable": 1},
+            },
+            "action_policy_scores": {
+                "generate": {
+                    "policy_score": 0.42,
+                    "weighted_improved_rate": 0.74,
+                    "weighted_declined_rate": 0.0,
+                    "recommendation": "scale",
+                },
+            },
+        }
+
+        with patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+            mock_settings.strategic_daily_generate_limit = 5
+            mock_settings.max_articles_per_run = 5
+            capacity = _calculate_generate_capacity(ctx)
+
+        assert capacity["quota"] == 5
+        assert capacity["generate_policy_recommendation"] == "scale"
+        assert "generate_performance_strong" in capacity["signals"]
 
 
 
@@ -313,6 +606,45 @@ class TestFallbackPlan:
         assert len(alerts) == 1
         assert "動態 generate 配額：1 篇" in normalized["summary"]
 
+    def test_attachs_structured_evidence_to_actions(self):
+        ctx = {
+            "calendar_items": [{"calendar_id": 7, "title": "季節保養主題"}],
+            "ranking_changes_top10": [
+                {"keyword": "膝蓋骨刺", "current_position": 15, "previous_position": 8, "delta": 7}
+            ],
+            "gsc_meta_opportunities": [
+                {
+                    "article_id": 9,
+                    "position": 5.0,
+                    "impressions": 120,
+                    "ctr": 0.016,
+                    "gsc_queries": [{"query": "膝蓋骨刺復健"}],
+                    "reason": "GSC 顯示 CTR 偏低",
+                }
+            ],
+            "gsc_query_opportunities": [
+                {
+                    "article_id": 8,
+                    "gsc_queries": [{"query": "膝蓋骨刺", "impressions": 88, "ctr": 0.011}],
+                }
+            ],
+            "generate_capacity": {"backlog": 3, "quota": 1, "signals": ["medium_backlog"]},
+            "article_stats": {"reviewing": 0},
+        }
+        plan_result = {
+            "actions": [
+                {"action": "generate", "calendar_id": 7, "priority": 1},
+                {"action": "refresh", "article_id": 8, "keyword": "膝蓋骨刺", "priority": 2},
+                {"action": "optimize_meta", "article_id": 9, "priority": 3},
+            ]
+        }
+
+        enriched = _attach_action_evidence(plan_result, ctx)
+
+        assert enriched["actions"][0]["evidence"]["primary_signals"][0]["label"] == "日曆項目"
+        assert enriched["actions"][1]["evidence"]["thresholds_triggered"][0] == "排名下滑 >= 5 位"
+        assert enriched["actions"][2]["evidence"]["confidence"] == "high"
+
 
 # ── run_strategic_agent ───────────────────────────────────────
 
@@ -355,6 +687,8 @@ class TestRunStrategicAgent:
         assert plan.total_count == 1
         assert plan.status == "pending"
         assert "test plan" in plan.summary
+        saved_actions = json.loads(plan.actions_json)
+        assert saved_actions[0]["evidence"]["summary"]
 
     @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self, db_session, sample_project):
