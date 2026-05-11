@@ -81,7 +81,7 @@ upload_project() {
 
 upload_project
 
-echo "==> 2. 執行伺服器初始化（commit=$BUILD_COMMIT）"
+echo "==> 2. Run remote deploy (commit=$BUILD_COMMIT)"
 "$SSH_BIN" "${SSH_OPTS[@]}" "$SERVER" \
     BUILD_COMMIT="$BUILD_COMMIT" \
     BUILD_TIME="$BUILD_TIME" \
@@ -170,11 +170,11 @@ fi
 cd "$PROJECT_DIR"
 "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml pull || true
 "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml build
-"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml up -d
+"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml up -d --force-recreate site scheduler db
 
 # ── 執行 DB migration ────────────────────────────────
 "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml exec -T site \
-    python -m alembic upgrade head || echo "WARN: migration 失敗，請手動執行"
+    python -m contentflow.db_bootstrap || echo "WARN: migration 失敗，請手動執行"
 
 echo ""
 echo "============================================"
