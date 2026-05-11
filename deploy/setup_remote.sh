@@ -183,16 +183,60 @@ fi
 # ── 建構 & 啟動 Docker ────────────────────────────────
 cd "$PROJECT_DIR"
 "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml pull || true
-"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml build
-"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml up -d --force-recreate site scheduler db
+"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml build \
+    || { echo "ERROR: docker build 失敗，中止部署"; exit 1; }
+
+echo "==> 啟動容器..."
+"${COMPOSE_CMD[@]}" -f docker-compose.prod.yml up -d --force-recreate site scheduler db \
+    || { echo "ERROR: docker up 失敗"; exit 1; }
+
+# ── 等待服務就緒（最多 120 秒）──────────────────────────
+echo "==> 等待 HTTP 服務就緒（最多 120 秒）..."
+DEPLOY_OK=0
+for i in $(seq 1 24); do
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")
+    if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "503" ]]; then
+        DEPLOY_OK=1
+        echo "  服務已回應 HTTP $HTTP_CODE（第 $((i*5)) 秒）"
+        break
+    fi
+    printf "  [%02d/24] 等待中（%s）...\r" "$i" "$(date -u +%H:%M:%S)"
+    sleep 5
+done
+echo ""
+if [[ $DEPLOY_OK -eq 0 ]]; then
+    echo "WARN: 服務在 120 秒內未回應 /health，可能仍在啟動中"
+    echo "  手動確認: curl http://127.0.0.1:8000/health"
+    echo "  容器狀態: docker ps"
+fi
 
 # ── 執行 DB migration ────────────────────────────────
+echo "==> 執行 DB migration..."
 "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml exec -T site \
     python -m contentflow.db_bootstrap || echo "WARN: migration 失敗，請手動執行"
 
+# ── 最終健康驗證 ─────────────────────────────────────
+echo "==> 最終健康驗證..."
+HEALTH_JSON=$(curl -sf http://127.0.0.1:8000/health 2>/dev/null || echo '{"status":"unreachable"}')
+HEALTH_STATUS=$(echo "$HEALTH_JSON" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+BUILD_TAG=$(echo "$HEALTH_JSON" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d.get('build_commit','?'))" 2>/dev/null || echo "?")
+
 echo ""
-echo "============================================"
-echo " ContentFlow 站點部署完成！"
-echo " https://$DOMAIN/"
-echo "============================================"
+if [[ "$HEALTH_STATUS" == "ok" ]]; then
+    echo "============================================"
+    echo " ContentFlow 部署成功！"
+    echo " 網址  : https://$DOMAIN/"
+    echo " commit: $BUILD_TAG"
+    echo " 狀態  : $HEALTH_STATUS"
+    echo "============================================"
+else
+    echo "============================================"
+    echo " WARN: 部署完成，但健康狀態為: $HEALTH_STATUS"
+    echo " 網址  : https://$DOMAIN/"
+    echo " 詳細  : curl http://127.0.0.1:8000/health"
+    "${COMPOSE_CMD[@]}" -f docker-compose.prod.yml ps
+    echo "============================================"
+fi
 REMOTE

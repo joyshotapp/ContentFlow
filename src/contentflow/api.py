@@ -223,6 +223,54 @@ class ReviewFeedbackRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────
+# CF-HEALTH: GET /health — 匿名健康探針（無需認證）
+# 供 Docker healthcheck、Nginx upstream probe、外部監控使用。
+# 200 = ok，503 = degraded（服務仍在執行，但 DB 或排程器異常）
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health_check():
+    from contentflow.build_info import get_build_info
+    from contentflow.db import SessionLocal
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import func as sqlfunc
+
+    checks: dict = {
+        "service": "contentflow",
+        "platform_mode": settings.platform_mode,
+        "managed_site_enabled": settings.managed_site_enabled,
+        **get_build_info(),
+    }
+
+    # DB 連線
+    try:
+        db = SessionLocal()
+        db.execute(sqlfunc.now())
+        db.close()
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = f"error: {exc}"
+
+    # 排程器狀態
+    try:
+        from contentflow.scheduler import scheduler
+        if not settings.scheduler_enabled:
+            checks["scheduler"] = "disabled"
+        elif scheduler.running:
+            checks["scheduler"] = "running"
+        else:
+            checks["scheduler"] = "stopped"
+    except Exception:
+        checks["scheduler"] = "unknown"
+
+    scheduler_ok = checks["scheduler"] in {"running", "disabled", "unknown"}
+    ok = checks["db"] == "ok" and scheduler_ok
+    checks["status"] = "ok" if ok else "degraded"
+
+    return JSONResponse(content=checks, status_code=200 if ok else 503)
+
+
+# ─────────────────────────────────────────────────────────────
 # CF-01-03: POST /api/v1/articles/generate
 # ─────────────────────────────────────────────────────────────
 
