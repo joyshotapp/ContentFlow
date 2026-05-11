@@ -53,6 +53,15 @@
     <input type="hidden" name="site_contact_email" value="">
     <input type="hidden" name="site_blog_path" value="/blog">
     <input type="hidden" name="writing_principles" value="">
+    <input type="hidden" name="domain_profile" value="general">
+    <input type="hidden" name="compliance_profile" value="general">
+    <input type="hidden" name="default_content_format" value="knowledge">
+    <input type="hidden" name="reviewer_role_label" value="">
+    <input type="hidden" name="disclaimer_template" value="">
+    <input type="hidden" name="evidence_policy" value="none">
+    <input type="hidden" name="image_style_override" value="">
+    <input type="hidden" name="extra_schema_types_json" value="[]">
+    <input type="hidden" name="factcheck_mode_override" value="">
     <input type="hidden" name="business_goals" value="">
     <input type="hidden" name="target_audience" value="">
     <input type="hidden" name="ga4_property_id" value="">
@@ -140,6 +149,76 @@
             <label class="form-label">Writing Principles</label>
             <textarea class="form-input" name="writing_principles" rows="3">{{ project.writing_principles or '' }}</textarea>
           </div>
+          <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;">
+            <div class="section-title" style="margin-bottom:14px;">Policy Setup</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+              <div class="form-group">
+                <label class="form-label">Domain Profile</label>
+                <select class="form-input" name="domain_profile">
+                  <option value="">自動判斷</option>
+                  {% for key, item in domain_profiles.items() %}
+                  <option value="{{ key }}" {% if project.domain_profile == key %}selected{% endif %}>{{ item.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Compliance Profile</label>
+                <select class="form-input" name="compliance_profile">
+                  <option value="">自動判斷</option>
+                  {% for key, item in compliance_profiles.items() %}
+                  <option value="{{ key }}" {% if project.compliance_profile == key %}selected{% endif %}>{{ item.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Default Content Format</label>
+                <select class="form-input" name="default_content_format">
+                  <option value="">依文章類型</option>
+                  {% for key, item in content_format_profiles.items() %}
+                  <option value="{{ key }}" {% if project.default_content_format == key %}selected{% endif %}>{{ item.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div class="form-group">
+                <label class="form-label">Evidence Policy</label>
+                {% set evidence_value = project.evidence_policy or '' %}
+                <select class="form-input" name="evidence_policy">
+                  <option value="" {% if not evidence_value %}selected{% endif %}>跟隨 Domain</option>
+                  <option value="none" {% if evidence_value == 'none' %}selected{% endif %}>none</option>
+                  <option value="manual_reference" {% if evidence_value == 'manual_reference' %}selected{% endif %}>manual_reference</option>
+                  <option value="pubmed" {% if evidence_value == 'pubmed' %}selected{% endif %}>pubmed</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">FactCheck Mode</label>
+                {% set factcheck_value = project.factcheck_mode_override or '' %}
+                <select class="form-input" name="factcheck_mode_override">
+                  <option value="" {% if not factcheck_value %}selected{% endif %}>跟隨 Compliance</option>
+                  <option value="light" {% if factcheck_value == 'light' %}selected{% endif %}>light</option>
+                  <option value="moderate" {% if factcheck_value == 'moderate' %}selected{% endif %}>moderate</option>
+                  <option value="strict" {% if factcheck_value == 'strict' %}selected{% endif %}>strict</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Reviewer Label</label>
+              <input class="form-input" type="text" name="reviewer_role_label" value="{{ project.reviewer_role_label or '' }}" placeholder="例：法律審閱 / 財務審閱">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Disclaimer Template</label>
+              <textarea class="form-input" name="disclaimer_template" rows="3" placeholder="文章結尾使用的免責聲明">{{ project.disclaimer_template or '' }}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Hero Image Style Override</label>
+              <textarea class="form-input" name="image_style_override" rows="2" placeholder="需要覆蓋預設圖片風格時使用">{{ project.image_style_override or '' }}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Extra Schema Types</label>
+              <textarea class="form-input" name="extra_schema_types_json" rows="2" placeholder='可輸入 JSON array 或逗號分隔，例如 ["FAQPage"]'>{{ project.extra_schema_types_json or '[]' }}</textarea>
+            </div>
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
               <label class="form-label">SERP 國家</label>
@@ -186,6 +265,33 @@
             <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ session_role or 'owner' }}</div>
             <div style="font-size:12px;color:#64748b;margin-top:4px;">{% if can_manage_settings %}可管理設定與 connector{% elif can_review_actions %}可審核 strategic action 與測試 connector{% else %}可預覽 strategic action{% endif %}</div>
           </div>
+          {% if policy_preview %}
+          <div style="padding:12px;background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
+            <div style="font-size:11px;color:#6366f1;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Effective Policy Preview</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
+              <div><div style="font-size:11px;color:#94a3b8;">Domain</div><div style="font-size:13px;font-weight:700;color:#0f172a;">{{ policy_preview.domain_label }}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">Compliance</div><div style="font-size:13px;font-weight:700;color:#0f172a;">{{ policy_preview.compliance_label }}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">Content Format</div><div style="font-size:13px;font-weight:700;color:#0f172a;">{{ policy_preview.content_format_label }}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">FactCheck</div><div style="font-size:13px;font-weight:700;color:#0f172a;">{{ policy_preview.factcheck_mode }}</div></div>
+            </div>
+            <div style="margin-top:10px;font-size:12px;color:#334155;line-height:1.6;">
+              證據策略：{{ policy_preview.evidence_policy }}<br>
+              PubMed：{{ 'enabled' if policy_preview.use_pubmed else 'disabled' }}<br>
+              審閱需求：{{ policy_preview.reviewer_role_label if policy_preview.require_reviewer else '無強制審閱' }}
+            </div>
+            <div style="margin-top:10px;font-size:12px;color:#475569;line-height:1.6;">Schema：{{ policy_preview.schema_types | join(', ') }}</div>
+          </div>
+          {% endif %}
+          {% if policy_warnings %}
+          <div style="padding:12px;background:#fff7ed;border-radius:10px;border:1px solid #fdba74;">
+            <div style="font-size:11px;color:#c2410c;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Policy Warnings</div>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+              {% for warning in policy_warnings %}
+              <div style="font-size:12px;color:#9a3412;line-height:1.6;">{{ warning }}</div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
         </div>
       </div>
     </div>

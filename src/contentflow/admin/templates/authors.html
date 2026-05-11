@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}作者管理{% endblock %}
 {% block page_title %}作者管理{% endblock %}
-{% block page_subtitle %}E-E-A-T 人物誌 · 醫療審閱者管理{% endblock %}
+{% block page_subtitle %}E-E-A-T 人物誌 · 專業作者與審閱者管理{% endblock %}
 
 {% block content %}
 
@@ -25,8 +25,8 @@
     <div style="font-size:11px;color:#94a3b8;margin-top:2px;">作者總數</div>
   </div>
   <div class="cf-card cf-card-p animate-up d1">
-    <div style="font-size:28px;font-weight:900;color:#059669;">{{ authors | selectattr('is_medical_reviewer','equalto',True) | list | length }}</div>
-    <div style="font-size:11px;color:#94a3b8;margin-top:2px;">醫療審閱者</div>
+    <div style="font-size:28px;font-weight:900;color:#059669;">{{ authors | selectattr('reviewer_role') | list | length }}</div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:2px;">專業審閱者</div>
   </div>
   <div class="cf-card cf-card-p animate-up d2">
     <div style="font-size:28px;font-weight:900;color:#0f172a;">{{ art_counts.values() | sum }}</div>
@@ -51,8 +51,10 @@
           <div style="flex:1;min-width:0;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <div style="font-size:15px;font-weight:700;color:#0f172a;">{{ author.name }}</div>
-              {% if author.is_medical_reviewer %}
-              <span style="font-size:10px;padding:2px 8px;border-radius:9999px;background:#d1fae5;color:#065f46;font-weight:700;">醫療審閱者</span>
+              {% if author.reviewer_role %}
+              <span style="font-size:10px;padding:2px 8px;border-radius:9999px;background:#d1fae5;color:#065f46;font-weight:700;">{{ author.reviewer_role }} reviewer</span>
+              {% elif author.is_medical_reviewer %}
+              <span style="font-size:10px;padding:2px 8px;border-radius:9999px;background:#d1fae5;color:#065f46;font-weight:700;">medical reviewer</span>
               {% endif %}
               {% if art_counts.get(author.id) %}
               <span style="font-size:10.5px;color:#94a3b8;">{{ art_counts.get(author.id) }} 篇文章</span>
@@ -131,7 +133,18 @@
 
       <div class="form-group" style="display:flex;align-items:center;gap:8px;">
         <input type="checkbox" id="is_medical_reviewer" name="is_medical_reviewer" value="1" style="width:16px;height:16px;accent-color:#6366f1;">
-        <label for="is_medical_reviewer" style="font-size:13px;color:#374151;cursor:pointer;">指定為醫療審閱者（E-E-A-T）</label>
+        <label for="is_medical_reviewer" style="font-size:13px;color:#374151;cursor:pointer;">相容舊欄位：同步標記為 medical reviewer</label>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Reviewer Role</label>
+        <select class="form-input" name="reviewer_role">
+          <option value="">一般作者</option>
+          <option value="general">general reviewer</option>
+          <option value="medical">medical reviewer</option>
+          <option value="legal">legal reviewer</option>
+          <option value="financial">financial reviewer</option>
+        </select>
       </div>
 
       <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px;">

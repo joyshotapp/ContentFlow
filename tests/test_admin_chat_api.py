@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from contentflow.admin.app import admin_app
-from contentflow.models.database import AgentDecisionLog, Article, Base, KnowledgeEntry, PipelineRun, Project, ProjectAuditLog, ProjectIntegration, StrategicFeedbackLog, StrategicPlan
+from contentflow.models.database import AgentDecisionLog, Article, Author, Base, KnowledgeEntry, PipelineRun, Project, ProjectAuditLog, ProjectIntegration, StrategicFeedbackLog, StrategicPlan
 from contentflow.project_integrations import IntegrationDiagnostic, resolve_wordpress_settings
 
 
@@ -430,6 +430,60 @@ def test_save_project_returns_404_for_missing_project_id():
             )
 
         assert response.status_code == 404
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_save_project_persists_policy_profile_fields():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="policy-brand", name="Policy Brand")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+                "/settings/project/save",
+                data={
+                    "project_id": project_id,
+                    "slug": "policy-brand",
+                    "name": "Policy Brand",
+                    "brand_name": "Policy Brand",
+                    "brand_url": "https://policy.example",
+                    "brand_description": "法律知識品牌",
+                    "site_contact_email": "team@policy.example",
+                    "site_blog_path": "/insights",
+                    "industry": "法律",
+                    "writing_principles": "清楚、保守",
+                    "domain_profile": "law",
+                    "compliance_profile": "ymyl_legal",
+                    "default_content_format": "comparison",
+                    "reviewer_role_label": "法律審閱",
+                    "disclaimer_template": "本文僅供一般參考。",
+                    "evidence_policy": "manual_reference",
+                    "image_style_override": "Formal editorial illustration.",
+                    "extra_schema_types_json": "FAQPage, Article",
+                    "factcheck_mode_override": "strict",
+                    "serp_gl": "tw",
+                    "serp_hl": "zh-tw",
+                    "business_goals": "",
+                    "target_audience": "",
+                    "ga4_property_id": "",
+                },
+                follow_redirects=False,
+            )
+
+        session.expire_all()
+        saved = session.get(Project, project_id)
+        assert response.status_code == 303
+        assert saved.domain_profile == "law"
+        assert saved.compliance_profile == "ymyl_legal"
+        assert saved.default_content_format == "comparison"
+        assert json.loads(saved.extra_schema_types_json) == ["FAQPage", "Article"]
+        assert saved.factcheck_mode_override == "strict"
     finally:
         session.close()
         engine.dispose()
@@ -897,6 +951,35 @@ def test_settings_page_renders_onboarding_and_approval_history_sections():
         engine.dispose()
 
 
+def test_settings_page_renders_policy_preview_section():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(
+            slug="legal-brand",
+            name="Legal Brand",
+            industry="法律",
+            domain_profile="law",
+            compliance_profile="ymyl_legal",
+            default_content_format="comparison",
+            reviewer_role_label="法律審閱",
+            disclaimer_template="本文不構成法律意見。",
+        )
+        session.add(project)
+        session.commit()
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.get(f"/settings?project_id={project.id}")
+
+        assert response.status_code == 200
+        assert "Policy Setup" in response.text
+        assert "Effective Policy Preview" in response.text
+        assert "YMYL Legal" in response.text
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_api_app_does_not_mount_site_in_control_plane_mode():
     with patch("contentflow.config.settings.managed_site_enabled", False), \
          patch("contentflow.config.settings.platform_mode", "control-plane"):
@@ -950,6 +1033,77 @@ def test_update_article_status_passes_current_session_to_native_blog_url():
         assert response.status_code == 303
         assert saved.publish_url == "https://client.example/blog/publish-me"
         assert saved.status == "published"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_save_article_persists_policy_overrides():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="article-brand", name="Article Brand")
+        session.add(project)
+        session.flush()
+        article = Article(project_id=project.id, title="測試文章", slug="test-article")
+        session.add(article)
+        session.commit()
+        article_id = article.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+                f"/articles/{article_id}/save",
+                json={
+                    "title": "測試文章",
+                    "content_format_override": "tutorial",
+                    "reviewer_required_override": "required",
+                    "custom_disclaimer": "此篇為示範內容。",
+                    "extra_schema_types_override": "FAQPage, HowTo",
+                },
+            )
+
+        session.expire_all()
+        saved = session.get(Article, article_id)
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert saved.content_format_override == "tutorial"
+        assert saved.reviewer_required_override is True
+        assert saved.custom_disclaimer == "此篇為示範內容。"
+        assert json.loads(saved.extra_schema_types_override_json) == ["FAQPage", "HowTo"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_create_author_persists_reviewer_role():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="author-brand", name="Author Brand")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+                "/authors/new",
+                data={
+                    "project_id": project_id,
+                    "name": "王律師",
+                    "title": "執業律師",
+                    "bio": "專長合約與勞資糾紛",
+                    "credentials": "台灣律師",
+                    "profile_url": "https://example.com/lawyer",
+                    "reviewer_role": "legal",
+                },
+                follow_redirects=False,
+            )
+
+        author = session.query(Author).filter(Author.project_id == project_id).first()
+        assert response.status_code == 303
+        assert author is not None
+        assert author.reviewer_role == "legal"
+        assert author.is_medical_reviewer is False
     finally:
         session.close()
         engine.dispose()

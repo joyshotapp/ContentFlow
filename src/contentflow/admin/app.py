@@ -76,6 +76,16 @@ from contentflow.models.database import (
     ContentStrategy,
 )
 from contentflow.models.schemas import ArticleDraft, ResearchReport
+from contentflow.policy_profiles import (
+    COMPLIANCE_PROFILES,
+    CONTENT_FORMAT_PROFILES,
+    DOMAIN_PROFILES,
+    SUPPORTED_COMPLIANCE_PROFILES,
+    SUPPORTED_CONTENT_FORMAT_PROFILES,
+    SUPPORTED_DOMAIN_PROFILES,
+)
+from contentflow.policy_resolver import resolve_policy
+from contentflow.project_context import load_project_context
 from contentflow.project_integrations import (
     build_wordpress_publisher,
     resolve_forgebase_settings,
@@ -358,6 +368,78 @@ def _load_json_object(raw_value: str | None) -> dict[str, Any]:
     except Exception:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _normalize_schema_types_input(raw_value: str | None) -> str:
+    if not raw_value:
+        return "[]"
+    text = raw_value.strip()
+    if not text:
+        return "[]"
+    try:
+        parsed = json.loads(text)
+        values = parsed if isinstance(parsed, list) else []
+    except Exception:
+        values = [item.strip() for item in text.replace("\n", ",").split(",")]
+
+    cleaned: list[str] = []
+    for value in values:
+        if isinstance(value, str):
+            item = value.strip()
+            if item and item not in cleaned:
+                cleaned.append(item)
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def _build_policy_preview(project_id: int, *, article=None) -> tuple[dict[str, Any], list[str]]:
+    ctx = load_project_context(project_id=project_id)
+    preview_ctx = SimpleNamespace(**ctx.__dict__)
+    article_type = getattr(article, "article_type", None) if article else None
+
+    if article and article.content_format_override:
+        preview_ctx.default_content_format = article.content_format_override
+        article_type = None
+    if article and article.custom_disclaimer:
+        preview_ctx.disclaimer_template = article.custom_disclaimer
+    if article and article.extra_schema_types_override_json:
+        preview_ctx.extra_schema_types_json = article.extra_schema_types_override_json
+
+    policy = resolve_policy(preview_ctx, article_type=article_type)
+    effective_require_reviewer = policy.require_reviewer
+    if article and article.reviewer_required_override is not None:
+        effective_require_reviewer = bool(article.reviewer_required_override)
+
+    warnings: list[str] = []
+    if policy.compliance_profile.startswith("ymyl") and effective_require_reviewer:
+        if not policy.reviewer_role_label:
+            warnings.append("此 policy 需要專業審閱，但 reviewer_role_label 尚未設定。")
+        if not policy.disclaimer_template:
+            warnings.append("此 policy 需要免責聲明，但 disclaimer_template 尚未設定。")
+
+    reviewer_role_key = ""
+    if policy.compliance_profile.startswith("ymyl_"):
+        reviewer_role_key = policy.compliance_profile.split("_", 1)[1]
+    elif policy.compliance_profile == "regulated_soft":
+        reviewer_role_key = "general"
+
+    payload = {
+        "domain_profile": policy.domain_profile,
+        "domain_label": DOMAIN_PROFILES[policy.domain_profile].label,
+        "compliance_profile": policy.compliance_profile,
+        "compliance_label": COMPLIANCE_PROFILES[policy.compliance_profile].label,
+        "content_format": policy.content_format,
+        "content_format_label": CONTENT_FORMAT_PROFILES[policy.content_format].label,
+        "use_pubmed": policy.use_pubmed,
+        "evidence_policy": policy.evidence_policy,
+        "require_reviewer": effective_require_reviewer,
+        "reviewer_role_label": policy.reviewer_role_label,
+        "reviewer_role_key": reviewer_role_key,
+        "disclaimer_template": policy.disclaimer_template,
+        "factcheck_mode": policy.factcheck_mode,
+        "schema_types": list(policy.all_schema_types),
+        "hero_image_style": policy.hero_image_style,
+    }
+    return payload, warnings
 
 
 def _upsert_project_integration(
@@ -1035,6 +1117,8 @@ async def article_detail(request: Request, article_id: int):
             except Exception:
                 pass
 
+        policy_preview, policy_warnings = _build_policy_preview(article.project_id, article=article)
+
         return templates.TemplateResponse(request, "article_detail.html", {
             "request": request, "page": "articles",
             "site_name": settings.site_name,
@@ -1049,6 +1133,9 @@ async def article_detail(request: Request, article_id: int):
             "internal_links": json.loads(article.suggested_internal_links or "[]"),
             # Authors for E-E-A-T assignment
             "authors": db.query(Author).filter(Author.project_id == article.project_id).order_by(Author.name).all(),
+            "policy_preview": policy_preview,
+            "policy_warnings": policy_warnings,
+            "content_format_profiles": CONTENT_FORMAT_PROFILES,
             # Fact-check issues parsed from JSON
             "fact_issues": json.loads(article.factcheck_flags_json) if article.factcheck_flags_json and article.factcheck_flags_json.strip() else [],
             # PAA questions for FAQ content ideas
@@ -1116,6 +1203,19 @@ async def save_article(request: Request, article_id: int):
                 art.slug = new_slug
         if "title" in data:
             art.title = data["title"]
+        if "content_format_override" in data:
+            value = (data["content_format_override"] or "").strip().lower()
+            art.content_format_override = value if value in SUPPORTED_CONTENT_FORMAT_PROFILES else None
+        if "reviewer_required_override" in data:
+            raw_value = (data["reviewer_required_override"] or "").strip().lower()
+            if raw_value in {"", "inherit"}:
+                art.reviewer_required_override = None
+            else:
+                art.reviewer_required_override = raw_value in {"1", "true", "required", "yes", "on"}
+        if "custom_disclaimer" in data:
+            art.custom_disclaimer = (data["custom_disclaimer"] or "").strip() or None
+        if "extra_schema_types_override" in data:
+            art.extra_schema_types_override_json = _normalize_schema_types_input(data["extra_schema_types_override"])
         art.updated_at = datetime.now(timezone.utc)
         db.commit()
         return JSONResponse({"ok": True, "message": "已儲存"})
@@ -1183,7 +1283,7 @@ async def set_article_author(request: Request, article_id: int, author_id: int =
 
 @admin_app.post("/articles/{article_id}/set-reviewer")
 async def set_article_reviewer(request: Request, article_id: int, reviewer_id: int = Form(0)):
-    """設定文章醫療審閱者（E-E-A-T）。"""
+    """設定文章審閱者（E-E-A-T）。"""
     if not _check_login(request):
         raise HTTPException(status_code=403)
     db = _db()
@@ -2826,11 +2926,15 @@ async def create_author(
     credentials: str = Form(""),
     profile_url: str = Form(""),
     is_medical_reviewer: bool = Form(False),
+    reviewer_role: str = Form(""),
 ):
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
     db = _db()
     try:
+        reviewer_role_value = reviewer_role.strip().lower()
+        if reviewer_role_value not in {"", "general", "medical", "legal", "financial"}:
+            reviewer_role_value = ""
         author = Author(
             project_id=project_id,
             name=name.strip(),
@@ -2838,7 +2942,8 @@ async def create_author(
             bio=bio.strip(),
             credentials=credentials.strip(),
             profile_url=profile_url.strip(),
-            is_medical_reviewer=is_medical_reviewer,
+            is_medical_reviewer=is_medical_reviewer or reviewer_role_value == "medical",
+            reviewer_role=reviewer_role_value or None,
         )
         db.add(author)
         db.commit()
@@ -3323,6 +3428,15 @@ async def save_project(
     site_blog_path: str = Form("/blog"),
     industry: str = Form(""),
     writing_principles: str = Form(""),
+    domain_profile: str = Form(""),
+    compliance_profile: str = Form(""),
+    default_content_format: str = Form(""),
+    reviewer_role_label: str = Form(""),
+    disclaimer_template: str = Form(""),
+    evidence_policy: str = Form(""),
+    image_style_override: str = Form(""),
+    extra_schema_types_json: str = Form(""),
+    factcheck_mode_override: str = Form(""),
     serp_gl: str = Form("tw"),
     serp_hl: str = Form("zh-tw"),
     business_goals: str = Form(""),
@@ -3349,6 +3463,15 @@ async def save_project(
                 proj.site_contact_email = site_contact_email
                 proj.site_blog_path = site_blog_path or "/blog"
                 proj.writing_principles = writing_principles
+                proj.domain_profile = domain_profile if domain_profile in SUPPORTED_DOMAIN_PROFILES else None
+                proj.compliance_profile = compliance_profile if compliance_profile in SUPPORTED_COMPLIANCE_PROFILES else None
+                proj.default_content_format = default_content_format if default_content_format in SUPPORTED_CONTENT_FORMAT_PROFILES else None
+                proj.reviewer_role_label = reviewer_role_label or None
+                proj.disclaimer_template = disclaimer_template or None
+                proj.evidence_policy = evidence_policy or None
+                proj.image_style_override = image_style_override or None
+                proj.extra_schema_types_json = _normalize_schema_types_input(extra_schema_types_json)
+                proj.factcheck_mode_override = factcheck_mode_override or None
                 proj.serp_gl = serp_gl; proj.serp_hl = serp_hl
                 proj.business_goals = business_goals or None
                 proj.target_audience_json = _json.dumps(ta_json, ensure_ascii=False) if target_audience else None
@@ -3364,6 +3487,9 @@ async def save_project(
                         "brand_url": proj.brand_url,
                         "site_contact_email": proj.site_contact_email,
                         "site_blog_path": proj.site_blog_path,
+                        "domain_profile": proj.domain_profile,
+                        "compliance_profile": proj.compliance_profile,
+                        "default_content_format": proj.default_content_format,
                     },
                     actor=role,
                 )
@@ -3378,6 +3504,15 @@ async def save_project(
                 site_contact_email=site_contact_email,
                 site_blog_path=site_blog_path or "/blog",
                 writing_principles=writing_principles,
+                domain_profile=domain_profile if domain_profile in SUPPORTED_DOMAIN_PROFILES else None,
+                compliance_profile=compliance_profile if compliance_profile in SUPPORTED_COMPLIANCE_PROFILES else None,
+                default_content_format=default_content_format if default_content_format in SUPPORTED_CONTENT_FORMAT_PROFILES else None,
+                reviewer_role_label=reviewer_role_label or None,
+                disclaimer_template=disclaimer_template or None,
+                evidence_policy=evidence_policy or None,
+                image_style_override=image_style_override or None,
+                extra_schema_types_json=_normalize_schema_types_input(extra_schema_types_json),
+                factcheck_mode_override=factcheck_mode_override or None,
                 serp_gl=serp_gl, serp_hl=serp_hl,
                 locale="zh-tw",
                 business_goals=business_goals or None,
@@ -3486,6 +3621,10 @@ async def settings_page(request: Request, project_id: int = 0):
             forgebase_integration=forgebase_integration,
             integration_diagnostics=integration_diagnostics,
         )
+        policy_preview = {}
+        policy_warnings: list[str] = []
+        if current_project:
+            policy_preview, policy_warnings = _build_policy_preview(current_project.id)
 
         return templates.TemplateResponse(request, "settings.html", {
             "request": request, "page": "settings",
@@ -3511,6 +3650,11 @@ async def settings_page(request: Request, project_id: int = 0):
             "recent_project_audits": audit_view,
             "onboarding_wizard": onboarding_wizard,
             "connector_wizard": connector_wizard,
+            "policy_preview": policy_preview,
+            "policy_warnings": policy_warnings,
+            "domain_profiles": DOMAIN_PROFILES,
+            "compliance_profiles": COMPLIANCE_PROFILES,
+            "content_format_profiles": CONTENT_FORMAT_PROFILES,
             "platform_mode": settings.platform_mode,
             "managed_site_enabled": settings.managed_site_enabled,
             "session_role": session_role,

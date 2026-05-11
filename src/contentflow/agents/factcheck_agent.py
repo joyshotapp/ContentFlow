@@ -18,6 +18,7 @@ from ..models import (
     ConfidenceLevel,
     ArticleStatus,
 )
+from ..policy_resolver import resolve_policy
 from ..project_context import ProjectContext, load_project_context
 
 
@@ -35,6 +36,7 @@ def _check_forbidden_words(
     content: str,
     forbidden_words: list[str],
     article_type: str = "educational",
+    factcheck_mode: str = "",
 ) -> list[FactCheckItem]:
     """正則比對禁用詞，依嚴重度分級。
 
@@ -45,7 +47,7 @@ def _check_forbidden_words(
     if not forbidden_words:
         return []
 
-    strict_mode = article_type == "product"
+    strict_mode = article_type == "product" or factcheck_mode == "strict"
     items = []
     lines = content.split("\n")
 
@@ -167,10 +169,14 @@ async def run_factcheck_agent(
 
     # 載入專案上下文
     ctx = load_project_context(project_id)
+    policy = resolve_policy(ctx)
 
     # 1. 禁用詞檢查（依文章類型調整嚴重度）
     forbidden_items = _check_forbidden_words(
-        draft.content_markdown, ctx.forbidden_words, article_type=article_type
+        draft.content_markdown,
+        ctx.forbidden_words,
+        article_type=article_type,
+        factcheck_mode=policy.factcheck_mode,
     )
     error_count = sum(1 for i in forbidden_items if i.needs_review)
     warn_count = len(forbidden_items) - error_count

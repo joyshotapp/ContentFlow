@@ -229,6 +229,7 @@ async def writing_node(state: dict) -> dict:
         strategy_context=strategy_context,
         target_word_count=task.target_word_count,
         project_id=ctx.project_id,
+        article_type=state.get("article_type") or "知識",
     )
     decisions = _append_decision(
         state, "writing",
@@ -369,7 +370,7 @@ async def factcheck_node(state: dict) -> dict:
     decisions = _append_decision(
         state, "factcheck",
         f"事實查核完成（需審核 {review_count} 項）",
-        "FactCheck Agent：比對 PubMed 文獻",
+        "FactCheck Agent：依政策檢查證據與合規風險",
         "data",
     )
     return {
@@ -668,7 +669,7 @@ async def run_orchestrator(
         # Hero image 生成（best-effort，失敗不阻塞文章儲存）
         try:
             from .hero_image_agent import run_hero_image_agent
-            draft = await run_hero_image_agent(draft, article_type)
+            draft = await run_hero_image_agent(draft, article_type, project_id=project_id)
             task.draft = draft
             logger.info(f"[Orchestrator] Hero image: {draft.hero_image_url or '未生成'}")
         except Exception as _hi_err:

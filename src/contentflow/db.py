@@ -30,6 +30,10 @@ def _ensure_sqlite_columns(conn) -> None:
             "article_schema_json": 'ALTER TABLE articles ADD COLUMN article_schema_json TEXT DEFAULT ""',
             "seo_score": 'ALTER TABLE articles ADD COLUMN seo_score INTEGER',
             "old_slugs": 'ALTER TABLE articles ADD COLUMN old_slugs TEXT DEFAULT "[]"',
+            "content_format_override": 'ALTER TABLE articles ADD COLUMN content_format_override VARCHAR DEFAULT ""',
+            "reviewer_required_override": 'ALTER TABLE articles ADD COLUMN reviewer_required_override BOOLEAN',
+            "custom_disclaimer": 'ALTER TABLE articles ADD COLUMN custom_disclaimer TEXT DEFAULT ""',
+            "extra_schema_types_override_json": 'ALTER TABLE articles ADD COLUMN extra_schema_types_override_json TEXT DEFAULT "[]"',
         },
         "seo_rankings": {
             "keyword": 'ALTER TABLE seo_rankings ADD COLUMN keyword VARCHAR DEFAULT ""',
@@ -44,6 +48,18 @@ def _ensure_sqlite_columns(conn) -> None:
         "projects": {
             "site_contact_email": 'ALTER TABLE projects ADD COLUMN site_contact_email VARCHAR DEFAULT ""',
             "site_blog_path": 'ALTER TABLE projects ADD COLUMN site_blog_path VARCHAR DEFAULT "/blog"',
+            "domain_profile": 'ALTER TABLE projects ADD COLUMN domain_profile VARCHAR DEFAULT "general"',
+            "compliance_profile": 'ALTER TABLE projects ADD COLUMN compliance_profile VARCHAR DEFAULT "general"',
+            "default_content_format": 'ALTER TABLE projects ADD COLUMN default_content_format VARCHAR DEFAULT "knowledge"',
+            "reviewer_role_label": 'ALTER TABLE projects ADD COLUMN reviewer_role_label VARCHAR DEFAULT ""',
+            "disclaimer_template": 'ALTER TABLE projects ADD COLUMN disclaimer_template TEXT DEFAULT ""',
+            "evidence_policy": 'ALTER TABLE projects ADD COLUMN evidence_policy VARCHAR DEFAULT "default"',
+            "image_style_override": 'ALTER TABLE projects ADD COLUMN image_style_override TEXT DEFAULT ""',
+            "extra_schema_types_json": 'ALTER TABLE projects ADD COLUMN extra_schema_types_json TEXT DEFAULT "[]"',
+            "factcheck_mode_override": 'ALTER TABLE projects ADD COLUMN factcheck_mode_override VARCHAR DEFAULT ""',
+        },
+        "authors": {
+            "reviewer_role": 'ALTER TABLE authors ADD COLUMN reviewer_role VARCHAR DEFAULT ""',
         },
     }
 

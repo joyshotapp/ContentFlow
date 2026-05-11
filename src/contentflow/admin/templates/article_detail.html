@@ -247,6 +247,7 @@
         {% endmacro %}
         {{ row('主要關鍵字', art.primary_keyword) }}
         {{ row('主要關鍵字類型', art.article_type) }}
+        {{ row('Effective Policy', policy_preview.domain_label ~ ' / ' ~ policy_preview.compliance_label ~ ' / ' ~ policy_preview.content_format_label) }}
         {{ row('Meta Title', art.meta_title) }}
         {{ row('Slug', art.slug) }}
         <div style="display:flex;gap:8px;">
@@ -329,7 +330,7 @@
         <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;flex-shrink:0;">{{ art.author.name[0] }}</div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;color:#065f46;">{{ art.author.name }}</div>
-          <div style="font-size:11px;color:#6ee7b7;">{{ art.author.title or '' }}{% if art.author.is_medical_reviewer %} · 🩺 醫療審稿{% endif %}</div>
+          <div style="font-size:11px;color:#6ee7b7;">{{ art.author.title or '' }}{% if art.author.reviewer_role %} · {{ art.author.reviewer_role }} reviewer{% elif art.author.is_medical_reviewer %} · medical reviewer{% endif %}</div>
         </div>
         {% if art.eeat_score %}<span class="badge badge-success" style="font-size:11px;">E-E-A-T {{ art.eeat_score }}</span>{% endif %}
       </div>
@@ -338,14 +339,74 @@
         <select name="author_id" style="width:100%;padding:7px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-bottom:8px;">
           <option value="0">（未指派作者）</option>
           {% for a in authors %}
-          <option value="{{ a.id }}" {% if art.author_id == a.id %}selected{% endif %}>{{ a.name }}{% if a.title %} — {{ a.title }}{% endif %}{% if a.is_medical_reviewer %} 🩺{% endif %}</option>
+          <option value="{{ a.id }}" {% if art.author_id == a.id %}selected{% endif %}>{{ a.name }}{% if a.title %} — {{ a.title }}{% endif %}{% if a.reviewer_role %} · {{ a.reviewer_role }}{% elif a.is_medical_reviewer %} · medical{% endif %}</option>
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-ghost btn-sm" style="width:100%;">💾 指派作者</button>
       </form>
+      {% if policy_preview.require_reviewer %}
+      <form action="/admin/articles/{{ art.id }}/set-reviewer" method="post" style="margin-top:10px;">
+        <select name="reviewer_id" style="width:100%;padding:7px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-bottom:8px;">
+          <option value="0">（未指派 {{ policy_preview.reviewer_role_label or '審閱者' }}）</option>
+          {% for a in authors %}
+          <option value="{{ a.id }}" {% if art.reviewer_id == a.id %}selected{% endif %}>{{ a.name }}{% if a.title %} — {{ a.title }}{% endif %}{% if a.reviewer_role %} · {{ a.reviewer_role }}{% elif a.is_medical_reviewer %} · medical{% endif %}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-ghost btn-sm" style="width:100%;">💾 指派{{ policy_preview.reviewer_role_label or '審閱者' }}</button>
+      </form>
+      {% endif %}
       {% if not authors %}
       <div style="font-size:12px;color:#94a3b8;text-align:center;padding:6px 0;">
         尚無作者，請先至 <a href="/admin/authors" style="color:#6366f1;">作者管理</a> 新增
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="cf-card cf-card-p animate-up d5">
+      <div class="section-title" style="margin-bottom:12px;">🧠 Policy Override</div>
+      <div style="font-size:12px;color:#64748b;line-height:1.6;margin-bottom:12px;">此區控制單篇文章覆蓋專案預設 policy。儲存文章時會一併寫入。</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">內容型態覆蓋</label>
+          <select x-ref="contentFormatOverride" style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+            <option value="">沿用系統判斷</option>
+            {% for key, item in content_format_profiles.items() %}
+            <option value="{{ key }}" {% if art.content_format_override == key %}selected{% endif %}>{{ item.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">審閱需求覆蓋</label>
+          <select x-ref="reviewerRequiredOverride" style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;">
+            <option value="inherit" {% if art.reviewer_required_override is none %}selected{% endif %}>沿用專案 policy</option>
+            <option value="required" {% if art.reviewer_required_override == true %}selected{% endif %}>強制需要審閱</option>
+            <option value="not_required" {% if art.reviewer_required_override == false %}selected{% endif %}>此篇不需審閱</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">自訂免責聲明</label>
+          <textarea x-ref="customDisclaimer" rows="4" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;line-height:1.6;resize:vertical;margin-top:4px;">{{ art.custom_disclaimer or '' }}</textarea>
+        </div>
+        <div>
+          <label style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Extra Schema Types</label>
+          <input x-ref="extraSchemaTypesOverride" type="text" value="{{ (art.extra_schema_types_override_json or '[]') | fromjson | join(', ') if art.extra_schema_types_override_json else '' }}" style="width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-top:4px;" placeholder="例如 FAQPage, HowTo">
+        </div>
+      </div>
+      <div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;font-weight:700;letter-spacing:.05em;">Effective Output</div>
+        <div style="margin-top:8px;font-size:12px;color:#334155;line-height:1.7;">
+          Domain：{{ policy_preview.domain_label }}<br>
+          Compliance：{{ policy_preview.compliance_label }}<br>
+          Content Format：{{ policy_preview.content_format_label }}<br>
+          Schema：{{ policy_preview.schema_types | join(', ') }}<br>
+          FactCheck：{{ policy_preview.factcheck_mode }}
+        </div>
+      </div>
+      {% if policy_warnings %}
+      <div style="margin-top:10px;padding:12px;background:#fff7ed;border-radius:8px;border:1px solid #fdba74;display:flex;flex-direction:column;gap:6px;">
+        {% for warning in policy_warnings %}
+        <div style="font-size:12px;color:#9a3412;line-height:1.6;">{{ warning }}</div>
+        {% endfor %}
       </div>
       {% endif %}
     </div>
@@ -445,6 +506,10 @@ async function saveArticle(refs) {
     meta_title: refs.editMetaTitle ? refs.editMetaTitle.value : '',
     meta_description: refs.editMetaDesc ? refs.editMetaDesc.value : '',
     slug: refs.editSlug ? refs.editSlug.value : '',
+    content_format_override: refs.contentFormatOverride ? refs.contentFormatOverride.value : '',
+    reviewer_required_override: refs.reviewerRequiredOverride ? refs.reviewerRequiredOverride.value : 'inherit',
+    custom_disclaimer: refs.customDisclaimer ? refs.customDisclaimer.value : '',
+    extra_schema_types_override: refs.extraSchemaTypesOverride ? refs.extraSchemaTypesOverride.value : '',
   };
   try {
     const resp = await fetch('/admin/articles/{{ art.id }}/save', {

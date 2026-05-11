@@ -13,6 +13,7 @@ from ..config import settings
 from ..llm_client import chat_sync
 from ..models import ResearchReport, ArticleDraft, ArticleOutline, ArticleStatus
 from ..project_context import ProjectContext, load_project_context, project_uses_pubmed
+from ..policy_resolver import ResolvedPolicy, resolve_policy
 
 
 def _chat(system: str, user: str, temperature: float = 0.7) -> str:
@@ -59,8 +60,8 @@ def _hard_truncate_sections(parts: list[str], max_chinese: int) -> list[str]:
     return main
 
 
-def _load_project_author_metadata(project_id: int | None) -> dict[str, str]:
-    """讀取專案作者與醫療審閱者；沒有真實資料時回傳空字串。"""
+def _load_project_author_metadata(project_id: int | None, reviewer_role: str = "") -> dict[str, str]:
+    """讀取專案作者與對應審閱者；沒有真實資料時回傳空字串。"""
     if not project_id:
         return {
             "author_name": "",
@@ -90,8 +91,15 @@ def _load_project_author_metadata(project_id: int | None) -> dict[str, str]:
         logger.warning(f"[Writing Agent] 載入作者資料失敗：{exc}")
         authors = []
 
-    author = next((item for item in authors if not item.is_medical_reviewer), None)
-    reviewer = next((item for item in authors if item.is_medical_reviewer), None)
+    author = next((item for item in authors if not item.is_medical_reviewer and not item.reviewer_role), None)
+    if not author:
+        author = next((item for item in authors if not item.is_medical_reviewer), None)
+
+    reviewer = None
+    if reviewer_role:
+        reviewer = next((item for item in authors if item.reviewer_role == reviewer_role), None)
+    if not reviewer and reviewer_role == "medical":
+        reviewer = next((item for item in authors if item.is_medical_reviewer), None)
 
     return {
         "author_name": author.name if author else "",
@@ -116,9 +124,20 @@ def _format_person_label(name: str, title: str = "", credentials: str = "") -> s
 
 # ── 系統 Prompt 組裝 ──────────────────────────────────────────
 
-def _build_brand_context_from_project(ctx: ProjectContext) -> str:
+def _build_brand_context_from_project(ctx: ProjectContext, policy: ResolvedPolicy) -> str:
     """從專案上下文組裝品牌知識 Prompt"""
-    return ctx.build_brand_prompt()
+    parts = [ctx.build_brand_prompt().rstrip()]
+    if policy.brand_tone_hint:
+        parts.append("# 內容政策")
+        parts.append(f"- 領域：{policy.domain_profile}")
+        parts.append(f"- 合規等級：{policy.compliance_profile}")
+        parts.append(f"- 內容型態：{policy.content_format}")
+        parts.append(f"- 語氣指引：{policy.brand_tone_hint}")
+        if policy.require_reviewer:
+            parts.append(f"- 需專業審閱：{policy.reviewer_role_label}")
+        if policy.disclaimer_template:
+            parts.append("- 文章結尾需附上對應免責聲明")
+    return "\n".join(part for part in parts if part).strip()
 
 
 def _build_research_summary(report: ResearchReport) -> str:
@@ -489,6 +508,7 @@ def _generate_article_schema(
     slug: str,
     word_count: int,
     ctx: ProjectContext,
+    policy: ResolvedPolicy | None = None,
     author_name: str = "",
     author_profile_url: str = "",
 ) -> str:
@@ -497,6 +517,8 @@ def _generate_article_schema(
     包含 headline, description, author, publisher, datePublished 等
     Google 識別文章所需的基本欄位。
     """
+    policy = policy or resolve_policy(ctx)
+
     schema: dict = {
         "@context": "https://schema.org",
         "@type": "BlogPosting",
@@ -527,9 +549,10 @@ def _generate_article_schema(
             publisher["url"] = ctx.brand_url
         schema["publisher"] = publisher
 
-    # YMYL 醫療類加上 MedicalWebPage type
-    if project_uses_pubmed(ctx):
-        schema["@type"] = ["BlogPosting", "MedicalWebPage"]
+    schema_types = list(policy.all_schema_types) or ["BlogPosting"]
+    if policy.compliance_profile == "ymyl_medical" and "MedicalWebPage" not in schema_types:
+        schema_types.append("MedicalWebPage")
+    schema["@type"] = schema_types[0] if len(schema_types) == 1 else schema_types
 
     return json.dumps(schema, ensure_ascii=False, indent=2)
 
@@ -710,14 +733,12 @@ def _inject_cta_blocks(
 def _append_eeat_section(
     content_markdown: str,
     ctx: ProjectContext,
+    policy: ResolvedPolicy | None = None,
     author_metadata: dict[str, str] | None = None,
 ) -> str:
-    """為醫療保健類文章（YMYL）在結尾附加 E-E-A-T 作者聲明佔位區塊。
-
-    - 只對 project_uses_pubmed(ctx) == True 的專案加入
-    - 若文章已有「關於本文審閱」段落則跳過（冪等）
-    """
-    if not project_uses_pubmed(ctx):
+    """依 resolved policy 在文章結尾附加 E-E-A-T / disclaimer 區塊。"""
+    policy = policy or resolve_policy(ctx)
+    if not policy.require_reviewer and not policy.disclaimer_template:
         return content_markdown
     if "關於本文資訊與審閱" in content_markdown or "本文資訊聲明" in content_markdown:
         return content_markdown
@@ -738,12 +759,10 @@ def _append_eeat_section(
     eeat_parts = ["\n\n---\n\n", f"{section_title}\n\n"]
     if author_label:
         eeat_parts.append(f"> **作者：** {author_label}\n>\n")
-    if reviewer_label:
-        eeat_parts.append(f"> **醫療審閱：** {reviewer_label}\n>\n")
-    eeat_parts.append(
-        "> **免責聲明：** 本文醫療保健資訊僅供教育參考，不構成醫療診斷或治療建議。"
-        "如有健康疑慮，請諮詢合格醫師或藥師。\n"
-    )
+    if reviewer_label and policy.reviewer_role_label:
+        eeat_parts.append(f"> **{policy.reviewer_role_label}：** {reviewer_label}\n>\n")
+    if policy.disclaimer_template:
+        eeat_parts.append(f"> **免責聲明：** {policy.disclaimer_template}\n")
     eeat_block = "".join(eeat_parts)
     return content_markdown.rstrip() + eeat_block
 
@@ -756,6 +775,7 @@ async def run_writing_agent(
     writing_architecture: str = "",
     strategy_context: dict | None = None,
     project_id: int | None = None,
+    article_type: str = "知識",
 ) -> ArticleDraft:
     """
     根據研究報告生成完整 SEO 文章。
@@ -771,7 +791,8 @@ async def run_writing_agent(
 
     # 1. 載入專案品牌知識
     ctx = load_project_context(project_id)
-    brand_context = _build_brand_context_from_project(ctx)
+    policy = resolve_policy(ctx, article_type=article_type)
+    brand_context = _build_brand_context_from_project(ctx, policy)
     logger.info(
         f"[Writing Agent] 專案「{ctx.name}」：{len(ctx.writing_rules)} 規範, "
         f"{len(ctx.strategies)} 策略, {len(ctx.legal_terms)} 法規"
@@ -801,7 +822,10 @@ async def run_writing_agent(
     logger.info("[Writing Agent] Step 2/3 — 逐段撰寫文章...")
     content_parts = []
     prev_summary = ""
-    author_metadata = _load_project_author_metadata(project_id)
+    reviewer_role = ""
+    if policy.compliance_profile.startswith("ymyl_"):
+        reviewer_role = policy.compliance_profile.split("_", 1)[1]
+    author_metadata = _load_project_author_metadata(project_id, reviewer_role=reviewer_role)
 
     for i, section in enumerate(sections):
         logger.info(f"[Writing Agent] 撰寫段落 {i+1}/{len(sections)}: {section.get('h2', '')}")
@@ -851,7 +875,7 @@ async def run_writing_agent(
         logger.info("[Writing Agent] HowTo Schema：無步驟型段落，跳過")
 
     # 8. E-E-A-T 作者聲明（醫療保健類）
-    full_content = _append_eeat_section(full_content, ctx, author_metadata)
+    full_content = _append_eeat_section(full_content, ctx, policy, author_metadata)
     word_count = len(full_content)
 
     # 9. Article/BlogPosting JSON-LD
@@ -861,6 +885,7 @@ async def run_writing_agent(
         slug=slug,
         word_count=word_count,
         ctx=ctx,
+        policy=policy,
         author_name=author_metadata.get("author_name", ""),
         author_profile_url=author_metadata.get("author_profile_url", ""),
     )

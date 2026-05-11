@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 import re
 from loguru import logger
 
+from .policy_resolver import resolve_policy
+
 
 @dataclass
 class ProjectContext:
@@ -18,6 +20,15 @@ class ProjectContext:
     brand_description: str = ""
     industry: str = ""
     writing_principles: str = ""
+    domain_profile: str = ""
+    compliance_profile: str = ""
+    default_content_format: str = ""
+    reviewer_role_label: str = ""
+    disclaimer_template: str = ""
+    evidence_policy: str = ""
+    image_style_override: str = ""
+    extra_schema_types_json: str = "[]"
+    factcheck_mode_override: str = ""
     locale: str = "zh-tw"
     serp_gl: str = "tw"
     serp_hl: str = "zh-tw"
@@ -175,6 +186,15 @@ def load_project_context(
                 brand_description=project.brand_description or "",
                 industry=project.industry or "",
                 writing_principles=project.writing_principles or "",
+                domain_profile=project.domain_profile or "",
+                compliance_profile=project.compliance_profile or "",
+                default_content_format=project.default_content_format or "",
+                reviewer_role_label=project.reviewer_role_label or "",
+                disclaimer_template=project.disclaimer_template or "",
+                evidence_policy=project.evidence_policy or "",
+                image_style_override=project.image_style_override or "",
+                extra_schema_types_json=project.extra_schema_types_json or "[]",
+                factcheck_mode_override=project.factcheck_mode_override or "",
                 locale=project.locale or "zh-tw",
                 serp_gl=project.serp_gl or "tw",
                 serp_hl=project.serp_hl or "zh-tw",
@@ -227,33 +247,5 @@ def load_project_context(
 
 
 def project_uses_pubmed(ctx: ProjectContext) -> bool:
-    """僅健康/醫療相關專案預設啟用 PubMed。"""
-    haystack = "\n".join(
-        filter(
-            None,
-            [
-                ctx.industry,
-                ctx.name,
-                ctx.brand_name,
-                ctx.brand_description,
-                ctx.writing_principles,
-                *ctx.writing_rules,
-                *ctx.strategies,
-                *ctx.legal_terms,
-            ],
-        )
-    ).lower()
-    health_markers = (
-        "保健",
-        "健康",
-        "醫療",
-        "生技",
-        "營養",
-        "藥",
-        "health",
-        "medical",
-        "wellness",
-        "nutrition",
-        "biotech",
-    )
-    return any(marker in haystack for marker in health_markers)
+    """由 policy resolver 決定是否啟用 PubMed。"""
+    return resolve_policy(ctx).use_pubmed

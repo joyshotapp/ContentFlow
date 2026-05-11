@@ -39,6 +39,15 @@ class Project(Base):
     site_blog_path = Column(String, default="/blog")
     industry = Column(String, default="")
     writing_principles = Column(Text, default="")
+    domain_profile = Column(String, default="general")
+    compliance_profile = Column(String, default="general")
+    default_content_format = Column(String, default="knowledge")
+    reviewer_role_label = Column(String, default="")
+    disclaimer_template = Column(Text, default="")
+    evidence_policy = Column(String, default="default")
+    image_style_override = Column(Text, default="")
+    extra_schema_types_json = Column(Text, default="[]")
+    factcheck_mode_override = Column(String, default="")
 
     # SERP & 地區
     locale = Column(String, default="zh-tw")
@@ -236,6 +245,10 @@ class Article(Base):
     article_schema_json = Column(Text, default="")  # Article/BlogPosting JSON-LD
     paa_questions_json = Column(Text, default="[]")  # People Also Ask 問題列表（持久化）
     seo_score = Column(Integer, nullable=True)      # 最近一次 SEO 檢查分數
+    content_format_override = Column(String, default="")
+    reviewer_required_override = Column(Boolean, nullable=True)
+    custom_disclaimer = Column(Text, default="")
+    extra_schema_types_override_json = Column(Text, default="[]")
     # Phase 5/21 — E-E-A-T & 優化迭代
     author_id = Column(Integer, ForeignKey("authors.id"), nullable=True)
     reviewer_id = Column(Integer, ForeignKey("authors.id"), nullable=True)  # 醫療審閱者
@@ -539,6 +552,7 @@ class Author(Base):
     profile_url = Column(String, default="")      # 個人頁面 URL
     photo_url = Column(String, default="")        # 大頭照
     is_medical_reviewer = Column(Boolean, default=False)  # 是否為醫療審閱者
+    reviewer_role = Column(String, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="authors")

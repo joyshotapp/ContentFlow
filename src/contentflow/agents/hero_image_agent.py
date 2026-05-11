@@ -25,6 +25,8 @@ from loguru import logger
 
 from ..config import settings
 from ..models import ArticleDraft
+from ..policy_resolver import resolve_policy
+from ..project_context import load_project_context
 
 
 # ── 常數 ─────────────────────────────────────────────────────
@@ -63,29 +65,23 @@ def _slug_to_r2_key(slug: str, suffix: str = "hero") -> str:
     return f"images/{safe}/{suffix}.webp"
 
 
-def _build_prompt(title: str, primary_keyword: str, article_type: str) -> str:
+def _build_prompt(title: str, primary_keyword: str, article_type: str, project_id: int | None = None) -> str:
     """根據文章主題建立 Gemini 生圖 prompt。"""
+    ctx = load_project_context(project_id) if project_id else None
+    policy = resolve_policy(ctx, article_type=article_type) if ctx else None
+
     style_guide = (
-        "Professional medical illustration style. "
-        "Clean, modern, clinical atmosphere. "
-        "Soft blue-white color palette. "
-        "No text, no watermarks, no people's faces. "
-        "Suitable for a health knowledge website. "
-        "High quality, 16:9 aspect ratio banner."
+        (policy.hero_image_style if policy else "Professional editorial illustration. Balanced modern composition.")
+        + " No text, no watermarks, no obvious logos, no distorted anatomy, high quality 16:9 banner."
     )
 
-    type_hints = {
-        "知識": "educational infographic style, anatomical diagram elements",
-        "情境": "lifestyle photography style, natural warm lighting, daily life scene",
-        "節慶": "seasonal festive elements, warm colors",
-        "product": "product photography style, clean white background, studio lighting",
-    }
-    type_hint = type_hints.get(article_type, "medical illustration")
+    type_hint = policy.hero_image_type_hint if policy else "editorial illustration"
+    domain_hint = policy.domain_profile if policy else "general"
 
     keyword_clean = primary_keyword.replace("_", " ") if primary_keyword else title
 
     return (
-        f"Create a hero banner image for a health article titled '{title}'. "
+        f"Create a hero banner image for a {domain_hint} article titled '{title}'. "
         f"Main topic: {keyword_clean}. "
         f"Visual style: {type_hint}. "
         f"{style_guide}"
@@ -119,6 +115,7 @@ async def generate_hero_image(
     primary_keyword: str = "",
     article_type: str = "知識",
     slug: str = "",
+    project_id: int | None = None,
 ) -> Optional[str]:
     """
     呼叫 Gemini 生成 hero image，上傳至 R2，回傳公開 URL。
@@ -130,7 +127,7 @@ async def generate_hero_image(
         logger.warning("[HeroImage] GEMINI_API_KEY 未設定，跳過生圖")
         return None
 
-    prompt = _build_prompt(title, primary_keyword, article_type)
+    prompt = _build_prompt(title, primary_keyword, article_type, project_id=project_id)
     r2_key = _slug_to_r2_key(slug or re.sub(r"[^a-z0-9\-]", "", title.lower()[:40].replace(" ", "-")))
 
     logger.info(f"[HeroImage] 開始生成：「{title}」")
@@ -181,7 +178,7 @@ async def generate_hero_image(
         return None
 
 
-async def run_hero_image_agent(draft: ArticleDraft, article_type: str = "知識") -> ArticleDraft:
+async def run_hero_image_agent(draft: ArticleDraft, article_type: str = "知識", project_id: int | None = None) -> ArticleDraft:
     """
     為文章草稿生成 hero image 並更新 draft.hero_image_url。
 
@@ -197,6 +194,7 @@ async def run_hero_image_agent(draft: ArticleDraft, article_type: str = "知識"
         primary_keyword=getattr(draft, "primary_keyword", "") or "",
         article_type=article_type,
         slug=draft.slug or "",
+        project_id=project_id,
     )
     if url:
         draft.hero_image_url = url
