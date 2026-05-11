@@ -55,6 +55,7 @@ ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造�
 
 ## 目錄
 
+- [產品定位與商業模式](#產品定位與商業模式)
 - [系統需求](#系統需求)
 - [本地開發環境建置](#本地開發環境建置)
 - [環境變數說明](#環境變數說明)
@@ -67,6 +68,140 @@ ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造�
 - [資料庫設計](#資料庫設計)
 - [已知架構技術債](#已知架構技術債)
 - [常見問題 FAQ](#常見問題-faq)
+
+---
+
+## 產品定位與商業模式
+
+### 這款產品現在代表什麼？
+
+ContentFlow 已完成「Phase 0–6 產品獨立化」，從「GoodBone 網站的專屬工具」升級為**可對外服務多個客戶的 SEO AI 平台**。
+
+具體完成的邊界包含：
+- 每個客戶（Project）有獨立的品牌設定、Connector（WordPress / ForgeBase 帳號）、RBAC 角色、審核流程、使用量紀錄
+- 平台層與客戶端站台完全分離（`control-plane` vs `managed-site` 模式）
+- GoodBone 從「硬寫在系統裡」變成「第一個掛上去、已驗證的租戶」，而非產品邊界本身
+- Connector 金鑰以 Fernet 加密存 DB（`cfsec:v1:` prefix）
+- Onboarding checklist、Approval history、Audit trail、Usage metering 基礎全部到位
+
+---
+
+### 端到端文章生命週期
+
+```
+1. 管理員輸入關鍵字（或排程自動觸發）
+        ↓
+2. Research Agent
+   → 抓 SERP 前 10 競品結構 + PAA
+   → 抓 PubMed 學術佐證（醫療類專案自動啟用）
+        ↓
+3. Strategy Agent
+   → 搜尋意圖分析、文章架構、FAQ 骨架
+        ↓
+4. Writing Agent（三階段：大綱 → 段落 → 完整稿）
+   → 含 JSON-LD Schema（FAQ / HowTo / Article）
+        ↓
+5. SEO Check（規則引擎，零 LLM 成本）→ 低於 85 分退回 SEO QA 修稿（最多 3 輪）
+        ↓
+6. FactCheck Agent → 法規詞庫比對 + 學術陳述核實
+        ↓
+7. Budget Guard → 確認 LLM 呼叫 ≤ 15 次 / 成本 ≤ $2.00
+        ↓
+8. 草稿進 Admin 後台等人工審閱（或達標自動發布）
+        ↓
+9. 發布至 WordPress / ForgeBase + Google Indexing API 主動送交收錄
+        ↓
+10. 排程器每日同步 GSC 排名 + GA4 → 回寫 DB → 驅動下一輪策略
+```
+
+---
+
+### 可視為一款對外獨立產品嗎？
+
+**是，但有條件。**
+
+#### 已具備的條件 ✅
+
+| 項目 | 說明 |
+|------|------|
+| 多租戶架構 | 多個 Project 共用平台，資料完全隔離 |
+| RBAC 角色控管 | Admin / Reviewer / Editor，客戶間資料互不可見 |
+| Connector 加密 | API 金鑰 Fernet 加密存 DB |
+| Onboarding checklist | 新客戶設定引導流程 |
+| 成本計量基礎 | 每篇文章 LLM 成本有完整記錄 |
+| 審核流程 | Approval history + Audit trail |
+| 部署自動化 | `setup_remote.sh` 一鍵部署，含等待迴圈與健康驗證 |
+| 正式 HTTPS 上線 | `goodbone.com.tw` 已驗證為第一個租戶 |
+| 匿名健康探針 | `GET /health` 無需認證，供 Docker / 外部監控使用 |
+
+#### 目前仍缺少（對外商業化）⚠️
+
+| 缺口 | 影響 |
+|------|------|
+| 無自助註冊 / 付費頁面 | 每個客戶需手動開通，無法規模化 |
+| 無 Stripe / 計費整合 | 成本有記錄，但無法自動開發票或限額控管 |
+| 無客戶獨立 subdomain | 所有租戶共用同一網址空間 |
+| WordPress connector 需手動設定 | 技術門檻偏高，非技術型客戶難上手 |
+| 無公開說明文件 / 官網 | 潛在客戶無法自行了解與評估 |
+
+---
+
+### 適合的商業模式
+
+#### 模式一：代操服務（最快變現，最符合現狀）
+
+```
+客戶付月費 → 你幫他跑 ContentFlow → 每月交付 N 篇 SEO 文章 + 成效報告
+```
+
+- **定價參考**：NT$5,000–$30,000/月（依篇數與產業）
+- **你負責**：開設專案、調整品牌設定、審核草稿、確認發布
+- **客戶只看**：排名變化、流量成長、月報
+- **優點**：現在就可以做，系統完全夠用，GoodBone 是活生生的 case study
+- **適合客戶**：診所、律師事務所、電商品牌、補習班（有 SEO 需求但無技術能力）
+
+#### 模式二：白牌 / 授權給 SEO 代理商
+
+```
+SEO 代理商付平台費 → 用 ContentFlow 服務他們自己的多個客戶
+```
+
+- **定價參考**：NT$50,000–$150,000/月（平台使用費）
+- 代理商自行管理各自的 Project，你只維護平台基礎設施
+- **優點**：一個代理商 = 10–30 個最終客戶，收入倍增不等比增加人力
+- **需要補強**：白牌品牌設定、多語系支援、代理商專屬管理視圖
+
+#### 模式三：垂直領域 SaaS（中期目標）
+
+針對特定產業深度優化，建立競爭壁壘：
+
+```
+醫療診所版 ContentFlow
+  → 內建 PubMed 整合 + 台灣醫療法規詞庫（已完成）
+  → 內建 GoodBone 驗證過的 SEO 規則（已完成）
+  → 月費 NT$8,000/診所
+```
+
+- **差異化優勢**：一般 AI 寫文工具沒有台灣醫療法規合規 + 學術佐證 + 骨科/復健 SEO 知識庫
+- GoodBone 的真實排名成效就是最強的銷售工具
+- 可複製模式到牙科、眼科、中醫等鄰近市場
+
+#### 模式四：B2B API（長期）
+
+開放 `/api/v1/articles/generate` 給其他平台串接，按篇計費（類似 OpenAI API 的計費模型）。
+
+---
+
+### 建議的優先順序
+
+| 階段 | 時間 | 行動 |
+|------|------|------|
+| **立刻** | 現在 | 用現有系統接第 2 個真實客戶（代操），驗證多租戶流程 |
+| **短期** | 1 個月 | 做一頁式官網 + 定價頁，讓潛在客戶能自行了解 |
+| **中期** | 3 個月 | 串接 Stripe，讓付款與配額管理自動化 |
+| **長期** | 6 個月 | 自助註冊流程，走向真正的 SaaS |
+
+> GoodBone 的實際 SEO 成效（排名、流量、文章品質）是這款產品最有力的市場證明。每一篇已發布的文章都是可展示的 demo。
 
 ---
 
@@ -297,7 +432,8 @@ uvicorn contentflow.api:app --reload --port 8000
 - Scheduler：獨立 service，21 個排程任務，heartbeat 機制確保真實活性
 - 已發布文章：23 篇（截至 2026-05）
 - 自動發布：Project id=2「好骨科診所」已啟用，最低分數 85 分
-- 建置驗證：`315 passed`，`/health` 回傳 `status=ok`、`scheduler=running`
+- 建置驗證：`398 passed`，`/health` 回傳 `status=ok`、`scheduler=running`
+- 最新 commit：`bb21fe9`（匿名 /health 探針 + 強固化部署腳本）
 
 ---
 
@@ -334,7 +470,7 @@ pytest tests/test_seo_check_agent.py -v
 | `test_image_agent.py` | Image Agent Prompt 生成 |
 | `test_pipeline_utils.py` | Pipeline 工具函式 |
 
-> 目前 315 個測試通過（`asyncio_mode = "auto"`）。`AgentOps` 已改為可選依賴，不再阻塞測試收集。
+> 目前 398 個測試通過（`asyncio_mode = "auto"`）。`AgentOps` 已改為可選依賴，不再阻塞測試收集。
 
 ---
 
@@ -432,7 +568,7 @@ ContentFlow/
 │   ├── migrate_sqlite_to_pg.py  # SQLite → PostgreSQL 遷移
 │   └── verify_db.py             # DB 健康檢查
 │
-└── tests/                       # pytest 測試套件（315 個測試）
+└── tests/                       # pytest 測試套件（398 個測試）
 ```
 
 ---
@@ -741,3 +877,4 @@ Admin → 知識庫（`/admin/knowledge`）可查看 Reflective Agent 自動整�
 ---
 
 *詳細技術架構請參閱 [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md)。*
+*產品獨立性評估請參閱 [PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md](PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md)。*
