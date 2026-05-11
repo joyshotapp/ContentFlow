@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from contentflow.admin.app import admin_app
-from contentflow.models.database import Base, KnowledgeEntry, Project, StrategicFeedbackLog, StrategicPlan
+from contentflow.models.database import AgentDecisionLog, Article, Base, KnowledgeEntry, Project, StrategicFeedbackLog, StrategicPlan
 
 
 client = TestClient(admin_app)
@@ -199,6 +199,74 @@ def test_health_page_renders_operations_dashboard_when_logged_in():
     assert "Active Alerts" in response.text
     assert "GSC 同步 超過新鮮度門檻" in response.text
     assert "成效健康" in response.text
+
+
+def test_agents_page_renders_when_logged_in():
+    class _FakeQuery:
+        def __init__(self, rows=None, scalar_value=0):
+            self._rows = rows or []
+            self._scalar_value = scalar_value
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def group_by(self, *args, **kwargs):
+            return self
+
+        def limit(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+        def scalar(self):
+            return self._scalar_value
+
+    class _Decision:
+        def __init__(self, step, confidence):
+            self.step = step
+            self.confidence = confidence
+
+    class _FakeDB:
+        def query(self, *entities):
+            if len(entities) == 5:
+                return _FakeQuery([])
+            if len(entities) == 1 and entities[0] is Project:
+                return _FakeQuery([])
+            if len(entities) == 1:
+                entity = entities[0]
+                if entity is Article:
+                    return _FakeQuery([])
+                if entity is AgentDecisionLog:
+                    return _FakeQuery([
+                        _Decision("research", "high"),
+                        _Decision("writing", "medium"),
+                    ])
+            return _FakeQuery([], 0)
+
+        def close(self):
+            return None
+
+    with patch("contentflow.admin.app._check_login", return_value=True), \
+         patch("contentflow.admin.app._db", return_value=_FakeDB()), \
+         patch("contentflow.admin.app._get_agent_cost_metrics", return_value={
+             "avg_run_cost": None,
+             "monthly_cost": 0,
+             "total_cost": 0,
+             "run_costs": {},
+         }):
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert "Agent 執行中心" in response.text
+    assert "觸發 Pipeline" in response.text
+    assert "Pipeline 執行紀錄" in response.text
 
 
 def test_save_project_goals_persists_goal_weight_schema():
