@@ -187,6 +187,40 @@
   </div>
   {% endif %}
 
+  {% if recent_health_snapshots %}
+  <div class="cf-card cf-card-p animate-up" style="margin-bottom:20px;">
+    <div class="section-title" style="margin-bottom:12px;">🗂️ Snapshot History</div>
+    <div style="overflow-x:auto;">
+      <table class="cf-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>狀態</th>
+            <th>資料過期源</th>
+            <th>Scheduler</th>
+            <th>Pipeline</th>
+            <th>Outcome</th>
+            <th>警報數</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for snap in recent_health_snapshots %}
+          <tr>
+            <td>{{ snap.snapshot_date.strftime('%Y-%m-%d') if snap.snapshot_date else '—' }}</td>
+            <td>{{ snap.overall_status }}</td>
+            <td>{{ snap.stale_sources }}</td>
+            <td>{{ '%.0f%%'|format(snap.scheduler_success_rate) if snap.scheduler_success_rate is not none else '—' }}</td>
+            <td>{{ '%.0f%%'|format(snap.pipeline_success_rate) if snap.pipeline_success_rate is not none else '—' }}</td>
+            <td>{{ '%.0f%%'|format(snap.outcome_improved_rate) if snap.outcome_improved_rate is not none else '—' }}</td>
+            <td>{{ snap.alert_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
     <div class="cf-card animate-up">
       <div style="padding:16px 20px;border-bottom:1px solid var(--cf-border);">

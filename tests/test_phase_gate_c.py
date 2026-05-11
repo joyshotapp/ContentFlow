@@ -187,13 +187,14 @@ def test_with_retry_failure_writes_failed_log(monkeypatch):
 # ── 5. cron 排程數量確認 ──────────────────────────────────────────────────
 
 def test_scheduler_has_20_jobs_defined():
-    """scheduler.py 中應定義 21 個 job，包含 scheduler heartbeat。"""
+    """scheduler.py 中應定義 22 個 job，包含 operations snapshot 與 scheduler heartbeat。"""
     expected_job_ids = {
         "gsc_sync",
         "ga4_sync",
         "trends_sync",
         "gbp_sync",
         "outcome_backfill",
+        "operations_snapshot",
         "sched_publish",
         "publish_verify",
         "auto_pipeline",
@@ -214,7 +215,7 @@ def test_scheduler_has_20_jobs_defined():
     import inspect
     from contentflow import scheduler as sched_mod
     src = inspect.getsource(sched_mod.schedule_all_jobs)
-    assert src.count("scheduler.add_job(") == 21
+    assert src.count("scheduler.add_job(") == 22
     for jid in expected_job_ids:
         assert jid in src, f"schedule_all_jobs 缺少 job id: {jid}"
 

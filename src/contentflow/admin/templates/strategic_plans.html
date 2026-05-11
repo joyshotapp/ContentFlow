@@ -6,7 +6,7 @@
 {% block content %}
 
 <!-- ── Stats ─────────────────────────────────────────────────── -->
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;" class="animate-up">
   <div class="cf-card cf-card-p cf-card-hover">
     <div style="display:flex;align-items:center;gap:10px;">
       <div class="stat-icon stat-icon-violet" style="width:38px;height:38px;">
@@ -40,6 +40,23 @@
       </div>
     </div>
   </div>
+  <div class="cf-card cf-card-p cf-card-hover">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="stat-icon stat-icon-rose" style="width:38px;height:38px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      </div>
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f172a;">{{ pending_review_actions_total }}</div>
+        <div style="font-size:11px;color:#94a3b8;">待人工核決 action</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;" class="animate-up">
+  <a href="?page=1" class="btn-outline" style="font-size:12px;{% if not review_only %}background:#0f172a;color:#fff;border-color:#0f172a;{% endif %}">全部計畫</a>
+  <a href="?page=1&review_only=1" class="btn-outline" style="font-size:12px;{% if review_only %}background:#0f172a;color:#fff;border-color:#0f172a;{% endif %}">只看待核決</a>
+  <span style="font-size:12px;color:#64748b;">可人工介入 {{ reviewable_actions_total }} 項，當前待核決 {{ pending_review_actions_total }} 項</span>
 </div>
 
 <!-- ── Plan list ──────────────────────────────────────────────── -->
@@ -67,6 +84,9 @@
     <div style="display:flex;align-items:center;gap:8px;">
       {% if plan.executed_count is not none and plan.total_count %}
       <div style="font-size:12px;color:#64748b;">{{ plan.executed_count }}/{{ plan.total_count }}</div>
+      {% endif %}
+      {% if item.pending_review_count > 0 %}
+      <span class="badge badge-warning" style="font-size:10.5px;">待核決 {{ item.pending_review_count }}</span>
       {% endif %}
       {% if plan.status == 'completed' %}<span class="badge badge-success" style="font-size:10.5px;">✓ 完成</span>
       {% elif plan.status == 'partial' %}<span class="badge badge-warning" style="font-size:10.5px;">⚡ 部分</span>
@@ -125,9 +145,47 @@
             {% if a.priority %}
             <span style="font-weight:700;color:{% if a.priority >= 8 %}#ef4444{% elif a.priority >= 5 %}#f59e0b{% else %}#10b981{% endif %};">{{ a.priority }}</span>
             {% else %}—{% endif %}
+            {% if a.get('goal_weighted_utility') is not none %}
+            <div style="margin-top:6px;font-size:10.5px;color:#2563eb;font-weight:700;">goal {{ '%.3f'|format(a.get('goal_weighted_utility')) }}</div>
+            {% endif %}
           </td>
           <td style="font-size:12px;color:#64748b;max-width:360px;">
             <div>{{ a.reason or a.message or '—' }}</div>
+            {% if a.business_goal_alignment %}
+            <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+              {% for goal in a.business_goal_alignment %}
+              <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:10.5px;font-weight:600;">
+                {{ goal.label }} {{ '%.2f'|format(goal.contribution) }}
+              </span>
+              {% endfor %}
+            </div>
+            {% endif %}
+            <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              {% set review_status = a.review_status or 'approved' %}
+              {% if review_status == 'approved' %}
+              <span class="badge badge-success" style="font-size:10.5px;">已核准</span>
+              {% elif review_status == 'rejected' %}
+              <span class="badge badge-danger" style="font-size:10.5px;">已拒絕</span>
+              {% elif review_status == 'deferred' %}
+              <span class="badge badge-warning" style="font-size:10.5px;">已延後</span>
+              {% else %}
+              <span class="badge badge-warning" style="font-size:10.5px;">待核決</span>
+              {% endif %}
+
+              {% if a.execution_status == 'executed' %}
+              <span class="badge badge-success" style="font-size:10.5px;background:#dcfce7;color:#166534;">已執行</span>
+              {% elif a.execution_status == 'failed' %}
+              <span class="badge badge-danger" style="font-size:10.5px;">執行失敗</span>
+              {% elif a.execution_status == 'skipped' %}
+              <span class="badge badge-neutral" style="font-size:10.5px;">已略過</span>
+              {% endif %}
+            </div>
+            {% if a.review_reason %}
+            <div style="margin-top:6px;font-size:10.5px;color:#92400e;line-height:1.5;">覆核原因：{{ a.review_reason }}</div>
+            {% endif %}
+            {% if a.review_note %}
+            <div style="margin-top:4px;font-size:10.5px;color:#475569;line-height:1.5;">覆核註記：{{ a.review_note }}</div>
+            {% endif %}
             {% if a.evidence %}
             {% set ev = a.evidence %}
             <details style="margin-top:8px;">
@@ -164,6 +222,60 @@
                 </div>
               </div>
             </details>
+            {% endif %}
+            {% if a.preview %}
+            {% set pv = a.preview %}
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;font-size:11.5px;color:#0f766e;font-weight:600;list-style:none;">查看 preview</summary>
+              <div style="margin-top:8px;padding:10px 12px;border:1px solid #ccfbf1;border-radius:10px;background:#f0fdfa;">
+                {% if pv.error %}
+                <div style="font-size:11.5px;color:#b91c1c;">{{ pv.error }}</div>
+                {% elif pv.preview_type == 'refresh' %}
+                <div style="font-size:11.5px;color:#0f172a;font-weight:700;">refresh 預覽 · {{ pv.recommendation }} · freshness {{ pv.freshness_score }}</div>
+                {% if pv.gaps %}
+                <div style="margin-top:6px;font-size:10.5px;color:#0f766e;">缺口：{{ pv.gaps | map(attribute='gap_type') | join('、') }}</div>
+                {% endif %}
+                <div style="margin-top:8px;font-size:10.5px;color:#334155;line-height:1.6;white-space:pre-wrap;">{{ pv.diff or pv.preview_excerpt }}</div>
+                {% elif pv.preview_type == 'optimize_meta' %}
+                <div style="font-size:11.5px;color:#0f172a;font-weight:700;">optimize meta 預覽</div>
+                <div style="margin-top:8px;font-size:10.5px;color:#475569;line-height:1.7;">
+                  <div><strong>舊 Title：</strong>{{ pv.old_meta_title or '—' }}</div>
+                  <div><strong>新 Title：</strong>{{ pv.new_meta_title or '—' }}</div>
+                  <div style="margin-top:4px;"><strong>舊 Description：</strong>{{ pv.old_meta_description or '—' }}</div>
+                  <div><strong>新 Description：</strong>{{ pv.new_meta_description or '—' }}</div>
+                </div>
+                {% elif pv.preview_type == 'inject_internal_links' %}
+                <div style="font-size:11.5px;color:#0f172a;font-weight:700;">internal link 預覽</div>
+                <div style="margin-top:8px;font-size:10.5px;color:#475569;line-height:1.7;white-space:pre-wrap;">{{ pv.suggestions | tojson(indent=2) }}</div>
+                {% else %}
+                <div style="font-size:11.5px;color:#475569;">{{ pv.summary or '尚無 preview 內容' }}</div>
+                {% endif %}
+              </div>
+            </details>
+            {% endif %}
+            {% if plan.status in ['pending', 'partial'] %}
+            <form method="post" action="/admin/strategic-plans/{{ plan.id }}/actions/{{ loop.index0 }}/preview" style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <input type="hidden" name="redirect_to" value="/admin/strategic-plans?page={{ page_num }}{% if review_only %}&review_only=1{% endif %}">
+              <button type="submit" class="btn-outline" style="font-size:11px;padding:6px 10px;border-color:#0f766e;color:#0f766e;">產生 preview</button>
+            </form>
+            <form method="post" action="/admin/strategic-plans/{{ plan.id }}/actions/{{ loop.index0 }}/review" style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <input type="hidden" name="redirect_to" value="/admin/strategic-plans?page={{ page_num }}{% if review_only %}&review_only=1{% endif %}">
+              <input type="hidden" name="feedback_type" value="review">
+              <input type="text" name="review_note" placeholder="覆核註記（可留空）" value="{{ a.review_note or '' }}" style="flex:1;min-width:180px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:11px;">
+              <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:#475569;">
+                <input type="checkbox" name="promote_to_asset" value="on"> 回流學習
+              </label>
+              <select name="asset_type" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:11px;color:#334155;">
+                <option value="knowledge_entry">Knowledge</option>
+                <option value="writing_rule">Writing rule</option>
+              </select>
+              <button type="submit" name="review_status" value="approved" class="btn-outline" style="font-size:11px;padding:6px 10px;border-color:#16a34a;color:#166534;">核准</button>
+              <button type="submit" name="review_status" value="deferred" class="btn-outline" style="font-size:11px;padding:6px 10px;border-color:#d97706;color:#92400e;">延後</button>
+              <button type="submit" name="review_status" value="rejected" class="btn-outline" style="font-size:11px;padding:6px 10px;border-color:#dc2626;color:#991b1b;">拒絕</button>
+              {% if a.review_required %}
+              <button type="submit" name="review_status" value="pending" class="btn-outline" style="font-size:11px;padding:6px 10px;">回待核決</button>
+              {% endif %}
+            </form>
             {% endif %}
           </td>
         </tr>

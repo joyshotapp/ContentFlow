@@ -3,12 +3,26 @@ from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from contentflow.admin.app import admin_app
-from contentflow.models.database import StrategicPlan
+from contentflow.models.database import Base, KnowledgeEntry, Project, StrategicFeedbackLog, StrategicPlan
 
 
 client = TestClient(admin_app)
+
+
+def _make_threadsafe_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    return Session(), engine
 
 
 def test_chat_api_requires_login():
@@ -185,3 +199,136 @@ def test_health_page_renders_operations_dashboard_when_logged_in():
     assert "Active Alerts" in response.text
     assert "GSC 同步 超過新鮮度門檻" in response.text
     assert "成效健康" in response.text
+
+
+def test_save_project_goals_persists_goal_weight_schema():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="testbrand", name="測試品牌")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+                "/settings/project/goals/save",
+                data={
+                    "project_id": project_id,
+                    "primary_goal": "conversion",
+                    "secondary_goal": "authority",
+                    "goal_awareness_weight": "0.25",
+                    "goal_conversion_weight": "0.45",
+                    "goal_lead_capture_weight": "0.15",
+                    "goal_authority_weight": "0.15",
+                    "priority_topics": "膝蓋骨刺\n退化性關節炎",
+                    "money_pages": "/products/joint-care",
+                },
+                follow_redirects=False,
+            )
+
+        session.expire_all()
+        saved = json.loads(session.get(Project, project_id).business_goals)
+        assert response.status_code == 303
+        assert saved["weights"]["awareness"] == 0.25
+        assert saved["weights"]["conversion"] == 0.45
+        assert saved["weights"]["lead_capture"] == 0.15
+        assert saved["weights"]["authority"] == 0.15
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_preview_strategic_action_persists_preview_and_feedback_log():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="preview-brand", name="測試品牌")
+        session.add(project)
+        session.flush()
+        plan = StrategicPlan(
+            project_id=project.id,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {"action": "refresh", "article_id": 1, "priority": 2}
+            ], ensure_ascii=False),
+            context_snapshot=json.dumps({"article_lookup": {"1": {"publish_path": "/products/joint-care"}}}, ensure_ascii=False),
+            total_count=1,
+            executed_count=0,
+            status="pending",
+        )
+        session.add(plan)
+        session.commit()
+        plan_id = plan.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session), \
+             patch("contentflow.admin.app._generate_action_preview", new=AsyncMock(return_value={"preview_type": "refresh", "diff": "demo"})):
+            response = client.post(
+                f"/strategic-plans/{plan_id}/actions/0/preview",
+                data={"redirect_to": "/admin/strategic-plans"},
+                follow_redirects=False,
+            )
+
+        session.expire_all()
+        saved_actions = json.loads(session.get(StrategicPlan, plan_id).actions_json)
+        feedback_logs = session.query(StrategicFeedbackLog).all()
+        assert response.status_code == 303
+        assert saved_actions[0]["preview"]["diff"] == "demo"
+        assert len(feedback_logs) == 1
+        assert feedback_logs[0].feedback_type == "preview"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_review_strategic_action_promotes_knowledge_feedback():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(slug="review-brand", name="測試品牌")
+        session.add(project)
+        session.flush()
+        plan = StrategicPlan(
+            project_id=project.id,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {"action": "refresh", "article_id": 1, "priority": 2, "review_required": True}
+            ], ensure_ascii=False),
+            context_snapshot=json.dumps({}, ensure_ascii=False),
+            total_count=1,
+            executed_count=0,
+            status="pending",
+        )
+        session.add(plan)
+        session.commit()
+        plan_id = plan.id
+
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+            f"/strategic-plans/{plan_id}/actions/0/review",
+                data={
+                    "review_status": "approved",
+                    "review_note": "這個 refresh 需保留產品頁 CTA",
+                    "promote_to_asset": "on",
+                    "asset_type": "knowledge_entry",
+                    "feedback_type": "review",
+                    "redirect_to": "/admin/strategic-plans",
+                },
+                follow_redirects=False,
+            )
+
+        session.expire_all()
+        saved_actions = json.loads(session.get(StrategicPlan, plan_id).actions_json)
+        feedback_logs = session.query(StrategicFeedbackLog).all()
+        knowledge_entries = session.query(KnowledgeEntry).all()
+        assert response.status_code == 303
+        assert saved_actions[0]["review_status"] == "approved"
+        assert len(feedback_logs) == 1
+        assert feedback_logs[0].promoted_asset_type == "knowledge_entry"
+        assert len(knowledge_entries) == 1
+        assert "CTA" in knowledge_entries[0].pattern
+    finally:
+        session.close()
+        engine.dispose()

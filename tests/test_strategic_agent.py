@@ -13,10 +13,13 @@ from contentflow.models.database import (
 from contentflow.agents.strategic_agent import (
     _calculate_generate_capacity,
     _attach_action_evidence,
+    _attach_action_controls,
     _build_action_outcome_stats,
     _collect_project_context,
     _fallback_plan,
     _normalize_plan_result,
+    _parse_business_goal_profile,
+    _score_action_business_utility,
     run_strategic_agent,
     execute_strategic_plan,
 )
@@ -41,12 +44,124 @@ class TestCollectProjectContext:
         assert ctx["article_stats"]["reviewing"] == 1
         assert "today" in ctx
 
+    def test_collects_business_goal_profile(self, db_session, sample_project):
+        sample_project.business_goals = "品牌知名度 / 導購 / 收集名單"
+        db_session.commit()
+
+        ctx = _collect_project_context(sample_project.id, db_session)
+
+        assert ctx["business_goal_profile"]["primary_goal"] in {"awareness", "conversion", "lead_capture"}
+        assert round(sum(ctx["business_goal_profile"]["weights"].values()), 4) == 1.0
+
     def test_collects_empty_project(self, db_session, sample_project):
         """空專案不應報錯"""
         ctx = _collect_project_context(sample_project.id, db_session)
         assert ctx["calendar_items"] == []
         assert ctx["ranking_changes_top10"] == []
         assert ctx["article_stats"]["planned"] == 0
+
+    def test_parses_structured_business_goal_profile(self):
+        profile = _parse_business_goal_profile(json.dumps({
+            "primary_goal": "conversion",
+            "secondary_goal": "authority",
+            "weights": {
+                "traffic": 0.2,
+                "conversion": 0.5,
+                "authority": 0.3,
+            },
+            "priority_topics": ["膝蓋骨刺"],
+            "money_pages": ["/products/joint-care"],
+        }, ensure_ascii=False))
+
+        assert profile["primary_goal"] == "conversion"
+        assert profile["secondary_goal"] == "authority"
+        assert profile["priority_topics"] == ["膝蓋骨刺"]
+        assert profile["money_pages"] == ["/products/joint-care"]
+        assert round(sum(profile["weights"].values()), 4) == 1.0
+
+    def test_parses_legacy_metric_weight_keys_into_goal_weights(self):
+        profile = _parse_business_goal_profile(json.dumps({
+            "primary_goal": "awareness",
+            "secondary_goal": "authority",
+            "weights": {
+                "traffic": 0.3,
+                "ctr": 0.2,
+                "conversion": 0.1,
+                "engagement": 0.25,
+                "coverage": 0.15,
+            },
+        }, ensure_ascii=False))
+
+        assert profile["weights"]["awareness"] > profile["weights"]["conversion"]
+        assert profile["weights"]["authority"] > 0
+        assert round(sum(profile["weights"].values()), 4) == 1.0
+
+    def test_goal_utility_gets_priority_topic_and_money_page_boost(self):
+        context_snapshot = {
+            "business_goal_profile": {
+                "weights": {
+                    "awareness": 0.2,
+                    "conversion": 0.5,
+                    "lead_capture": 0.1,
+                    "authority": 0.2,
+                },
+                "priority_topics": ["膝蓋骨刺"],
+                "money_pages": ["/products/joint-care"],
+            },
+            "action_policy_scores": {
+                "refresh": {"policy_score": 0.4},
+            },
+        }
+
+        boosted, _ = _score_action_business_utility({
+            "action": "refresh",
+            "title": "膝蓋骨刺 /products/joint-care 更新",
+            "priority": 8,
+        }, context_snapshot)
+        baseline, _ = _score_action_business_utility({
+            "action": "refresh",
+            "title": "一般衛教文章更新",
+            "priority": 8,
+        }, context_snapshot)
+
+        assert boosted > baseline
+
+    def test_goal_utility_matches_money_page_from_article_lookup(self):
+        context_snapshot = {
+            "business_goal_profile": {
+                "weights": {
+                    "awareness": 0.2,
+                    "conversion": 0.5,
+                    "lead_capture": 0.1,
+                    "authority": 0.2,
+                },
+                "money_pages": ["/products/joint-care"],
+            },
+            "article_lookup": {
+                42: {
+                    "title": "關節保養",
+                    "primary_keyword": "膝蓋骨刺",
+                    "slug": "joint-care",
+                    "publish_path": "/products/joint-care",
+                }
+            },
+            "action_policy_scores": {
+                "refresh": {"policy_score": 0.4},
+            },
+        }
+
+        boosted, _ = _score_action_business_utility({
+            "action": "refresh",
+            "article_id": 42,
+            "priority": 8,
+        }, context_snapshot)
+        baseline, _ = _score_action_business_utility({
+            "action": "refresh",
+            "article_id": 99,
+            "priority": 8,
+        }, context_snapshot)
+
+        assert boosted > baseline
 
     def test_collects_calendar_items(self, db_session, sample_project):
         """收集 planned calendar 條目"""
@@ -645,6 +760,42 @@ class TestFallbackPlan:
         assert enriched["actions"][1]["evidence"]["thresholds_triggered"][0] == "排名下滑 >= 5 位"
         assert enriched["actions"][2]["evidence"]["confidence"] == "high"
 
+    def test_attaches_goal_weighted_utility_and_review_controls(self):
+        ctx = {
+            "business_goal_profile": {
+                "weights": {
+                    "awareness": 0.2,
+                    "conversion": 0.5,
+                    "lead_capture": 0.2,
+                    "authority": 0.1,
+                }
+            },
+            "action_policy_scores": {
+                "refresh": {"policy_score": 0.4},
+            },
+            "cannibalization_risks": [
+                {"keyword": "膝蓋骨刺", "suggestion": "merge"}
+            ],
+        }
+        plan_result = {
+            "actions": [
+                {
+                    "action": "refresh",
+                    "keyword": "膝蓋骨刺",
+                    "priority": 9,
+                    "evidence": {"confidence": "medium"},
+                }
+            ]
+        }
+
+        controlled = _attach_action_controls(plan_result, ctx)
+        action = controlled["actions"][0]
+
+        assert action["goal_weighted_utility"] > 0.5
+        assert action["business_goal_alignment"][0]["label"] == "導購轉換"
+        assert action["review_required"] is True
+        assert action["review_status"] == "pending"
+
 
 # ── run_strategic_agent ───────────────────────────────────────
 
@@ -881,3 +1032,39 @@ class TestExecuteStrategicPlan:
         kwargs = mock_qa.await_args.kwargs
         assert kwargs["secondary_keywords"] == ["膝蓋骨刺復健"]
         assert any(check["name"] == "gsc_query_gap" for check in kwargs["failed_checks"])
+
+    @pytest.mark.asyncio
+    async def test_skips_pending_review_action_and_marks_plan_partial(self, db_session, sample_project):
+        pid = sample_project.id
+        plan = StrategicPlan(
+            project_id=pid,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {
+                    "action": "refresh",
+                    "keyword": "膝蓋骨刺",
+                    "priority": 1,
+                    "review_required": True,
+                    "review_status": "pending",
+                }
+            ]),
+            total_count=1,
+            status="pending",
+        )
+        db_session.add(plan)
+        db_session.commit()
+
+        with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.refresh_agent.run_refresh_pipeline", new_callable=AsyncMock) as mock_refresh:
+
+            mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
+            mock_sl.return_value.__exit__ = MagicMock(return_value=False)
+
+            await execute_strategic_plan(plan.id)
+
+        db_session.refresh(plan)
+        saved_actions = json.loads(plan.actions_json)
+        assert mock_refresh.await_count == 0
+        assert plan.status == "partial"
+        assert saved_actions[0]["execution_status"] == "skipped"

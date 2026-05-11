@@ -22,12 +22,14 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import secrets
 import uuid
 from collections import Counter, defaultdict
 from types import SimpleNamespace
-from datetime import datetime, timedelta, timezone
+from typing import Any
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -60,12 +62,15 @@ from contentflow.models.database import (
     ReflectionLog,
     SchedulerLog,
     SEORanking,
+    StrategicFeedbackLog,
     StrategicPlan,
     TopicCluster,
     ClusterMember,
+    OperationsHealthSnapshot,
     WritingRule,
     ContentStrategy,
 )
+from contentflow.models.schemas import ArticleDraft, ResearchReport
 from contentflow.utils.topic_hygiene import is_viable_topic
 
 # ── App ───────────────────────────────────────────────────────
@@ -318,6 +323,263 @@ def _build_operations_health(db, *, now: datetime | None = None):
         "execution_items": execution_items,
         "outcome_items": outcome_items,
         "alerts": alerts,
+    }
+
+
+def _serialize_operations_health(operations_health: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary_cards": [
+            {"title": card.title, "value": card.value, "tone": card.tone}
+            for card in operations_health.get("summary_cards", [])
+        ],
+        "freshness_items": [
+            {
+                "name": item.name,
+                "status": item.status,
+                "label": item.label,
+                "tone": item.tone,
+                "detail": item.detail,
+                "metric": item.metric,
+            }
+            for item in operations_health.get("freshness_items", [])
+        ],
+        "execution_items": [
+            {
+                "name": item.name,
+                "status": item.status,
+                "label": item.label,
+                "tone": item.tone,
+                "detail": item.detail,
+                "metric": item.metric,
+            }
+            for item in operations_health.get("execution_items", [])
+        ],
+        "outcome_items": [
+            {
+                "name": item.name,
+                "status": item.status,
+                "label": item.label,
+                "tone": item.tone,
+                "detail": item.detail,
+                "metric": item.metric,
+                "total": getattr(item, "total", 0),
+            }
+            for item in operations_health.get("outcome_items", [])
+        ],
+        "alerts": [
+            {"level": alert.level, "message": alert.message}
+            for alert in operations_health.get("alerts", [])
+        ],
+    }
+
+
+def _goal_config_for_template(raw_value: str | None) -> dict[str, Any]:
+    from contentflow.agents.strategic_agent import _parse_business_goal_profile
+
+    parsed = _parse_business_goal_profile(raw_value or "")
+    raw_text = (raw_value or "").strip()
+    config: dict[str, Any] = {}
+    if raw_text.startswith("{"):
+        try:
+            maybe_json = json.loads(raw_text)
+            if isinstance(maybe_json, dict):
+                config = maybe_json
+        except Exception:
+            config = {}
+
+    weights = parsed.get("weights", {})
+    priority_topics = parsed.get("priority_topics", [])
+    money_pages = parsed.get("money_pages", [])
+
+    return {
+        "raw": raw_text,
+        "primary_goal": config.get("primary_goal") or parsed.get("primary_goal") or "awareness",
+        "secondary_goal": config.get("secondary_goal") or parsed.get("secondary_goal") or "authority",
+        "weights": weights,
+        "priority_topics": priority_topics,
+        "money_pages": money_pages,
+    }
+
+
+def _build_goal_weighted_monthly_report(db, project_id: int, goal_config: dict[str, Any]) -> dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    plans = (
+        db.query(StrategicPlan)
+        .filter(StrategicPlan.project_id == project_id, StrategicPlan.created_at >= cutoff)
+        .order_by(StrategicPlan.created_at.desc())
+        .all()
+    )
+
+    reviewed = approved = executed = 0
+    utility_sum = 0.0
+    utility_count = 0
+    by_action: dict[str, dict[str, Any]] = {}
+
+    for plan in plans:
+        try:
+            actions = json.loads(plan.actions_json or "[]")
+        except Exception:
+            actions = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            action_type = action.get("action") or "unknown"
+            bucket = by_action.setdefault(action_type, {
+                "action_type": action_type,
+                "count": 0,
+                "approved": 0,
+                "executed": 0,
+                "avg_utility": 0.0,
+                "utility_total": 0.0,
+            })
+            bucket["count"] += 1
+            review_status = str(action.get("review_status") or "approved").lower()
+            if action.get("review_required"):
+                reviewed += 1
+            if review_status == "approved":
+                approved += 1
+                bucket["approved"] += 1
+            if str(action.get("execution_status") or "") == "executed":
+                executed += 1
+                bucket["executed"] += 1
+
+            utility = action.get("goal_weighted_utility")
+            if utility is not None:
+                try:
+                    utility_value = float(utility)
+                    utility_sum += utility_value
+                    utility_count += 1
+                    bucket["utility_total"] += utility_value
+                except (TypeError, ValueError):
+                    pass
+
+    for bucket in by_action.values():
+        if bucket["count"]:
+            bucket["approval_rate"] = round(bucket["approved"] / bucket["count"] * 100, 1)
+            bucket["execution_rate"] = round(bucket["executed"] / bucket["count"] * 100, 1)
+        else:
+            bucket["approval_rate"] = 0.0
+            bucket["execution_rate"] = 0.0
+        bucket["avg_utility"] = round(bucket["utility_total"] / bucket["count"], 3) if bucket["count"] else 0.0
+
+    top_goal = max(goal_config.get("weights", {"awareness": 1.0}), key=goal_config.get("weights", {"awareness": 1.0}).get)
+    top_goal_weight = goal_config.get("weights", {}).get(top_goal, 0.0)
+    return {
+        "window_days": 30,
+        "plan_count": len(plans),
+        "reviewed_actions": reviewed,
+        "approved_actions": approved,
+        "executed_actions": executed,
+        "avg_goal_weighted_utility": round(utility_sum / utility_count, 3) if utility_count else None,
+        "top_goal": top_goal,
+        "top_goal_weight": round(float(top_goal_weight), 3),
+        "by_action": sorted(by_action.values(), key=lambda item: (item["avg_utility"], item["count"]), reverse=True),
+    }
+
+
+async def _generate_action_preview(db, plan: StrategicPlan, action: dict[str, Any], context_snapshot: dict[str, Any]) -> dict[str, Any]:
+    action_type = action.get("action") or "unknown"
+    if action_type == "refresh":
+        from contentflow.agents.refresh_agent import FetchedArticle, RefreshDiffAnalyzer, apply_local_patches
+
+        article = db.query(Article).filter(Article.id == action.get("article_id")).first()
+        if not article:
+            return {"preview_type": "refresh", "error": "找不到文章"}
+
+        content = (article.draft_content or "").strip() or article.title or ""
+        analyzer = RefreshDiffAnalyzer()
+        fetched = FetchedArticle(
+            url=article.publish_url or "",
+            platform="native",
+            post_id=str(article.id),
+            title=article.title or "",
+            content_html="",
+            content_text=content,
+            meta_title=article.meta_title or "",
+            meta_description=article.meta_description or "",
+            word_count=len(content),
+        )
+        serp_summary = action.get("reason") or ""
+        plan_preview = analyzer.analyze(fetched, action.get("keyword") or article.primary_keyword or article.title or "", serp_summary)
+        patched = apply_local_patches(
+            fetched,
+            plan_preview,
+            action.get("keyword") or article.primary_keyword or article.title or "",
+            generate_content=False,
+            gsc_context={"low_ctr_queries": action.get("gsc_queries", [])},
+        )
+        diff_text = "\n".join(difflib.unified_diff(content.splitlines(), patched.splitlines(), fromfile="current", tofile="preview", lineterm=""))
+        return {
+            "preview_type": "refresh",
+            "recommendation": plan_preview.recommendation,
+            "freshness_score": plan_preview.overall_freshness_score,
+            "gaps": [
+                {
+                    "gap_type": gap.gap_type,
+                    "description": gap.description,
+                    "heading": gap.suggested_heading,
+                }
+                for gap in plan_preview.gaps
+            ],
+            "competitor_advantages": plan_preview.competitor_advantages,
+            "current_excerpt": content[:800],
+            "preview_excerpt": patched[:1200],
+            "diff": diff_text[:2400],
+        }
+
+    if action_type == "optimize_meta":
+        from contentflow.agents.seo_qa_agent import run_seo_qa_agent
+
+        article = db.query(Article).filter(Article.id == action.get("article_id")).first()
+        if not article:
+            return {"preview_type": "optimize_meta", "error": "找不到文章"}
+
+        draft = ArticleDraft(
+            title=article.title or "",
+            meta_title=article.meta_title or article.title or "",
+            meta_description=article.meta_description or "",
+            content_markdown=article.draft_content or article.title or "",
+            slug=article.slug or "",
+        )
+        report = ResearchReport(
+            article_title=article.title or "",
+            keywords=[article.primary_keyword or article.title or ""],
+            suggested_keywords=[query.get("query", "") for query in action.get("gsc_queries", []) if query.get("query")],
+        )
+        optimized = await run_seo_qa_agent(
+            draft,
+            report,
+            primary_keyword=article.primary_keyword or article.title or "",
+            secondary_keywords=[query.get("query", "") for query in action.get("gsc_queries", []) if query.get("query")],
+            failed_checks=[{"name": "gsc_query_gap", "detail": action.get("reason", ""), "passed": False}],
+            project_id=plan.project_id,
+        )
+        return {
+            "preview_type": "optimize_meta",
+            "old_meta_title": article.meta_title or "",
+            "new_meta_title": optimized.meta_title or "",
+            "old_meta_description": article.meta_description or "",
+            "new_meta_description": optimized.meta_description or "",
+            "old_opening": (article.draft_content or "")[:280],
+            "new_opening": (optimized.content_markdown or "")[:280],
+        }
+
+    if action_type == "inject_internal_links":
+        article = db.query(Article).filter(Article.id == action.get("article_id")).first()
+        suggestions = []
+        if article and article.suggested_internal_links:
+            try:
+                suggestions = json.loads(article.suggested_internal_links or "[]")
+            except Exception:
+                suggestions = []
+        return {
+            "preview_type": "inject_internal_links",
+            "suggestions": suggestions[:10],
+        }
+
+    return {
+        "preview_type": action_type,
+        "summary": action.get("reason") or action.get("message") or "尚無可用 preview",
     }
 
 
@@ -2456,6 +2718,12 @@ async def health_page(request: Request):
         month_cost = cost_metrics["monthly_cost"]
         total_cost = cost_metrics["total_cost"]
         operations_health = _build_operations_health(db)
+        recent_health_snapshots = (
+            db.query(OperationsHealthSnapshot)
+            .order_by(desc(OperationsHealthSnapshot.snapshot_date), desc(OperationsHealthSnapshot.created_at))
+            .limit(7)
+            .all()
+        )
 
         recent_errors = db.query(SchedulerLog).filter(SchedulerLog.status == "failed").order_by(desc(SchedulerLog.started_at)).limit(5).all()
 
@@ -2473,6 +2741,7 @@ async def health_page(request: Request):
             "avg_article_cost": avg_article_cost,
             "month_cost": month_cost, "total_cost": total_cost,
             "operations_health": operations_health,
+            "recent_health_snapshots": recent_health_snapshots,
             "scheduler_enabled": settings.scheduler_enabled,
             "database_url": db_display,
             "now": datetime.now(timezone.utc),
@@ -3110,6 +3379,13 @@ async def settings_page(request: Request, project_id: int = 0):
             for lt in legal:
                 legal_by_type.setdefault(lt.term_type or "other", []).append(lt)
 
+        goal_config = _goal_config_for_template(current_project.business_goals if current_project else "")
+        goal_monthly_report = (
+            _build_goal_weighted_monthly_report(db, project_id, goal_config)
+            if project_id and current_project
+            else {"window_days": 30, "plan_count": 0, "by_action": []}
+        )
+
         return templates.TemplateResponse(request, "settings.html", {
             "request": request, "page": "settings",
             "projects": projects,
@@ -3121,6 +3397,8 @@ async def settings_page(request: Request, project_id: int = 0):
             "content_strategy": list(strategy_by_section.values()),
             "writing_rules": [r for rules in rules_by_type.values() for r in rules],
             "legal_terms": [lt for lts in legal_by_type.values() for lt in lts],
+            "goal_config": goal_config,
+            "goal_monthly_report": goal_monthly_report,
             "env_vars": _get_env_var_status(),
             "llm_writing_model": settings.llm_writing_model,
             "llm_lite_model": settings.llm_lite_model,
@@ -3128,6 +3406,47 @@ async def settings_page(request: Request, project_id: int = 0):
             "scheduler_timezone": settings.scheduler_timezone,
             "now": datetime.now(timezone.utc),
         })
+    finally:
+        db.close()
+
+
+@admin_app.post("/settings/project/goals/save")
+async def save_project_goals(
+    request: Request,
+    project_id: int = Form(...),
+    primary_goal: str = Form("awareness"),
+    secondary_goal: str = Form("authority"),
+    goal_awareness_weight: float = Form(0.3),
+    goal_conversion_weight: float = Form(0.4),
+    goal_lead_capture_weight: float = Form(0.15),
+    goal_authority_weight: float = Form(0.15),
+    priority_topics: str = Form(""),
+    money_pages: str = Form(""),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    db = _db()
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404)
+
+        config = {
+            "primary_goal": primary_goal,
+            "secondary_goal": secondary_goal,
+            "weights": {
+                "awareness": max(0.0, float(goal_awareness_weight or 0.0)),
+                "conversion": max(0.0, float(goal_conversion_weight or 0.0)),
+                "lead_capture": max(0.0, float(goal_lead_capture_weight or 0.0)),
+                "authority": max(0.0, float(goal_authority_weight or 0.0)),
+            },
+            "priority_topics": [item.strip() for item in priority_topics.splitlines() if item.strip()],
+            "money_pages": [item.strip() for item in money_pages.splitlines() if item.strip()],
+        }
+        project.business_goals = json.dumps(config, ensure_ascii=False)
+        project.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return RedirectResponse(f"/admin/settings?project_id={project_id}&saved=1#goal-weighted-model", status_code=303)
     finally:
         db.close()
 
@@ -3214,22 +3533,19 @@ async def pipeline_runs_page(request: Request, status: str = "", trigger: str = 
 # ═══════════════════════════════════════════════════════════════
 
 @admin_app.get("/strategic-plans", response_class=HTMLResponse)
-async def strategic_plans_page(request: Request, page: int = 1):
+async def strategic_plans_page(request: Request, page: int = 1, review_only: int = 0):
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
     db = _db()
     try:
         all_plans = db.query(StrategicPlan).order_by(desc(StrategicPlan.plan_date)).all()
 
-        per_page = 20
-        total = len(all_plans)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page = max(1, min(page, total_pages))
-        plans = all_plans[(page - 1) * per_page : page * per_page]
+        plans_decoded_all = []
+        pending_review_actions_total = 0
+        reviewable_actions_total = 0
 
         # decode actions_json for display
-        plans_decoded = []
-        for p in plans:
+        for p in all_plans:
             try:
                 actions = json.loads(p.actions_json or "[]")
             except Exception:
@@ -3238,10 +3554,21 @@ async def strategic_plans_page(request: Request, page: int = 1):
                 ctx = json.loads(p.context_snapshot or "{}")
             except Exception:
                 ctx = {}
-            plans_decoded.append({
+
+            pending_review_count = sum(
+                1 for a in actions
+                if str(a.get("review_status") or "").lower() == "pending" and bool(a.get("review_required"))
+            )
+            reviewable_count = sum(1 for a in actions if a.get("review_required"))
+            pending_review_actions_total += pending_review_count
+            reviewable_actions_total += reviewable_count
+
+            plans_decoded_all.append({
                 "plan": p,
                 "actions": actions,
                 "context": ctx,
+                "pending_review_count": pending_review_count,
+                "reviewable_count": reviewable_count,
                 "action_counts": {
                     "generate": sum(1 for a in actions if a.get("action") == "generate"),
                     "refresh":  sum(1 for a in actions if a.get("action") == "refresh"),
@@ -3250,8 +3577,17 @@ async def strategic_plans_page(request: Request, page: int = 1):
                 },
             })
 
+        if review_only:
+            plans_decoded_all = [item for item in plans_decoded_all if item["pending_review_count"] > 0]
+
+        per_page = 20
+        total = len(plans_decoded_all)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        plans_decoded = plans_decoded_all[(page - 1) * per_page : page * per_page]
+
         # 從 pipeline_runs 計算每個 strategic plan 的平均 SEO 分數
-        plan_ids = [p.id for p in plans]
+        plan_ids = [item["plan"].id for item in plans_decoded]
         plan_avg_seo: dict[int, float] = {}
         if plan_ids:
             for plan_id, avg_s in (
@@ -3280,8 +3616,158 @@ async def strategic_plans_page(request: Request, page: int = 1):
             "total": total, "page_num": page, "total_pages": total_pages,
             "total_plans": total_plans,
             "completed_plans": completed_plans, "pending_plans": pending_plans,
+            "pending_review_actions_total": pending_review_actions_total,
+            "reviewable_actions_total": reviewable_actions_total,
+            "review_only": bool(review_only),
             "now": datetime.now(timezone.utc),
         })
+    finally:
+        db.close()
+
+
+@admin_app.get("/strategic/inbox")
+async def strategic_inbox_page(request: Request):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    return RedirectResponse("/admin/strategic-plans?review_only=1", status_code=303)
+
+
+@admin_app.post("/strategic-plans/{plan_id}/actions/{action_index}/preview")
+async def preview_strategic_action(
+    request: Request,
+    plan_id: int,
+    action_index: int,
+    redirect_to: str = Form("/admin/strategic-plans"),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+
+    db = _db()
+    try:
+        plan = db.query(StrategicPlan).filter(StrategicPlan.id == plan_id).first()
+        if not plan:
+            raise HTTPException(status_code=404)
+
+        try:
+            actions = json.loads(plan.actions_json or "[]")
+        except Exception:
+            actions = []
+        try:
+            context_snapshot = json.loads(plan.context_snapshot or "{}")
+        except Exception:
+            context_snapshot = {}
+
+        if action_index < 0 or action_index >= len(actions):
+            raise HTTPException(status_code=404)
+
+        action = dict(actions[action_index] or {})
+        preview = await _generate_action_preview(db, plan, action, context_snapshot)
+        action["preview"] = preview
+        action["preview_generated_at"] = datetime.now(timezone.utc).isoformat()
+        actions[action_index] = action
+        plan.actions_json = json.dumps(actions, ensure_ascii=False)
+
+        db.add(StrategicFeedbackLog(
+            project_id=plan.project_id,
+            strategic_plan_id=plan.id,
+            action_index=action_index,
+            article_id=action.get("article_id"),
+            action_type=action.get("action") or "unknown",
+            feedback_type="preview",
+            review_status=str(action.get("review_status") or "approved"),
+            note="preview generated",
+            payload_json=json.dumps(preview, ensure_ascii=False),
+        ))
+        db.commit()
+        return RedirectResponse(redirect_to or "/admin/strategic-plans", status_code=303)
+    finally:
+        db.close()
+
+
+@admin_app.post("/strategic-plans/{plan_id}/actions/{action_index}/review")
+async def review_strategic_action(
+    request: Request,
+    plan_id: int,
+    action_index: int,
+    review_status: str = Form(...),
+    review_note: str = Form(""),
+    promote_to_asset: str = Form("off"),
+    asset_type: str = Form("knowledge_entry"),
+    feedback_type: str = Form("review"),
+    redirect_to: str = Form("/admin/strategic-plans"),
+):
+    if not _check_login(request):
+        raise HTTPException(status_code=403)
+    if review_status not in {"pending", "approved", "rejected", "deferred"}:
+        raise HTTPException(status_code=400, detail="invalid review status")
+
+    db = _db()
+    try:
+        plan = db.query(StrategicPlan).filter(StrategicPlan.id == plan_id).first()
+        if not plan:
+            raise HTTPException(status_code=404)
+
+        try:
+            actions = json.loads(plan.actions_json or "[]")
+        except Exception:
+            actions = []
+
+        if action_index < 0 or action_index >= len(actions):
+            raise HTTPException(status_code=404)
+
+        action = dict(actions[action_index] or {})
+        action["review_status"] = review_status
+        action["review_required"] = True
+        action["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        if review_note.strip():
+            action["review_note"] = review_note.strip()
+        actions[action_index] = action
+
+        plan.actions_json = json.dumps(actions, ensure_ascii=False)
+
+        promoted_asset_type = None
+        promote_learning = promote_to_asset == "on" and bool(review_note.strip())
+        if promote_learning and asset_type == "writing_rule":
+            max_order = db.query(func.max(WritingRule.order_num)).filter(WritingRule.project_id == plan.project_id).scalar() or 0
+            db.add(WritingRule(
+                project_id=plan.project_id,
+                rule_type="strategic_override",
+                name=f"Strategic override: {action.get('action') or 'action'}",
+                content=review_note.strip(),
+                order_num=int(max_order) + 1,
+            ))
+            promoted_asset_type = "writing_rule"
+        elif promote_learning and asset_type == "knowledge_entry":
+            db.add(KnowledgeEntry(
+                project_id=plan.project_id,
+                category="strategic_feedback",
+                pattern=review_note.strip(),
+                evidence_count=1,
+                confidence_level="unverified",
+                metadata_json=json.dumps({
+                    "action_type": action.get("action"),
+                    "review_status": review_status,
+                    "plan_id": plan.id,
+                    "action_index": action_index,
+                }, ensure_ascii=False),
+                is_active=True,
+            ))
+            promoted_asset_type = "knowledge_entry"
+
+        db.add(StrategicFeedbackLog(
+            project_id=plan.project_id,
+            strategic_plan_id=plan.id,
+            action_index=action_index,
+            article_id=action.get("article_id"),
+            action_type=action.get("action") or "unknown",
+            feedback_type=feedback_type or "review",
+            review_status=review_status,
+            note=review_note.strip(),
+            payload_json=json.dumps(action, ensure_ascii=False),
+            promoted_asset_type=promoted_asset_type,
+        ))
+        db.commit()
+        return RedirectResponse(redirect_to or "/admin/strategic-plans", status_code=303)
     finally:
         db.close()
 

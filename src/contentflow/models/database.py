@@ -453,6 +453,26 @@ class SchedulerLog(Base):
         return f"<SchedulerLog job={self.job_name} status={self.status}>"
 
 
+class OperationsHealthSnapshot(Base):
+    """每日持久化 operations health 摘要，供 dashboard / 月報使用。"""
+    __tablename__ = "operations_health_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    snapshot_type = Column(String, default="daily", index=True)
+    overall_status = Column(String, default="healthy")
+    stale_sources = Column(Integer, default=0)
+    scheduler_success_rate = Column(Float, nullable=True)
+    pipeline_success_rate = Column(Float, nullable=True)
+    outcome_improved_rate = Column(Float, nullable=True)
+    alert_count = Column(Integer, default=0)
+    summary_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def __repr__(self):
+        return f"<OperationsHealthSnapshot {self.snapshot_date} status={self.overall_status}>"
+
+
 # ── Topic Cluster 主題叢集 ──────────────────────────────────────────────
 
 # ── Author（E-E-A-T 作者管理，SEO SOP §21）───────────────────────────────────
@@ -605,6 +625,31 @@ class StrategicPlan(Base):
 
     def __repr__(self):
         return f"<StrategicPlan {self.plan_date} type={self.plan_type} status={self.status}>"
+
+
+class StrategicFeedbackLog(Base):
+    """人工覆核 / 預覽 / override 的 strategic action 回饋軌跡。"""
+    __tablename__ = "strategic_feedback_logs"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    strategic_plan_id = Column(Integer, ForeignKey("strategic_plans.id"), nullable=False, index=True)
+    action_index = Column(Integer, nullable=False)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True, index=True)
+    action_type = Column(String, nullable=False, index=True)
+    feedback_type = Column(String, default="review")
+    review_status = Column(String, default="pending")
+    note = Column(Text, default="")
+    payload_json = Column(Text, default="{}")
+    promoted_asset_type = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    project = relationship("Project")
+    plan = relationship("StrategicPlan")
+    article = relationship("Article")
+
+    def __repr__(self):
+        return f"<StrategicFeedbackLog plan={self.strategic_plan_id} idx={self.action_index} type={self.feedback_type}>"
 
 
 # ── Reflective Loop 執行摘要（強化版 B：Reflective 層）────────────────────────

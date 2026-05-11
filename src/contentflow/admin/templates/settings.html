@@ -124,6 +124,85 @@
         {% endif %}
       </div>
     </div>
+
+    <div id="goal-weighted-model" style="display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-top:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🎯 Goal-weighted Decision Model</div>
+        <form method="post" action="/admin/settings/project/goals/save">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">Primary goal</label>
+              <select class="form-input" name="primary_goal">
+                <option value="awareness" {% if goal_config.primary_goal == 'awareness' %}selected{% endif %}>awareness</option>
+                <option value="conversion" {% if goal_config.primary_goal == 'conversion' %}selected{% endif %}>conversion</option>
+                <option value="lead_capture" {% if goal_config.primary_goal == 'lead_capture' %}selected{% endif %}>lead_capture</option>
+                <option value="authority" {% if goal_config.primary_goal == 'authority' %}selected{% endif %}>authority</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Secondary goal</label>
+              <select class="form-input" name="secondary_goal">
+                <option value="awareness" {% if goal_config.secondary_goal == 'awareness' %}selected{% endif %}>awareness</option>
+                <option value="conversion" {% if goal_config.secondary_goal == 'conversion' %}selected{% endif %}>conversion</option>
+                <option value="lead_capture" {% if goal_config.secondary_goal == 'lead_capture' %}selected{% endif %}>lead_capture</option>
+                <option value="authority" {% if goal_config.secondary_goal == 'authority' %}selected{% endif %}>authority</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+            <div class="form-group"><label class="form-label">品牌曝光</label><input class="form-input" type="number" step="0.05" name="goal_awareness_weight" value="{{ goal_config.weights.awareness if goal_config.weights else 0.3 }}"></div>
+            <div class="form-group"><label class="form-label">導購轉換</label><input class="form-input" type="number" step="0.05" name="goal_conversion_weight" value="{{ goal_config.weights.conversion if goal_config.weights else 0.4 }}"></div>
+            <div class="form-group"><label class="form-label">名單蒐集</label><input class="form-input" type="number" step="0.05" name="goal_lead_capture_weight" value="{{ goal_config.weights.lead_capture if goal_config.weights else 0.15 }}"></div>
+            <div class="form-group"><label class="form-label">權威信任</label><input class="form-input" type="number" step="0.05" name="goal_authority_weight" value="{{ goal_config.weights.authority if goal_config.weights else 0.15 }}"></div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">Priority topics（一行一個）</label>
+              <textarea class="form-input" name="priority_topics" rows="6">{{ goal_config.priority_topics | join('\n') }}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Money pages（一行一個）</label>
+              <textarea class="form-input" name="money_pages" rows="6">{{ goal_config.money_pages | join('\n') }}</textarea>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">儲存 Goal-weighted Model</button>
+        </form>
+      </div>
+
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">📈 近 {{ goal_monthly_report.window_days }} 天目標對齊</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">主要目標</div>
+            <div style="font-size:14px;font-weight:700;color:#0f172a;">{{ goal_monthly_report.top_goal or '—' }}{% if goal_monthly_report.top_goal_weight is not none %} · {{ '%.2f'|format(goal_monthly_report.top_goal_weight) }}{% endif %}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">平均 goal utility</div>
+            <div style="font-size:14px;font-weight:700;color:#0f172a;">{{ '%.3f'|format(goal_monthly_report.avg_goal_weighted_utility) if goal_monthly_report.avg_goal_weighted_utility is not none else '—' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">Actions</div>
+            <div style="font-size:13px;color:#0f172a;line-height:1.8;">核決 {{ goal_monthly_report.approved_actions or 0 }} · 執行 {{ goal_monthly_report.executed_actions or 0 }} · 計畫 {{ goal_monthly_report.plan_count or 0 }}</div>
+          </div>
+          {% if goal_monthly_report.by_action %}
+          <div style="margin-top:4px;display:flex;flex-direction:column;gap:8px;">
+            {% for item in goal_monthly_report.by_action[:4] %}
+            <div style="padding:10px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <div style="font-size:12.5px;font-weight:700;color:#0f172a;">{{ item.action_type }}</div>
+                <div style="font-size:12px;color:#2563eb;">{{ '%.3f'|format(item.avg_utility) }}</div>
+              </div>
+              <div style="margin-top:4px;font-size:11px;color:#64748b;">approval {{ '%.1f'|format(item.approval_rate) }}% · execution {{ '%.1f'|format(item.execution_rate) }}% · count {{ item.count }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
     {% else %}
     <div class="cf-card"><div class="empty-state"><div class="empty-state-icon">📋</div><p>尚無專案設定 · 請在 Streamlit 前台建立專案</p></div></div>
     {% endif %}
