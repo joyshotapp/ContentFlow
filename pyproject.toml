@@ -51,6 +51,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.8.0",
     "pydantic-settings>=2.4.0",
+    "cryptography>=45.0.0",
 
     # 資料處理
     "beautifulsoup4>=4.12.0",

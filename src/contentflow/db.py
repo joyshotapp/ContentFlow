@@ -41,6 +41,10 @@ def _ensure_sqlite_columns(conn) -> None:
             "clicks": 'ALTER TABLE seo_rankings ADD COLUMN clicks INTEGER',
             "ctr": 'ALTER TABLE seo_rankings ADD COLUMN ctr FLOAT',
         },
+        "projects": {
+            "site_contact_email": 'ALTER TABLE projects ADD COLUMN site_contact_email VARCHAR DEFAULT ""',
+            "site_blog_path": 'ALTER TABLE projects ADD COLUMN site_blog_path VARCHAR DEFAULT "/blog"',
+        },
     }
 
     for table_name, columns in tables.items():

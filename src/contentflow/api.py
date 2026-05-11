@@ -64,7 +64,8 @@ app = FastAPI(
     lifespan=_app_lifespan,
 )
 app.mount("/admin", admin_app)
-app.mount("/site", site_app)
+if settings.managed_site_enabled and settings.platform_mode != "control-plane":
+    app.mount("/site", site_app)
 
 
 # ─────────────────────────────────────────────────────────────

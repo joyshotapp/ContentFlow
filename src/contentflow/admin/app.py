@@ -63,6 +63,8 @@ from contentflow.models.database import (
     PipelineRun,
     Product,
     Project,
+    ProjectAuditLog,
+    ProjectIntegration,
     ReflectionLog,
     SchedulerLog,
     SEORanking,
@@ -74,6 +76,13 @@ from contentflow.models.database import (
     ContentStrategy,
 )
 from contentflow.models.schemas import ArticleDraft, ResearchReport
+from contentflow.project_integrations import (
+    build_wordpress_publisher,
+    resolve_forgebase_settings,
+    resolve_wordpress_settings,
+    run_integration_diagnostic,
+)
+from contentflow.utils.secret_crypto import encrypt_secret_value
 from contentflow.utils.topic_hygiene import is_viable_topic
 
 # ── App ───────────────────────────────────────────────────────
@@ -90,6 +99,8 @@ admin_app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static
 templates = Jinja2Templates(directory=str(_here / "templates"))
 templates.env.filters["fromjson"] = json.loads
 templates.env.globals["site_url"] = settings.site_url
+templates.env.globals["site_name"] = settings.site_name
+templates.env.globals["site_contact_email"] = settings.site_contact_email
 
 
 def _db():
@@ -122,6 +133,145 @@ def _goal_config_for_template(raw_value: str | None) -> dict[str, Any]:
         "priority_topics": priority_topics,
         "money_pages": money_pages,
     }
+
+
+def _append_project_audit(
+    db,
+    *,
+    project_id: int,
+    action_type: str,
+    summary: str,
+    payload: dict[str, Any] | None = None,
+    actor: str = "admin",
+) -> None:
+    db.add(
+        ProjectAuditLog(
+            project_id=project_id,
+            actor=actor,
+            action_type=action_type,
+            summary=summary,
+            payload_json=json.dumps(payload or {}, ensure_ascii=False),
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+def _build_onboarding_checklist(
+    project: Project | None,
+    *,
+    wordpress_integration,
+    forgebase_integration,
+) -> list[SimpleNamespace]:
+    if not project:
+        return []
+
+    return [
+        SimpleNamespace(title="站點網址", done=bool(project.brand_url), detail=project.brand_url or "尚未設定 canonical base URL"),
+        SimpleNamespace(title="聯絡信箱", done=bool(project.site_contact_email), detail=project.site_contact_email or "尚未設定站點聯絡信箱"),
+        SimpleNamespace(title="文章路徑", done=bool(project.site_blog_path), detail=project.site_blog_path or "尚未設定文章 URL path"),
+        SimpleNamespace(
+            title="WordPress Connector",
+            done=bool(wordpress_integration and wordpress_integration.configured and wordpress_integration.is_enabled),
+            detail=(wordpress_integration.base_url if wordpress_integration and wordpress_integration.base_url else "未啟用"),
+        ),
+        SimpleNamespace(
+            title="ForgeBase Connector",
+            done=bool(forgebase_integration and forgebase_integration.configured and forgebase_integration.is_enabled),
+            detail=(forgebase_integration.base_url if forgebase_integration and forgebase_integration.base_url else "未啟用"),
+        ),
+    ]
+
+
+def _build_onboarding_wizard(
+    project: Project | None,
+    *,
+    wordpress_integration,
+    forgebase_integration,
+) -> list[SimpleNamespace]:
+    if not project:
+        return []
+
+    has_site_profile = bool(project.brand_url and project.site_contact_email and project.site_blog_path)
+    has_wordpress = bool(wordpress_integration and wordpress_integration.configured and wordpress_integration.is_enabled)
+    has_forgebase = bool(forgebase_integration and forgebase_integration.configured and forgebase_integration.is_enabled)
+    has_connector = has_wordpress or has_forgebase
+    connector_target = "WordPress" if has_wordpress else "ForgeBase" if has_forgebase else "未設定"
+
+    return [
+        SimpleNamespace(
+            step_key="profile",
+            title="Step 1. 站點 Profile",
+            done=has_site_profile,
+            state_label="READY" if has_site_profile else "ACTION",
+            detail="設定 canonical URL、聯絡信箱與原生文章路徑，讓 native publish 與 managed site 有一致輸出。",
+            cta_label="前往站點設定",
+            cta_href="#project-profile",
+        ),
+        SimpleNamespace(
+            step_key="connector",
+            title="Step 2. Connector 選型",
+            done=has_connector,
+            state_label="READY" if has_connector else "ACTION",
+            detail=f"至少啟用一個發布目標。當前可用目標：{connector_target}。",
+            cta_label="前往 Connector Wizard",
+            cta_href="#connector-wizard",
+        ),
+        SimpleNamespace(
+            step_key="diagnostic",
+            title="Step 3. 連線診斷",
+            done=bool(
+                (wordpress_integration and wordpress_integration.is_enabled and wordpress_integration.configured)
+                or (forgebase_integration and forgebase_integration.is_enabled and forgebase_integration.configured)
+            ),
+            state_label="READY" if has_connector else "ACTION",
+            detail="完成儲存後執行 connector test，確認 health status 與 last diagnostic message。",
+            cta_label="執行 Connector Test",
+            cta_href="#integrations",
+        ),
+        SimpleNamespace(
+            step_key="mode",
+            title="Step 4. Delivery Mode",
+            done=settings.platform_mode in {"hybrid", "managed-site", "control-plane"},
+            state_label=settings.platform_mode.upper(),
+            detail=(
+                "目前為 Control Plane only，managed site 不會掛載。"
+                if settings.platform_mode == "control-plane" or not settings.managed_site_enabled
+                else "目前可同時作為 control plane 與 managed site delivery target。"
+            ),
+            cta_label="查看模式說明",
+            cta_href="#platform-mode",
+        ),
+    ]
+
+
+def _build_connector_wizard(
+    *,
+    wordpress_integration,
+    forgebase_integration,
+    integration_diagnostics: dict[str, dict[str, Any]],
+) -> list[SimpleNamespace]:
+    items = []
+    connector_specs = [
+        ("wordpress", "WordPress", wordpress_integration, ["Site URL", "Username", "Application Password", "SEO Plugin", "Publish Mode"]),
+        ("forgebase", "ForgeBase", forgebase_integration, ["API Base URL", "API Token", "Publish Mode"]),
+    ]
+    for integration_type, label, cfg, fields in connector_specs:
+        diagnostic = integration_diagnostics.get(integration_type, {}) if integration_diagnostics else {}
+        status = diagnostic.get("status") or ("healthy" if cfg and cfg.is_enabled and cfg.configured else "pending")
+        items.append(
+            SimpleNamespace(
+                integration_type=integration_type,
+                label=label,
+                configured=bool(cfg and cfg.configured),
+                enabled=bool(cfg and cfg.is_enabled),
+                status=status,
+                required_fields=fields,
+                summary=diagnostic.get("message") or ("Connector 已配置" if cfg and cfg.configured else "尚未完成必要欄位"),
+                base_url=(cfg.base_url if cfg and cfg.base_url else ""),
+                anchor="#integrations",
+            )
+        )
+    return items
 
 
 def _build_goal_weighted_monthly_report(db, project_id: int, goal_config: dict[str, Any]) -> dict[str, Any]:
@@ -198,6 +348,178 @@ def _build_goal_weighted_monthly_report(db, project_id: int, goal_config: dict[s
         "top_goal_weight": round(float(top_goal_weight), 3),
         "by_action": sorted(by_action.values(), key=lambda item: (item["avg_utility"], item["count"]), reverse=True),
     }
+
+
+def _load_json_object(raw_value: str | None) -> dict[str, Any]:
+    if not raw_value:
+        return {}
+    try:
+        value = json.loads(raw_value)
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _upsert_project_integration(
+    db,
+    *,
+    project_id: int,
+    integration_type: str,
+    label: str,
+    base_url: str,
+    username: str,
+    secret_value: str,
+    seo_plugin: str,
+    publish_mode: str,
+    is_enabled: bool,
+) -> ProjectIntegration:
+    row = (
+        db.query(ProjectIntegration)
+        .filter(
+            ProjectIntegration.project_id == project_id,
+            ProjectIntegration.integration_type == integration_type,
+        )
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = ProjectIntegration(
+            project_id=project_id,
+            integration_type=integration_type,
+            created_at=now,
+        )
+        db.add(row)
+
+    row.label = label.strip()
+    row.base_url = base_url.strip()
+    row.username = username.strip()
+    if secret_value.strip() or row.id is None:
+        row.secret_value = encrypt_secret_value(secret_value)
+    row.seo_plugin = seo_plugin.strip() or "yoast"
+    row.publish_mode = publish_mode.strip() or "publish"
+    row.is_enabled = bool(is_enabled)
+    row.updated_at = now
+    return row
+
+
+def _build_project_usage_report(db, project_id: int, window_days: int = 30) -> dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    runs = (
+        db.query(PipelineRun)
+        .filter(PipelineRun.project_id == project_id, PipelineRun.started_at >= cutoff)
+        .order_by(PipelineRun.started_at.desc())
+        .all()
+    )
+    step_counts = dict(
+        db.query(AgentDecisionLog.step, func.count(AgentDecisionLog.id))
+        .filter(AgentDecisionLog.project_id == project_id, AgentDecisionLog.created_at >= cutoff)
+        .group_by(AgentDecisionLog.step)
+        .all()
+    )
+    feedback_counts = dict(
+        db.query(StrategicFeedbackLog.review_status, func.count(StrategicFeedbackLog.id))
+        .filter(StrategicFeedbackLog.project_id == project_id, StrategicFeedbackLog.created_at >= cutoff)
+        .group_by(StrategicFeedbackLog.review_status)
+        .all()
+    )
+
+    total_cost = round(sum(float(run.total_cost or 0.0) for run in runs), 4)
+    total_llm_calls = sum(int(run.total_llm_calls or 0) for run in runs)
+    completed_runs = sum(1 for run in runs if run.status == "completed")
+    failed_runs = sum(1 for run in runs if run.status == "failed")
+    avg_cost = round(total_cost / len(runs), 4) if runs else 0.0
+    avg_seo_score = round(
+        sum(int(run.seo_score) for run in runs if run.seo_score is not None) / max(1, sum(1 for run in runs if run.seo_score is not None)),
+        1,
+    ) if any(run.seo_score is not None for run in runs) else None
+    projected_monthly_cost = round(total_cost * (30 / max(window_days, 1)), 4) if runs else 0.0
+    billable_units = {
+        "pipeline_runs": len(runs),
+        "llm_calls": total_llm_calls,
+        "review_events": sum(int(value or 0) for value in feedback_counts.values()),
+    }
+    billing_basis = [
+        ("Pipeline Runs", billable_units["pipeline_runs"], "每次內容生產或 refresh 流程"),
+        ("LLM Calls", billable_units["llm_calls"], "模型呼叫次數，可作為 usage tier 依據"),
+        ("Review Events", billable_units["review_events"], "審核與覆核事件，可作為 service ops 成本基礎"),
+    ]
+
+    return {
+        "window_days": window_days,
+        "run_count": len(runs),
+        "completed_runs": completed_runs,
+        "failed_runs": failed_runs,
+        "total_cost": total_cost,
+        "avg_cost": avg_cost,
+        "total_llm_calls": total_llm_calls,
+        "avg_seo_score": avg_seo_score,
+        "projected_monthly_cost": projected_monthly_cost,
+        "billable_units": billable_units,
+        "billing_basis": billing_basis,
+        "step_counts": sorted(step_counts.items(), key=lambda item: item[1], reverse=True),
+        "feedback_counts": feedback_counts,
+    }
+
+
+def _build_project_approval_history(db, project_id: int, window_days: int = 30) -> dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    logs = (
+        db.query(StrategicFeedbackLog)
+        .filter(StrategicFeedbackLog.project_id == project_id, StrategicFeedbackLog.created_at >= cutoff)
+        .order_by(StrategicFeedbackLog.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    by_status = dict(
+        db.query(StrategicFeedbackLog.review_status, func.count(StrategicFeedbackLog.id))
+        .filter(StrategicFeedbackLog.project_id == project_id, StrategicFeedbackLog.created_at >= cutoff)
+        .group_by(StrategicFeedbackLog.review_status)
+        .all()
+    )
+    items = []
+    for log in logs:
+        payload = _load_json_object(log.payload_json)
+        items.append(
+            {
+                "created_at": log.created_at,
+                "action_type": log.action_type,
+                "feedback_type": log.feedback_type,
+                "review_status": log.review_status,
+                "note": log.note,
+                "article_id": log.article_id,
+                "promoted_asset_type": log.promoted_asset_type,
+                "reason": payload.get("reason") or payload.get("summary") or "",
+            }
+        )
+    return {
+        "window_days": window_days,
+        "entries": items,
+        "by_status": by_status,
+        "total": len(items),
+    }
+
+
+def _build_project_audit_view(logs: list[ProjectAuditLog]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for log in logs:
+        payload = _load_json_object(log.payload_json)
+        payload_lines = []
+        for key, value in payload.items():
+            if isinstance(value, (dict, list)):
+                rendered = json.dumps(value, ensure_ascii=False)
+            else:
+                rendered = str(value)
+            payload_lines.append(f"{key}: {rendered}")
+        items.append(
+            {
+                "summary": log.summary,
+                "action_type": log.action_type,
+                "actor": log.actor,
+                "created_at": log.created_at,
+                "payload_lines": payload_lines,
+            }
+        )
+    return items
 
 
 async def _generate_action_preview(db, plan: StrategicPlan, action: dict[str, Any], context_snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -310,6 +632,50 @@ def _check_login(request: Request) -> bool:
     return bool(request.session.get("admin_logged_in"))
 
 
+_ROLE_LEVELS = {
+    "editor": 1,
+    "reviewer": 2,
+    "owner": 3,
+}
+
+
+def _get_session_role(request: Request) -> str:
+    role = str(request.session.get("admin_role") or "").strip().lower()
+    if role in _ROLE_LEVELS:
+        return role
+    if _check_login(request):
+        return "owner"
+    return ""
+
+
+def _has_role(request: Request, minimum_role: str) -> bool:
+    current_role = _get_session_role(request)
+    if not current_role:
+        return False
+    return _ROLE_LEVELS.get(current_role, 0) >= _ROLE_LEVELS.get(minimum_role, 0)
+
+
+def _require_role(request: Request, minimum_role: str) -> str:
+    if not _check_login(request):
+        raise HTTPException(status_code=403, detail="未登入")
+    current_role = _get_session_role(request)
+    if _ROLE_LEVELS.get(current_role, 0) < _ROLE_LEVELS.get(minimum_role, 0):
+        raise HTTPException(status_code=403, detail="權限不足")
+    return current_role
+
+
+def _authenticate_admin_role(password: str) -> str | None:
+    candidates = [
+        ("owner", settings.api_secret_key),
+        ("reviewer", settings.admin_reviewer_secret),
+        ("editor", settings.admin_editor_secret),
+    ]
+    for role, secret_value in candidates:
+        if secret_value and secrets.compare_digest(password, secret_value):
+            return role
+    return None
+
+
 def _get_env_var_status() -> list:
     """回傳各整合功能的環境變數設定狀況。"""
     from types import SimpleNamespace as _SN
@@ -387,17 +753,19 @@ async def login_page(request: Request):
 
 @admin_app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, password: str = Form(...)):
-    if not settings.api_secret_key:
-        logger.error("[Admin] API_SECRET_KEY 未設定，拒絕登入")
+    if not any([settings.api_secret_key, settings.admin_reviewer_secret, settings.admin_editor_secret]):
+        logger.error("[Admin] 管理登入 secret 未設定，拒絕登入")
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"request": request, "error": "API_SECRET_KEY 未設定，請先完成部署設定"},
+            {"request": request, "error": "管理登入 secret 未設定，請先完成部署設定"},
             status_code=503,
         )
 
-    if secrets.compare_digest(password, settings.api_secret_key):
+    role = _authenticate_admin_role(password)
+    if role:
         request.session["admin_logged_in"] = True
+        request.session["admin_role"] = role
         return RedirectResponse("/admin/", status_code=303)
     return templates.TemplateResponse(request, "login.html", {"request": request, "error": "密碼錯誤"})
 
@@ -669,6 +1037,7 @@ async def article_detail(request: Request, article_id: int):
 
         return templates.TemplateResponse(request, "article_detail.html", {
             "request": request, "page": "articles",
+            "site_name": settings.site_name,
             "art": article,                               # template uses `art`
             "decisions": decisions,
             "seo_history": seo_history,                  # list of dicts (JSON-serializable)
@@ -702,7 +1071,7 @@ async def update_article_status(request: Request, article_id: int, status: str =
             art.updated_at = datetime.now(timezone.utc)
             # 發布到 goodbone.com.tw 時，記錄 publish_url 並提交 Google Indexing API
             if status == "published" and art.slug:
-                publish_url = _native_blog_url(art.slug)
+                publish_url = _native_blog_url(art.slug, art.project_id, db=db)
                 _mark_article_published(art, publish_url=publish_url)
                 db.commit()
                 asyncio.create_task(_submit_to_google_indexing(publish_url))
@@ -767,7 +1136,6 @@ async def publish_to_wordpress(request: Request, article_id: int):
         if not art.draft_content:
             return JSONResponse({"ok": False, "error": "文章尚無內容，無法發布"}, status_code=400)
 
-        from contentflow.publishers.wordpress import WordPressPublisher
         from contentflow.models.schemas import ArticleDraft
 
         draft = ArticleDraft(
@@ -780,7 +1148,7 @@ async def publish_to_wordpress(request: Request, article_id: int):
             article_schema_json=art.article_schema_json or "",
         )
 
-        wp = WordPressPublisher()
+        wp = build_wordpress_publisher(db=db, project_id=art.project_id)
         result = await wp.publish_draft(draft)
 
         if result.success:
@@ -2924,8 +3292,7 @@ async def save_auto_publish(
     auto_publish_enabled: str = Form("off"),
     auto_publish_min_score: int = Form(85),
 ):
-    if not _check_login(request):
-        raise HTTPException(status_code=403)
+    _require_role(request, "owner")
     db = _db()
     try:
         proj = db.query(Project).filter(Project.id == project_id).first()
@@ -2952,6 +3319,8 @@ async def save_project(
     brand_name: str = Form(""),
     brand_url: str = Form(""),
     brand_description: str = Form(""),
+    site_contact_email: str = Form(""),
+    site_blog_path: str = Form("/blog"),
     industry: str = Form(""),
     writing_principles: str = Form(""),
     serp_gl: str = Form("tw"),
@@ -2960,8 +3329,7 @@ async def save_project(
     target_audience: str = Form(""),
     ga4_property_id: str = Form(""),
 ):
-    if not _check_login(request):
-        raise HTTPException(status_code=403)
+    role = _require_role(request, "owner")
     db = _db()
     try:
         import json as _json
@@ -2978,19 +3346,37 @@ async def save_project(
                 proj.name = name; proj.slug = slug
                 proj.brand_name = brand_name; proj.brand_url = brand_url
                 proj.brand_description = brand_description; proj.industry = industry
+                proj.site_contact_email = site_contact_email
+                proj.site_blog_path = site_blog_path or "/blog"
                 proj.writing_principles = writing_principles
                 proj.serp_gl = serp_gl; proj.serp_hl = serp_hl
                 proj.business_goals = business_goals or None
                 proj.target_audience_json = _json.dumps(ta_json, ensure_ascii=False) if target_audience else None
                 proj.ga4_property_id = ga4_property_id or None
                 proj.updated_at = now
+                _append_project_audit(
+                    db,
+                    project_id=proj.id,
+                    action_type="project_profile_updated",
+                    summary=f"更新專案設定：{proj.name}",
+                    payload={
+                        "slug": proj.slug,
+                        "brand_url": proj.brand_url,
+                        "site_contact_email": proj.site_contact_email,
+                        "site_blog_path": proj.site_blog_path,
+                    },
+                    actor=role,
+                )
                 db.commit()
                 return RedirectResponse(f"/admin/settings?project_id={proj.id}&saved=1", status_code=303)
+            raise HTTPException(status_code=404)
         else:
             proj = Project(
                 slug=slug, name=name,
                 brand_name=brand_name, brand_url=brand_url,
                 brand_description=brand_description, industry=industry,
+                site_contact_email=site_contact_email,
+                site_blog_path=site_blog_path or "/blog",
                 writing_principles=writing_principles,
                 serp_gl=serp_gl, serp_hl=serp_hl,
                 locale="zh-tw",
@@ -2999,7 +3385,17 @@ async def save_project(
                 ga4_property_id=ga4_property_id or None,
                 created_at=now, updated_at=now,
             )
-            db.add(proj); db.commit(); db.refresh(proj)
+            db.add(proj)
+            db.flush()
+            _append_project_audit(
+                db,
+                project_id=proj.id,
+                action_type="project_created",
+                summary=f"建立專案：{proj.name}",
+                payload={"slug": proj.slug, "brand_url": proj.brand_url},
+                actor=role,
+            )
+            db.commit(); db.refresh(proj)
             return RedirectResponse(f"/admin/settings?project_id={proj.id}&saved=1", status_code=303)
     finally:
         db.close()
@@ -3009,6 +3405,7 @@ async def save_project(
 async def settings_page(request: Request, project_id: int = 0):
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
+    session_role = _get_session_role(request)
     db = _db()
     try:
         projects = db.query(Project).order_by(Project.name).all()
@@ -3020,6 +3417,7 @@ async def settings_page(request: Request, project_id: int = 0):
         strategy_by_section: dict = {}
         products = []
         legal_by_type: dict = {}
+        integrations_by_type: dict[str, ProjectIntegration] = {}
 
         if project_id:
             current_project = db.query(Project).filter(Project.id == project_id).first()
@@ -3033,12 +3431,60 @@ async def settings_page(request: Request, project_id: int = 0):
             legal = db.query(LegalTerm).filter(LegalTerm.project_id == project_id).all()
             for lt in legal:
                 legal_by_type.setdefault(lt.term_type or "other", []).append(lt)
+            integration_rows = (
+                db.query(ProjectIntegration)
+                .filter(ProjectIntegration.project_id == project_id)
+                .order_by(ProjectIntegration.integration_type)
+                .all()
+            )
+            integrations_by_type = {row.integration_type: row for row in integration_rows}
+
+        wordpress_integration = resolve_wordpress_settings(db=db, project_id=project_id if current_project else None)
+        forgebase_integration = resolve_forgebase_settings(db=db, project_id=project_id if current_project else None)
+        onboarding_checklist = _build_onboarding_checklist(
+            current_project,
+            wordpress_integration=wordpress_integration,
+            forgebase_integration=forgebase_integration,
+        )
+        onboarding_completed = sum(1 for item in onboarding_checklist if item.done)
+        recent_project_audits = (
+            db.query(ProjectAuditLog)
+            .filter(ProjectAuditLog.project_id == project_id)
+            .order_by(desc(ProjectAuditLog.created_at))
+            .limit(8)
+            .all()
+        ) if current_project else []
+        audit_view = _build_project_audit_view(recent_project_audits)
 
         goal_config = _goal_config_for_template(current_project.business_goals if current_project else "")
         goal_monthly_report = (
             _build_goal_weighted_monthly_report(db, project_id, goal_config)
             if project_id and current_project
             else {"window_days": 30, "plan_count": 0, "by_action": []}
+        )
+        usage_report = (
+            _build_project_usage_report(db, project_id)
+            if project_id and current_project
+            else {"window_days": 30, "run_count": 0, "step_counts": [], "feedback_counts": {}, "total_cost": 0.0, "avg_cost": 0.0, "total_llm_calls": 0}
+        )
+        approval_history = (
+            _build_project_approval_history(db, project_id)
+            if project_id and current_project
+            else {"window_days": 30, "entries": [], "by_status": {}, "total": 0}
+        )
+        integration_diagnostics = {
+            integration_type: _load_json_object(row.config_json).get("last_diagnostic", {})
+            for integration_type, row in integrations_by_type.items()
+        }
+        onboarding_wizard = _build_onboarding_wizard(
+            current_project,
+            wordpress_integration=wordpress_integration,
+            forgebase_integration=forgebase_integration,
+        )
+        connector_wizard = _build_connector_wizard(
+            wordpress_integration=wordpress_integration,
+            forgebase_integration=forgebase_integration,
+            integration_diagnostics=integration_diagnostics,
         )
 
         return templates.TemplateResponse(request, "settings.html", {
@@ -3054,6 +3500,22 @@ async def settings_page(request: Request, project_id: int = 0):
             "legal_terms": [lt for lts in legal_by_type.values() for lt in lts],
             "goal_config": goal_config,
             "goal_monthly_report": goal_monthly_report,
+            "usage_report": usage_report,
+            "approval_history": approval_history,
+            "integrations_by_type": integrations_by_type,
+            "wordpress_integration": wordpress_integration,
+            "forgebase_integration": forgebase_integration,
+            "integration_diagnostics": integration_diagnostics,
+            "onboarding_checklist": onboarding_checklist,
+            "onboarding_completed": onboarding_completed,
+            "recent_project_audits": audit_view,
+            "onboarding_wizard": onboarding_wizard,
+            "connector_wizard": connector_wizard,
+            "platform_mode": settings.platform_mode,
+            "managed_site_enabled": settings.managed_site_enabled,
+            "session_role": session_role,
+            "can_manage_settings": _has_role(request, "owner"),
+            "can_review_actions": _has_role(request, "reviewer"),
             "env_vars": _get_env_var_status(),
             "llm_writing_model": settings.llm_writing_model,
             "llm_lite_model": settings.llm_lite_model,
@@ -3061,6 +3523,101 @@ async def settings_page(request: Request, project_id: int = 0):
             "scheduler_timezone": settings.scheduler_timezone,
             "now": datetime.now(timezone.utc),
         })
+    finally:
+        db.close()
+
+
+@admin_app.post("/settings/project/integration/save")
+async def save_project_integration(
+    request: Request,
+    project_id: int = Form(...),
+    integration_type: str = Form(...),
+    label: str = Form(""),
+    base_url: str = Form(""),
+    username: str = Form(""),
+    secret_value: str = Form(""),
+    seo_plugin: str = Form("yoast"),
+    publish_mode: str = Form("publish"),
+    is_enabled: str | None = Form(None),
+):
+    role = _require_role(request, "owner")
+    db = _db()
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404)
+
+        row = _upsert_project_integration(
+            db,
+            project_id=project_id,
+            integration_type=integration_type,
+            label=label,
+            base_url=base_url,
+            username=username,
+            secret_value=secret_value,
+            seo_plugin=seo_plugin,
+            publish_mode=publish_mode,
+            is_enabled=bool(is_enabled),
+        )
+        _append_project_audit(
+            db,
+            project_id=project_id,
+            action_type="integration_saved",
+            summary=f"更新 {integration_type} connector",
+            payload={
+                "integration_type": integration_type,
+                "base_url": row.base_url,
+                "is_enabled": row.is_enabled,
+                "publish_mode": row.publish_mode,
+            },
+            actor=role,
+        )
+        db.commit()
+        return RedirectResponse(f"/admin/settings?project_id={project_id}&saved=1#integrations", status_code=303)
+    finally:
+        db.close()
+
+
+@admin_app.post("/settings/project/integration/test")
+async def test_project_integration(
+    request: Request,
+    project_id: int = Form(...),
+    integration_type: str = Form(...),
+):
+    role = _require_role(request, "reviewer")
+    db = _db()
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404)
+
+        row = (
+            db.query(ProjectIntegration)
+            .filter(
+                ProjectIntegration.project_id == project_id,
+                ProjectIntegration.integration_type == integration_type,
+            )
+            .first()
+        )
+        diagnostic = await run_integration_diagnostic(integration_type=integration_type, db=db, project_id=project_id)
+        now = datetime.now(timezone.utc)
+        if row is not None:
+            config_data = _load_json_object(row.config_json)
+            config_data["last_diagnostic"] = diagnostic.as_dict()
+            row.config_json = json.dumps(config_data, ensure_ascii=False)
+            row.health_status = diagnostic.status
+            row.last_checked_at = now
+            row.updated_at = now
+        _append_project_audit(
+            db,
+            project_id=project_id,
+            action_type="integration_tested",
+            summary=f"測試 {integration_type} connector：{diagnostic.status}",
+            payload=diagnostic.as_dict(),
+            actor=role,
+        )
+        db.commit()
+        return RedirectResponse(f"/admin/settings?project_id={project_id}&saved=1#integrations", status_code=303)
     finally:
         db.close()
 
@@ -3078,8 +3635,7 @@ async def save_project_goals(
     priority_topics: str = Form(""),
     money_pages: str = Form(""),
 ):
-    if not _check_login(request):
-        raise HTTPException(status_code=403)
+    role = _require_role(request, "owner")
     db = _db()
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
@@ -3100,6 +3656,14 @@ async def save_project_goals(
         }
         project.business_goals = json.dumps(config, ensure_ascii=False)
         project.updated_at = datetime.now(timezone.utc)
+        _append_project_audit(
+            db,
+            project_id=project_id,
+            action_type="goal_model_saved",
+            summary="更新 goal-weighted decision model",
+            payload=config,
+            actor=role,
+        )
         db.commit()
         return RedirectResponse(f"/admin/settings?project_id={project_id}&saved=1#goal-weighted-model", status_code=303)
     finally:
@@ -3294,8 +3858,7 @@ async def preview_strategic_action(
     action_index: int,
     redirect_to: str = Form("/admin/strategic-plans"),
 ):
-    if not _check_login(request):
-        raise HTTPException(status_code=403)
+    _require_role(request, "editor")
 
     db = _db()
     try:
@@ -3351,8 +3914,7 @@ async def review_strategic_action(
     feedback_type: str = Form("review"),
     redirect_to: str = Form("/admin/strategic-plans"),
 ):
-    if not _check_login(request):
-        raise HTTPException(status_code=403)
+    role = _require_role(request, "reviewer")
     if review_status not in {"pending", "approved", "rejected", "deferred"}:
         raise HTTPException(status_code=400, detail="invalid review status")
 
@@ -3417,7 +3979,7 @@ async def review_strategic_action(
             action_type=action.get("action") or "unknown",
             feedback_type=feedback_type or "review",
             review_status=review_status,
-            note=review_note.strip(),
+            note=f"[{role}] {review_note.strip()}" if review_note.strip() else f"[{role}]",
             payload_json=json.dumps(action, ensure_ascii=False),
             promoted_asset_type=promoted_asset_type,
         ))

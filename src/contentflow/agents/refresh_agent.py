@@ -30,6 +30,13 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..llm_client import chat_sync
 from ..models.database import Article
+from ..project_integrations import (
+    build_forgebase_publisher,
+    build_wordpress_publisher,
+    resolve_forgebase_settings,
+    resolve_site_profile,
+    resolve_wordpress_settings,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,12 +102,15 @@ class ContentFetcher:
     async def fetch_forgebase(
         self,
         post_id: str,
+        project_id: int | None = None,
+        db: Session | None = None,
         api_base_url: str | None = None,
         api_token: str | None = None,
     ) -> FetchedArticle:
         """從 ForgeBase GET /api/v1/content/pages/{post_id} 拉回文章"""
-        base = (api_base_url or settings.forgebase_api_base_url).rstrip("/")
-        token = api_token or settings.forgebase_api_token
+        cfg = resolve_forgebase_settings(db=db, project_id=project_id)
+        base = (api_base_url or cfg.base_url).rstrip("/")
+        token = api_token or cfg.secret_value
 
         if not base or not token:
             return FetchedArticle(
@@ -143,6 +153,8 @@ class ContentFetcher:
     async def fetch_wordpress(
         self,
         post_id: str,
+        project_id: int | None = None,
+        db: Session | None = None,
         site_url: str | None = None,
         username: str | None = None,
         app_password: str | None = None,
@@ -150,9 +162,10 @@ class ContentFetcher:
         """從 WordPress REST API GET /wp/v2/posts/{post_id} 拉回文章"""
         import base64
 
-        _site = (site_url or settings.wordpress_site_url).rstrip("/")
-        _user = username or settings.wordpress_username
-        _pass = app_password or settings.wordpress_app_password
+        cfg = resolve_wordpress_settings(db=db, project_id=project_id)
+        _site = (site_url or cfg.base_url).rstrip("/")
+        _user = username or cfg.username
+        _pass = app_password or cfg.secret_value
 
         if not _site or not _user:
             return FetchedArticle(
@@ -479,7 +492,8 @@ async def publish_refreshed_article(
     if platform is None:
         # 自動推斷平台
         _url = article.publish_url or ""
-        _site_base = settings.site_url.rstrip("/") if settings.site_url else ""
+        _site_profile = resolve_site_profile(db=session, project_id=article.project_id)
+        _site_base = _site_profile.site_url.rstrip("/") if _site_profile.site_url else ""
         if "wp-json" in _url or re.search(r"[?&]p=\d+", _url):
             platform = "wordpress"
         elif not _url or (_site_base and _url.startswith(_site_base)):
@@ -497,16 +511,14 @@ async def publish_refreshed_article(
 
     try:
         if platform == "wordpress":
-            from ..publishers.wordpress import WordPressPublisher
-            pub = WordPressPublisher()
+            pub = build_wordpress_publisher(db=session, project_id=article.project_id)
             post_id = _extract_wp_post_id(article.publish_url or "")
             if not post_id:
                 return {"success": False, "url": article.publish_url or "",
                         "error": "無法從 publish_url 取得 WP post ID"}
             result = await pub.update_post(post_id, draft)
         else:
-            from ..publishers.forgebase import ForgeBasePublisher
-            pub = ForgeBasePublisher()
+            pub = build_forgebase_publisher(db=session, project_id=article.project_id)
             post_id = _extract_forgebase_post_id(article.publish_url or "", article.slug or "")
             if not post_id:
                 return {"success": False, "url": article.publish_url or "",
@@ -744,11 +756,11 @@ async def run_refresh_pipeline(
     # Step 1: 拉回文章
     logger.info(f"[RefreshPipeline] Step 1 — 拉回文章: article={article.id} platform={platform}")
     if platform == "wordpress":
-        fetched = await fetcher.fetch_wordpress(pid)
+        fetched = await fetcher.fetch_wordpress(pid, project_id=article.project_id, db=session)
     elif platform == "url" and article.publish_url:
         fetched = await fetcher.fetch_by_url(article.publish_url)
     else:
-        fetched = await fetcher.fetch_forgebase(pid)
+        fetched = await fetcher.fetch_forgebase(pid, project_id=article.project_id, db=session)
 
     gsc_summary = ""
     if gsc_context:

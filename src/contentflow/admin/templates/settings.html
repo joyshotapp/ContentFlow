@@ -50,6 +50,8 @@
       </div>
     </div>
     <input type="hidden" name="brand_description" value="">
+    <input type="hidden" name="site_contact_email" value="">
+    <input type="hidden" name="site_blog_path" value="/blog">
     <input type="hidden" name="writing_principles" value="">
     <input type="hidden" name="business_goals" value="">
     <input type="hidden" name="target_audience" value="">
@@ -93,35 +95,190 @@
     {% if project %}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
       <div class="cf-card cf-card-p">
-        <div class="section-title" style="margin-bottom:14px;">基本資訊</div>
-        {% macro kv(label, val) %}
-        <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <div style="font-size:12px;color:#94a3b8;flex-shrink:0;width:110px;">{{ label }}</div>
-          <div style="font-size:13px;color:#0f172a;flex:1;word-break:break-all;">{{ val or '—' }}</div>
+        <div class="section-title" style="margin-bottom:14px;">基本資訊與 Site Profile</div>
+        <form method="post" action="/admin/settings/project/save">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">專案名稱</label>
+              <input class="form-input" type="text" name="name" value="{{ project.name or '' }}" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Slug</label>
+              <input class="form-input" type="text" name="slug" value="{{ project.slug or '' }}" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">品牌名稱</label>
+              <input class="form-input" type="text" name="brand_name" value="{{ project.brand_name or '' }}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">品牌網址 / Site URL</label>
+              <input class="form-input" type="url" name="brand_url" value="{{ project.brand_url or '' }}" placeholder="https://example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">聯絡信箱</label>
+              <input class="form-input" type="email" name="site_contact_email" value="{{ project.site_contact_email or '' }}" placeholder="editor@example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">文章路徑前綴</label>
+              <input class="form-input" type="text" name="site_blog_path" value="{{ project.site_blog_path or '/blog' }}" placeholder="/blog">
+            </div>
+            <div class="form-group">
+              <label class="form-label">產業</label>
+              <input class="form-input" type="text" name="industry" value="{{ project.industry or '' }}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">GA4 Property ID</label>
+              <input class="form-input" type="text" name="ga4_property_id" value="{{ project.ga4_property_id or '' }}">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">品牌描述 / Site Description</label>
+            <textarea class="form-input" name="brand_description" rows="3">{{ project.brand_description or '' }}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Writing Principles</label>
+            <textarea class="form-input" name="writing_principles" rows="3">{{ project.writing_principles or '' }}</textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">SERP 國家</label>
+              <input class="form-input" type="text" name="serp_gl" value="{{ project.serp_gl or 'tw' }}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">SERP 語言</label>
+              <input class="form-input" type="text" name="serp_hl" value="{{ project.serp_hl or 'zh-tw' }}">
+            </div>
+          </div>
+          <input type="hidden" name="business_goals" value="{{ project.business_goals or '' }}">
+          <input type="hidden" name="target_audience" value="{{ project.target_audience_json or '' }}">
+          <div style="margin-top:12px;display:flex;gap:8px;">
+            <button type="submit" class="btn btn-primary btn-sm">儲存專案設定</button>
+          </div>
+        </form>
+      </div>
+      <div id="platform-mode" class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">目前輸出設定</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">Canonical Base URL</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;word-break:break-all;">{{ project.brand_url or '—' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">Native Blog 路徑</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ project.site_blog_path or '/blog' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">聯絡信箱</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;word-break:break-all;">{{ project.site_contact_email or '—' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">建立時間</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ project.created_at.strftime('%Y-%m-%d') if project.created_at else '—' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">Platform Mode</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ platform_mode }}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:4px;">Managed Site: {{ 'enabled' if managed_site_enabled else 'disabled' }}</div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+            <div style="font-size:11px;color:#94a3b8;">目前登入角色</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ session_role or 'owner' }}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:4px;">{% if can_manage_settings %}可管理設定與 connector{% elif can_review_actions %}可審核 strategic action 與測試 connector{% else %}可預覽 strategic action{% endif %}</div>
+          </div>
         </div>
-        {% endmacro %}
-        {{ kv('名稱', project.name) }}
-        {{ kv('Domain', project.domain) }}
-        {{ kv('語言', project.language) }}
-        {{ kv('國家/地區', project.country) }}
-        {{ kv('目標受眾', project.target_audience) }}
-        {{ kv('產業', project.industry) }}
-        {{ kv('建立時間', project.created_at.strftime('%Y-%m-%d') if project.created_at else None) }}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:.85fr 1.15fr;gap:14px;margin-top:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🚀 Onboarding Checklist</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div style="font-size:13px;color:#475569;">目前完成 {{ onboarding_completed }}/{{ onboarding_checklist|length }}</div>
+          <div style="font-size:12px;font-weight:700;color:#0f172a;background:#eef2ff;padding:4px 10px;border-radius:999px;">{{ ((onboarding_completed / (onboarding_checklist|length or 1)) * 100) | round(0) }}%</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% for item in onboarding_checklist %}
+          <div style="padding:10px 12px;border-radius:10px;border:1px solid {% if item.done %}#bbf7d0{% else %}#e2e8f0{% endif %};background:{% if item.done %}#f0fdf4{% else %}#f8fafc{% endif %};">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ item.title }}</div>
+              <div style="font-size:11px;font-weight:700;color:{% if item.done %}#166534{% else %}#64748b{% endif %};">{{ 'READY' if item.done else 'PENDING' }}</div>
+            </div>
+            <div style="font-size:12px;color:#475569;margin-top:4px;word-break:break-all;">{{ item.detail }}</div>
+          </div>
+          {% endfor %}
+        </div>
       </div>
       <div class="cf-card cf-card-p">
-        <div class="section-title" style="margin-bottom:14px;">品牌設定</div>
-        {% if project.brand_voice %}
-        <div style="margin-bottom:10px;">
-          <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">品牌調性</div>
-          <div style="font-size:13px;color:#0f172a;line-height:1.6;background:#f8fafc;padding:10px;border-radius:8px;">{{ project.brand_voice }}</div>
+        <div class="section-title" style="margin-bottom:14px;">🧭 Onboarding Wizard</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% for step in onboarding_wizard %}
+          <div style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+              <div>
+                <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ step.title }}</div>
+                <div style="font-size:12px;color:#475569;margin-top:4px;line-height:1.6;">{{ step.detail }}</div>
+              </div>
+              <div style="font-size:11px;font-weight:700;color:{% if step.done %}#166534{% else %}#92400e{% endif %};background:{% if step.done %}#dcfce7{% else %}#fef3c7{% endif %};padding:4px 8px;border-radius:999px;white-space:nowrap;">{{ step.state_label }}</div>
+            </div>
+            <div style="margin-top:10px;">
+              <a href="{{ step.cta_href }}" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:#0f172a;color:#fff;font-size:12px;font-weight:700;text-decoration:none;">{{ step.cta_label }}</a>
+            </div>
+          </div>
+          {% endfor %}
         </div>
-        {% endif %}
-        {% if project.content_goals %}
-        <div>
-          <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">內容目標</div>
-          <div style="font-size:13px;color:#0f172a;line-height:1.6;background:#f8fafc;padding:10px;border-radius:8px;">{{ project.content_goals }}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div id="connector-wizard" class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🪄 Connector Setup Wizard</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% for item in connector_wizard %}
+          <div style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ item.label }}</div>
+              <div style="font-size:11px;font-weight:700;color:#0f172a;background:#e2e8f0;padding:4px 8px;border-radius:999px;">{{ item.status }}</div>
+            </div>
+            <div style="font-size:12px;color:#475569;margin-top:6px;line-height:1.6;">{{ item.summary }}</div>
+            {% if item.base_url %}
+            <div style="font-size:11px;color:#64748b;margin-top:6px;word-break:break-all;">{{ item.base_url }}</div>
+            {% endif %}
+            <div style="margin-top:8px;font-size:11px;color:#64748b;">Required: {{ item.required_fields | join(' · ') }}</div>
+            <div style="margin-top:10px;">
+              <a href="{{ item.anchor }}" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;border:1px solid #cbd5e1;color:#0f172a;font-size:12px;font-weight:700;text-decoration:none;background:#fff;">前往 {{ item.label }} 設定</a>
+            </div>
+          </div>
+          {% endfor %}
         </div>
-        {% endif %}
+      </div>
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🧾 Recent Audit Trail</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% if recent_project_audits %}
+            {% for log in recent_project_audits %}
+            <div style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ log.summary }}</div>
+                <div style="font-size:11px;color:#94a3b8;white-space:nowrap;">{{ log.created_at.strftime('%Y-%m-%d %H:%M') if log.created_at else '—' }}</div>
+              </div>
+              <div style="font-size:12px;color:#475569;margin-top:4px;">{{ log.action_type }} · actor {{ log.actor }}</div>
+              {% if log.payload_lines %}
+              <details style="margin-top:6px;">
+                <summary style="font-size:11.5px;color:#2563eb;cursor:pointer;list-style:none;">▸ 查看 payload</summary>
+                <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">
+                  {% for line in log.payload_lines %}
+                  <div style="font-size:11px;color:#64748b;line-height:1.5;word-break:break-word;">{{ line }}</div>
+                  {% endfor %}
+                </div>
+              </details>
+              {% endif %}
+            </div>
+            {% endfor %}
+          {% else %}
+            <div style="padding:12px;border-radius:10px;background:#f8fafc;color:#64748b;font-size:13px;">尚無 audit trail 紀錄。</div>
+          {% endif %}
+        </div>
       </div>
     </div>
 
@@ -199,6 +356,80 @@
             </div>
             {% endfor %}
           </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">💳 近 {{ usage_report.window_days }} 天平台用量</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;"><div style="font-size:11px;color:#94a3b8;">Pipeline Runs</div><div style="font-size:14px;font-weight:700;color:#0f172a;">{{ usage_report.run_count }}</div></div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;"><div style="font-size:11px;color:#94a3b8;">LLM Calls</div><div style="font-size:14px;font-weight:700;color:#0f172a;">{{ usage_report.total_llm_calls }}</div></div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;"><div style="font-size:11px;color:#94a3b8;">Total Cost</div><div style="font-size:14px;font-weight:700;color:#0f172a;">${{ '%.4f'|format(usage_report.total_cost or 0) }}</div></div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;"><div style="font-size:11px;color:#94a3b8;">Avg Cost / Run</div><div style="font-size:14px;font-weight:700;color:#0f172a;">${{ '%.4f'|format(usage_report.avg_cost or 0) }}</div></div>
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:#64748b;line-height:1.7;">完成 {{ usage_report.completed_runs }} · 失敗 {{ usage_report.failed_runs }}{% if usage_report.avg_seo_score is not none %} · 平均 SEO 分數 {{ usage_report.avg_seo_score }}{% endif %}</div>
+        <div style="margin-top:12px;padding:10px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+          <div style="font-size:11px;color:#94a3b8;">Projected Monthly Cost</div>
+          <div style="font-size:14px;font-weight:700;color:#0f172a;margin-top:2px;">${{ '%.4f'|format(usage_report.projected_monthly_cost or 0) }}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:4px;">可作為 usage-based billing basis 的初始估算。</div>
+        </div>
+      </div>
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">📊 Agent / Approval 摘要</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          {% for step, count in usage_report.step_counts[:5] %}
+          <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+            <div style="font-size:12.5px;color:#0f172a;font-weight:600;">{{ step }}</div>
+            <div style="font-size:12px;color:#2563eb;">{{ count }}</div>
+          </div>
+          {% endfor %}
+          {% if not usage_report.step_counts %}
+          <div style="padding:12px;border-radius:10px;background:#f8fafc;color:#64748b;font-size:13px;">尚無 agent usage 資料。</div>
+          {% endif %}
+          <div style="font-size:12px;color:#64748b;margin-top:4px;">Approval: approved {{ usage_report.feedback_counts.get('approved', 0) }} · pending {{ usage_report.feedback_counts.get('pending', 0) }} · rejected {{ usage_report.feedback_counts.get('rejected', 0) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🧮 Billing Basis</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          {% for label, value, detail in usage_report.billing_basis %}
+          <div style="padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+              <div style="font-size:12.5px;font-weight:700;color:#0f172a;">{{ label }}</div>
+              <div style="font-size:12px;color:#2563eb;">{{ value }}</div>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-top:4px;line-height:1.5;">{{ detail }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">✅ Approval History</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <span style="font-size:11px;font-weight:700;color:#166534;background:#dcfce7;padding:4px 8px;border-radius:999px;">approved {{ approval_history.by_status.get('approved', 0) }}</span>
+          <span style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;padding:4px 8px;border-radius:999px;">pending {{ approval_history.by_status.get('pending', 0) }}</span>
+          <span style="font-size:11px;font-weight:700;color:#991b1b;background:#fee2e2;padding:4px 8px;border-radius:999px;">rejected {{ approval_history.by_status.get('rejected', 0) }}</span>
+          <span style="font-size:11px;font-weight:700;color:#1e3a8a;background:#dbeafe;padding:4px 8px;border-radius:999px;">deferred {{ approval_history.by_status.get('deferred', 0) }}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          {% for item in approval_history.entries %}
+          <div style="padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div style="font-size:12.5px;font-weight:700;color:#0f172a;">{{ item.action_type }} · {{ item.review_status }}</div>
+              <div style="font-size:11px;color:#94a3b8;white-space:nowrap;">{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '—' }}</div>
+            </div>
+            <div style="font-size:12px;color:#475569;margin-top:4px;">{{ item.note or item.reason or '無補充說明' }}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:4px;">feedback {{ item.feedback_type }}{% if item.promoted_asset_type %} · promoted {{ item.promoted_asset_type }}{% endif %}{% if item.article_id %} · article #{{ item.article_id }}{% endif %}</div>
+          </div>
+          {% endfor %}
+          {% if not approval_history.entries %}
+          <div style="padding:12px;border-radius:10px;background:#f8fafc;color:#64748b;font-size:13px;">尚無 approval history。</div>
           {% endif %}
         </div>
       </div>
@@ -337,9 +568,103 @@
           </div>
         </div>
         <div style="margin-top:12px;">
+          {% if not can_manage_settings %}
+          <div style="font-size:12px;color:#64748b;margin-bottom:8px;">目前角色無法修改發佈設定。</div>
+          {% endif %}
           <button type="submit" class="btn btn-primary btn-sm">儲存發佈設定</button>
         </div>
       </form>
+    </div>
+    {% endif %}
+    {% if project %}
+    <div id="integrations" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🔌 WordPress Connector</div>
+        <form method="post" action="/admin/settings/project/integration/save">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <input type="hidden" name="integration_type" value="wordpress">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" name="is_enabled" value="on" {% if wordpress_integration.is_enabled %}checked{% endif %}
+                style="width:16px;height:16px;accent-color:#10b981;">
+              <span>啟用 WordPress Connector</span>
+            </label>
+          </div>
+          <div class="form-group"><label class="form-label">顯示名稱</label><input class="form-input" type="text" name="label" value="{{ integrations_by_type.get('wordpress').label if integrations_by_type.get('wordpress') else '' }}" placeholder="Production WP"></div>
+          <div class="form-group"><label class="form-label">Site URL</label><input class="form-input" type="url" name="base_url" value="{{ wordpress_integration.base_url or '' }}" placeholder="https://wp.example.com"></div>
+          <div class="form-group"><label class="form-label">Username</label><input class="form-input" type="text" name="username" value="{{ wordpress_integration.username or '' }}"></div>
+          <div class="form-group"><label class="form-label">Application Password</label><input class="form-input" type="password" name="secret_value" value="" placeholder="{% if integrations_by_type.get('wordpress') and integrations_by_type.get('wordpress').secret_value %}留空則保留既有密鑰{% else %}輸入新的 Application Password{% endif %}"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group"><label class="form-label">SEO Plugin</label>
+              <select class="form-input" name="seo_plugin">
+                {% for plugin in ['yoast', 'rankmath', 'aioseo'] %}
+                <option value="{{ plugin }}" {% if wordpress_integration.seo_plugin == plugin %}selected{% endif %}>{{ plugin }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">Publish Mode</label>
+              <select class="form-input" name="publish_mode">
+                {% for mode in ['publish', 'draft'] %}
+                <option value="{{ mode }}" {% if wordpress_integration.publish_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;margin-top:10px;margin-bottom:10px;">
+            <div style="font-size:11px;color:#94a3b8;">Health Status</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ integrations_by_type.get('wordpress').health_status if integrations_by_type.get('wordpress') else 'unknown' }}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:4px;">{{ integration_diagnostics.get('wordpress', {}).get('message', '尚未執行 connector test') }}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:4px;">{{ integrations_by_type.get('wordpress').last_checked_at.strftime('%Y-%m-%d %H:%M') if integrations_by_type.get('wordpress') and integrations_by_type.get('wordpress').last_checked_at else '尚未檢查' }}</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button type="submit" class="btn btn-primary btn-sm">儲存 WordPress Connector</button>
+          </div>
+        </form>
+        <form method="post" action="/admin/settings/project/integration/test" style="margin-top:8px;">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <input type="hidden" name="integration_type" value="wordpress">
+          <button type="submit" class="btn btn-ghost btn-sm">執行 WordPress Test</button>
+        </form>
+      </div>
+
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🔌 ForgeBase Connector</div>
+        <form method="post" action="/admin/settings/project/integration/save">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <input type="hidden" name="integration_type" value="forgebase">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" name="is_enabled" value="on" {% if forgebase_integration.is_enabled %}checked{% endif %}
+                style="width:16px;height:16px;accent-color:#10b981;">
+              <span>啟用 ForgeBase Connector</span>
+            </label>
+          </div>
+          <div class="form-group"><label class="form-label">顯示名稱</label><input class="form-input" type="text" name="label" value="{{ integrations_by_type.get('forgebase').label if integrations_by_type.get('forgebase') else '' }}" placeholder="ForgeBase CMS"></div>
+          <div class="form-group"><label class="form-label">API Base URL</label><input class="form-input" type="url" name="base_url" value="{{ forgebase_integration.base_url or '' }}" placeholder="https://cms.example.com"></div>
+          <div class="form-group"><label class="form-label">API Token</label><input class="form-input" type="password" name="secret_value" value="" placeholder="{% if integrations_by_type.get('forgebase') and integrations_by_type.get('forgebase').secret_value %}留空則保留既有 token{% else %}輸入新的 API Token{% endif %}"></div>
+          <div class="form-group"><label class="form-label">Publish Mode</label>
+            <select class="form-input" name="publish_mode">
+              {% for mode in ['publish', 'draft'] %}
+              <option value="{{ mode }}" {% if forgebase_integration.publish_mode == mode %}selected{% endif %}>{{ mode }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <input type="hidden" name="username" value="">
+          <input type="hidden" name="seo_plugin" value="yoast">
+          <div style="padding:10px;background:#f8fafc;border-radius:8px;margin-top:10px;margin-bottom:10px;">
+            <div style="font-size:11px;color:#94a3b8;">Health Status</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ integrations_by_type.get('forgebase').health_status if integrations_by_type.get('forgebase') else 'unknown' }}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:4px;">{{ integration_diagnostics.get('forgebase', {}).get('message', '尚未執行 connector test') }}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:4px;">{{ integrations_by_type.get('forgebase').last_checked_at.strftime('%Y-%m-%d %H:%M') if integrations_by_type.get('forgebase') and integrations_by_type.get('forgebase').last_checked_at else '尚未檢查' }}</div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">儲存 ForgeBase Connector</button>
+        </form>
+        <form method="post" action="/admin/settings/project/integration/test" style="margin-top:8px;">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          <input type="hidden" name="integration_type" value="forgebase">
+          <button type="submit" class="btn btn-ghost btn-sm">執行 ForgeBase Test</button>
+        </form>
+      </div>
     </div>
     {% endif %}
     <div class="cf-card cf-card-p">

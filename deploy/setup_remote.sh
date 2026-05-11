@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
-# GoodBone — 伺服器一鍵部署腳本
+# ContentFlow — 伺服器一鍵部署腳本
 # 執行環境：Ubuntu 22.04 LTS / root@172.235.216.10
 #
 # 使用方式（在本機執行，自動 scp + ssh）：
-#   ./deploy/setup_remote.sh
+#   DOMAIN=example.com ./deploy/setup_remote.sh
 #
 # 或先 scp 整個專案，再 ssh 進去手動執行：
 #   ssh root@172.235.216.10 "bash /root/contentflow/deploy/server_init.sh"
@@ -13,7 +13,7 @@ set -euo pipefail
 
 SERVER=${SERVER:-root@172.235.216.10}
 PROJECT_DIR=${PROJECT_DIR:-/root/contentflow}
-DOMAIN=${DOMAIN:-goodbone.com.tw}
+DOMAIN=${DOMAIN:-}
 DEFAULT_BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if ! git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
@@ -91,7 +91,7 @@ echo "==> 2. Run remote deploy (commit=$BUILD_COMMIT)"
     'bash -s' << 'REMOTE'
 set -euo pipefail
 PROJECT_DIR=${PROJECT_DIR:-/root/contentflow}
-DOMAIN=${DOMAIN:-goodbone.com.tw}
+    DOMAIN=${DOMAIN:-}
 
 mkdir -p "$PROJECT_DIR"
 
@@ -124,6 +124,15 @@ while IFS= read -r env_line; do
     export "$env_line"
 done < <(sed '1s/^\xEF\xBB\xBF//; s/\r$//' "$PROJECT_DIR/.env.prod")
 
+if [[ -z "$DOMAIN" && -n "${SITE_URL:-}" ]]; then
+    DOMAIN=$(printf '%s' "$SITE_URL" | sed -E 's#^https?://([^/]+)/?.*$#\1#')
+fi
+
+if [[ -z "$DOMAIN" ]]; then
+    echo "ERROR: DOMAIN 未設定，且無法從 SITE_URL 推導。請用 DOMAIN=example.com ./deploy/setup_remote.sh 或在 .env.prod 設定 SITE_URL。"
+    exit 1
+fi
+
 # ── 資料目錄 ────────────────────────────────────────────
 mkdir -p "$PROJECT_DIR/data" "$PROJECT_DIR/outputs"
 
@@ -148,7 +157,12 @@ else
 fi
 
 # ── nginx 設定 ─────────────────────────────────────────
-cp "$PROJECT_DIR/deploy/nginx.conf" "/etc/nginx/sites-available/$DOMAIN"
+NGINX_TEMPLATE="$PROJECT_DIR/deploy/nginx.conf"
+if [[ "${PLATFORM_MODE:-managed-site}" == "control-plane" || "${MANAGED_SITE_ENABLED:-true}" == "false" ]]; then
+    NGINX_TEMPLATE="$PROJECT_DIR/deploy/nginx.control-plane.conf"
+fi
+
+sed "s/__DOMAIN__/$DOMAIN/g" "$NGINX_TEMPLATE" > "/etc/nginx/sites-available/$DOMAIN"
 ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
 rm -f /etc/nginx/sites-enabled/default
 
@@ -178,7 +192,7 @@ cd "$PROJECT_DIR"
 
 echo ""
 echo "============================================"
-echo " GoodBone 部署完成！"
+echo " ContentFlow 站點部署完成！"
 echo " https://$DOMAIN/"
 echo "============================================"
 REMOTE

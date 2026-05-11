@@ -38,6 +38,7 @@ from contentflow.build_info import get_build_info
 from contentflow.config import settings
 from contentflow.db import SessionLocal
 from contentflow.models.database import Article, Category, TopicCluster
+from contentflow.project_integrations import build_site_url, resolve_site_profile
 
 # ─────────────────────────────────────────────────────────────
 # Constants
@@ -150,31 +151,54 @@ DBDep = Annotated[Session, Depends(_get_db)]
 # ─────────────────────────────────────────────────────────────
 # URL & template context helpers
 # ─────────────────────────────────────────────────────────────
+def _site_profile(db: Session | None = None) -> dict:
+    return resolve_site_profile(db=db).as_dict()
 
-def _site_url(path: str = "") -> str:
-    base = settings.site_url.rstrip("/")
+
+def _site_url(path: str = "", site_profile: dict | None = None) -> str:
+    profile = site_profile or _site_profile()
+    base = str(profile["site_url"]).rstrip("/")
     return f"{base}{path}" if path else base
 
 
-def _common_ctx(request: Request) -> dict:
+def _common_ctx(request: Request, site_profile: dict | None = None) -> dict:
+    profile = site_profile or _site_profile()
     return {
-        "site_url": _site_url(),
-        "site_name": settings.site_name,
-        "site_description": settings.site_description,
+        "site_url": _site_url(site_profile=profile),
+        "site_name": profile["site_name"],
+        "site_description": profile["site_description"],
+        "site_contact_email": profile["site_contact_email"],
         "ga4_id": settings.ga4_measurement_id,
         "article_type_map": _ARTICLE_TYPE_MAP,
     }
 
 
-def _published_q(db: Session):
-    return db.query(Article).filter(Article.status == _PUBLISHED, Article.slug != "")
+def _ensure_managed_site_enabled() -> None:
+    if not settings.managed_site_enabled:
+        raise HTTPException(status_code=404, detail="Managed site disabled")
+
+
+def _published_q(db: Session, site_profile: dict | None = None):
+    query = db.query(Article).filter(Article.status == _PUBLISHED, Article.slug != "")
+    project_id = site_profile.get("project_id") if site_profile else None
+    if project_id is not None:
+        query = query.filter(Article.project_id == project_id)
+    return query
+
+
+def _topic_clusters_q(db: Session, site_profile: dict | None = None):
+    query = db.query(TopicCluster)
+    project_id = site_profile.get("project_id") if site_profile else None
+    if project_id is not None:
+        query = query.filter(TopicCluster.project_id == project_id)
+    return query
 
 
 # ─────────────────────────────────────────────────────────────
 # Related articles
 # ─────────────────────────────────────────────────────────────
 
-def _get_related_articles(db: Session, article: Article, limit: int = 4) -> list[Article]:
+def _get_related_articles(db: Session, article: Article, limit: int = 4, site_profile: dict | None = None) -> list[Article]:
     from contentflow.models.database import ClusterMember
 
     related_ids: set[int] = set()
@@ -198,6 +222,9 @@ def _get_related_articles(db: Session, article: Article, limit: int = 4) -> list
         .limit(limit)
         .all()
     )
+    project_id = site_profile.get("project_id") if site_profile else None
+    if project_id is not None:
+        cluster_articles = [a for a in cluster_articles if a.project_id == project_id]
     for a in cluster_articles:
         if a.id not in related_ids:
             related.append(a)
@@ -206,7 +233,7 @@ def _get_related_articles(db: Session, article: Article, limit: int = 4) -> list
     # 2) Same article_type
     if len(related) < limit and article.article_type:
         type_articles = (
-            _published_q(db)
+            _published_q(db, site_profile)
             .filter(Article.article_type == article.article_type, Article.id != article.id)
             .filter(Article.id.notin_(related_ids))
             .order_by(desc(Article.updated_at))
@@ -220,7 +247,7 @@ def _get_related_articles(db: Session, article: Article, limit: int = 4) -> list
     # 3) Fallback: recent
     if len(related) < limit:
         recent = (
-            _published_q(db)
+            _published_q(db, site_profile)
             .filter(Article.id != article.id, Article.id.notin_(related_ids))
             .order_by(desc(Article.updated_at))
             .limit(limit - len(related))
@@ -265,6 +292,8 @@ site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static"
 async def health():
     """健康檢查：驗證 DB 連線 + 排程器運行狀態。"""
     checks: dict = {"service": "reference-site", **get_build_info()}
+    checks["platform_mode"] = settings.platform_mode
+    checks["managed_site_enabled"] = settings.managed_site_enabled
 
     # DB 連線
     try:
@@ -295,33 +324,33 @@ async def version():
 
 @site_app.get("/", response_class=HTMLResponse)
 async def homepage(request: Request, db: DBDep):
-    latest = _published_q(db).order_by(desc(Article.updated_at)).limit(6).all()
-    type_counts = dict(
-        db.query(Article.article_type, func.count(Article.id))
-        .filter(Article.status == _PUBLISHED, Article.slug != "")
-        .group_by(Article.article_type)
-        .all()
-    )
-    clusters = db.query(TopicCluster).order_by(desc(TopicCluster.updated_at)).limit(6).all()
-    total_articles = _published_q(db).count()
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    latest = _published_q(db, site_profile).order_by(desc(Article.updated_at)).limit(6).all()
+    type_query = db.query(Article.article_type, func.count(Article.id)).filter(Article.status == _PUBLISHED, Article.slug != "")
+    if site_profile["project_id"] is not None:
+        type_query = type_query.filter(Article.project_id == site_profile["project_id"])
+    type_counts = dict(type_query.group_by(Article.article_type).all())
+    clusters = _topic_clusters_q(db, site_profile).order_by(desc(TopicCluster.updated_at)).limit(6).all()
+    total_articles = _published_q(db, site_profile).count()
 
     org_schema = {
         "@context": "https://schema.org", "@type": "Organization",
-        "name": settings.site_name, "url": _site_url(),
-        "description": settings.site_description,
+        "name": site_profile["site_name"], "url": _site_url(site_profile=site_profile),
+        "description": site_profile["site_description"],
     }
     website_schema = {
         "@context": "https://schema.org", "@type": "WebSite",
-        "name": settings.site_name, "url": _site_url(), "inLanguage": "zh-TW",
+        "name": site_profile["site_name"], "url": _site_url(site_profile=site_profile), "inLanguage": "zh-TW",
         "potentialAction": {
             "@type": "SearchAction",
-            "target": f"{_site_url()}/blog?q={{search_term_string}}",
+            "target": f"{_site_url(site_profile=site_profile)}/blog?q={{search_term_string}}",
             "query-input": "required name=search_term_string",
         },
     }
 
     return templates.TemplateResponse(request, "index.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "articles": latest, "type_counts": type_counts,
         "clusters": clusters, "total_articles": total_articles,
         "org_schema": org_schema, "website_schema": website_schema,
@@ -332,9 +361,11 @@ async def homepage(request: Request, db: DBDep):
 
 @site_app.get("/blog", response_class=HTMLResponse)
 async def blog_list(request: Request, db: DBDep, page: int = 1, type: str | None = None, q: str | None = None):
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
     per_page = 12
     offset = (page - 1) * per_page
-    query = _published_q(db)
+    query = _published_q(db, site_profile)
 
     if type and type in _ARTICLE_TYPE_MAP:
         query = query.filter(Article.article_type == type)
@@ -348,15 +379,15 @@ async def blog_list(request: Request, db: DBDep, page: int = 1, type: str | None
     total = query.count()
     articles = query.order_by(desc(Article.updated_at)).offset(offset).limit(per_page).all()
 
-    breadcrumb = [{"name": "首頁", "url": _site_url("/")}]
+    breadcrumb = [{"name": "首頁", "url": _site_url("/", site_profile)}]
     if type and type in _ARTICLE_TYPE_MAP:
-        breadcrumb.append({"name": "文章", "url": _site_url("/blog")})
+        breadcrumb.append({"name": "文章", "url": _site_url("/blog", site_profile)})
         breadcrumb.append({"name": _ARTICLE_TYPE_MAP[type]["label"], "url": None})
     else:
         breadcrumb.append({"name": "文章", "url": None})
 
     return templates.TemplateResponse(request, "blog_list.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "articles": articles, "page": page, "total": total, "per_page": per_page,
         "has_prev": page > 1, "has_next": (offset + per_page) < total,
         "total_pages": max(1, math.ceil(total / per_page)),
@@ -369,14 +400,16 @@ async def blog_list(request: Request, db: DBDep, page: int = 1, type: str | None
 
 @site_app.get("/blog/{slug}", response_class=HTMLResponse)
 async def blog_post(slug: str, request: Request, db: DBDep):
-    article = db.query(Article).filter(Article.slug == slug, Article.status == _PUBLISHED).first()
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    article = _published_q(db, site_profile).filter(Article.slug == slug).first()
     if not article:
         # 若反查 old_slugs（曾用過的 slug），符合則 301 永久轉址
         import json as _json_r
         from fastapi.responses import RedirectResponse
         candidate = (
-            db.query(Article)
-            .filter(Article.old_slugs.contains(slug), Article.status == _PUBLISHED)
+            _published_q(db, site_profile)
+            .filter(Article.old_slugs.contains(slug))
             .first()
         )
         if candidate and candidate.slug:
@@ -389,8 +422,8 @@ async def blog_post(slug: str, request: Request, db: DBDep):
     toc = _extract_toc(article.draft_content or "")
     read_min = _reading_time(article.draft_content or "")
     word_count = _word_count(article.draft_content or "")
-    related = _get_related_articles(db, article)
-    canonical_url = _site_url(f"/blog/{slug}")
+    related = _get_related_articles(db, article, site_profile=site_profile)
+    canonical_url = _site_url(f"/blog/{slug}", site_profile)
 
     faq_schema = _parse_json_safe(article.faq_schema_json)
     article_schema = _parse_json_safe(article.article_schema_json)
@@ -405,20 +438,20 @@ async def blog_post(slug: str, request: Request, db: DBDep):
         article_schema.setdefault("wordCount", word_count)
         article_schema.setdefault("inLanguage", "zh-TW")
         article_schema.setdefault("publisher", {
-            "@type": "Organization", "name": settings.site_name, "url": _site_url(),
+            "@type": "Organization", "name": site_profile["site_name"], "url": _site_url(site_profile=site_profile),
         })
         article_schema.setdefault("author", {
-            "@type": "Organization", "name": settings.site_name, "url": _site_url("/about"),
+            "@type": "Organization", "name": site_profile["site_name"], "url": _site_url("/about", site_profile),
         })
 
     breadcrumb_items = [
-        {"name": "首頁", "url": _site_url("/")},
-        {"name": "文章", "url": _site_url("/blog")},
+        {"name": "首頁", "url": _site_url("/", site_profile)},
+        {"name": "文章", "url": _site_url("/blog", site_profile)},
     ]
     if article.article_type and article.article_type in _ARTICLE_TYPE_MAP:
         breadcrumb_items.append({
             "name": _ARTICLE_TYPE_MAP[article.article_type]["label"],
-            "url": _site_url(f"/blog?type={article.article_type}"),
+            "url": _site_url(f"/blog?type={article.article_type}", site_profile),
         })
     breadcrumb_items.append({"name": article.meta_title or article.title, "url": None})
 
@@ -468,7 +501,7 @@ async def blog_post(slug: str, request: Request, db: DBDep):
                 secondary_kws = [k.strip() for k in article.secondary_keywords.split(",") if k.strip()]
 
     return templates.TemplateResponse(request, "blog_post.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "article": article, "html_content": content_html,
         "toc": toc, "reading_time": read_min, "word_count": word_count,
         "related": related, "canonical_url": canonical_url,
@@ -484,26 +517,28 @@ async def blog_post(slug: str, request: Request, db: DBDep):
 
 @site_app.get("/category/{article_type}", response_class=HTMLResponse)
 async def category_page(article_type: str, request: Request, db: DBDep, page: int = 1):
+    _ensure_managed_site_enabled()
     if article_type not in _ARTICLE_TYPE_MAP:
         raise HTTPException(status_code=404, detail="Category not found")
 
+    site_profile = _site_profile(db)
     meta = _ARTICLE_TYPE_MAP[article_type]
     per_page = 12
     offset = (page - 1) * per_page
-    query = _published_q(db).filter(Article.article_type == article_type)
+    query = _published_q(db, site_profile).filter(Article.article_type == article_type)
     total = query.count()
     articles = query.order_by(desc(Article.updated_at)).offset(offset).limit(per_page).all()
 
-    breadcrumb = [{"name": "首頁", "url": _site_url("/")}, {"name": meta["label"], "url": None}]
+    breadcrumb = [{"name": "首頁", "url": _site_url("/", site_profile)}, {"name": meta["label"], "url": None}]
     collection_schema = {
         "@context": "https://schema.org", "@type": "CollectionPage",
         "name": meta["label"], "description": meta["desc"],
-        "url": _site_url(f"/category/{article_type}"),
-        "isPartOf": {"@type": "WebSite", "name": settings.site_name, "url": _site_url()},
+        "url": _site_url(f"/category/{article_type}", site_profile),
+        "isPartOf": {"@type": "WebSite", "name": site_profile["site_name"], "url": _site_url(site_profile=site_profile)},
     }
 
     return templates.TemplateResponse(request, "category.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "articles": articles, "category_meta": meta, "cat_type": article_type,
         "page": page, "total": total, "per_page": per_page,
         "has_prev": page > 1, "has_next": (offset + per_page) < total,
@@ -519,7 +554,10 @@ async def category_page(article_type: str, request: Request, db: DBDep, page: in
 async def topic_cluster_page(cluster_id: int, request: Request, db: DBDep):
     from contentflow.models.database import ClusterMember
 
-    cluster = db.get(TopicCluster, cluster_id)
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    cluster_query = _topic_clusters_q(db, site_profile).filter(TopicCluster.id == cluster_id)
+    cluster = cluster_query.first()
     if not cluster:
         raise HTTPException(status_code=404, detail="Topic cluster not found")
 
@@ -537,13 +575,13 @@ async def topic_cluster_page(cluster_id: int, request: Request, db: DBDep):
     coverage = sum(1 for m in member_articles if m["article"]) / max(len(member_articles), 1)
 
     breadcrumb = [
-        {"name": "首頁", "url": _site_url("/")},
-        {"name": "主題叢集", "url": _site_url("/blog")},
+        {"name": "首頁", "url": _site_url("/", site_profile)},
+        {"name": "主題叢集", "url": _site_url("/blog", site_profile)},
         {"name": cluster.pillar_keyword, "url": None},
     ]
 
     return templates.TemplateResponse(request, "topic_cluster.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "cluster": cluster, "members": member_articles,
         "pillar_article": pillar_article, "coverage": coverage,
         "breadcrumb": breadcrumb,
@@ -554,16 +592,18 @@ async def topic_cluster_page(cluster_id: int, request: Request, db: DBDep):
 
 @site_app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request, db: DBDep):
-    total = _published_q(db).count()
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    total = _published_q(db, site_profile).count()
     org_schema = {
         "@context": "https://schema.org", "@type": "Organization",
-        "name": settings.site_name, "url": _site_url(),
-        "description": settings.site_description, "sameAs": [],
+        "name": site_profile["site_name"], "url": _site_url(site_profile=site_profile),
+        "description": site_profile["site_description"], "sameAs": [],
     }
-    breadcrumb = [{"name": "首頁", "url": _site_url("/")}, {"name": "關於我們", "url": None}]
+    breadcrumb = [{"name": "首頁", "url": _site_url("/", site_profile)}, {"name": "關於我們", "url": None}]
 
     return templates.TemplateResponse(request, "about.html", {
-        **_common_ctx(request),
+        **_common_ctx(request, site_profile),
         "total_articles": total, "org_schema": org_schema, "breadcrumb": breadcrumb,
     })
 
@@ -572,9 +612,11 @@ async def about_page(request: Request, db: DBDep):
 
 @site_app.get("/sitemap.xml")
 async def sitemap(db: DBDep):
-    articles = _published_q(db).order_by(desc(Article.updated_at)).all()
-    clusters = db.query(TopicCluster).all()
-    base = _site_url()
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    articles = _published_q(db, site_profile).order_by(desc(Article.updated_at)).all()
+    clusters = _topic_clusters_q(db, site_profile).all()
+    base = _site_url(site_profile=site_profile)
 
     lines = ['<?xml version="1.0" encoding="UTF-8"?>']
     lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
@@ -608,7 +650,8 @@ async def sitemap_index_redirect():
 
 @site_app.get("/robots.txt")
 async def robots():
-    base = _site_url()
+    _ensure_managed_site_enabled()
+    base = _site_url(site_profile=_site_profile())
     return Response(
         content=(
             f"User-agent: *\n"
@@ -625,16 +668,18 @@ async def robots():
 
 @site_app.get("/feed")
 async def rss_feed(db: DBDep):
-    articles = _published_q(db).order_by(desc(Article.updated_at)).limit(20).all()
-    base = _site_url()
+    _ensure_managed_site_enabled()
+    site_profile = _site_profile(db)
+    articles = _published_q(db, site_profile).order_by(desc(Article.updated_at)).limit(20).all()
+    base = _site_url(site_profile=site_profile)
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
              "  <channel>",
-             f"    <title>{xml_escape(settings.site_name)}</title>",
+             f"    <title>{xml_escape(str(site_profile['site_name']))}</title>",
              f"    <link>{xml_escape(base)}</link>",
-             f"    <description>{xml_escape(settings.site_description)}</description>",
+             f"    <description>{xml_escape(str(site_profile['site_description']))}</description>",
              f"    <language>zh-TW</language>",
              f"    <lastBuildDate>{now}</lastBuildDate>",
              f'    <atom:link href="{xml_escape(base)}/feed" rel="self" type="application/rss+xml"/>']
@@ -659,12 +704,15 @@ async def rss_feed(db: DBDep):
 
 @site_app.exception_handler(404)
 async def not_found_handler(request: Request, exc):
+    if not settings.managed_site_enabled:
+        return Response(content="Not Found", status_code=404, media_type="text/plain")
     db = SessionLocal()
     try:
-        popular = _published_q(db).order_by(desc(Article.updated_at)).limit(5).all()
+        site_profile = _site_profile(db)
+        popular = _published_q(db, site_profile).order_by(desc(Article.updated_at)).limit(5).all()
     finally:
         db.close()
-    return templates.TemplateResponse(request, "404.html", {**_common_ctx(request), "popular_articles": popular}, status_code=404)
+    return templates.TemplateResponse(request, "404.html", {**_common_ctx(request, site_profile), "popular_articles": popular}, status_code=404)
 
 
 # ─── Mount Admin ───────────────────────────────────────────────

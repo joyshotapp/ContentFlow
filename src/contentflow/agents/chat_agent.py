@@ -35,6 +35,7 @@ from ..models.database import (
     TopicCluster,
     WritingRule,
 )
+from ..project_integrations import build_native_publish_url
 
 # ── System prompt ─────────────────────────────────────────────
 
@@ -1137,7 +1138,7 @@ def _tool_update_article_status(**kwargs: Any) -> dict:
 
         publish_info = None
         if new_status == "published" and article.slug:
-            article.publish_url = f"https://{settings.site_name}/blog/{article.slug}"
+            article.publish_url = build_native_publish_url(article.slug, project_id=article.project_id)
             article.published_at = datetime.now(timezone.utc)
             publish_info = article.publish_url
 

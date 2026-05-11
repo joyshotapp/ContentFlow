@@ -974,6 +974,77 @@ class TestExecuteStrategicPlan:
         assert mock_record.called
 
     @pytest.mark.asyncio
+    async def test_generate_action_resolves_publish_platform_with_current_session(self, db_session, sample_project):
+        import contentflow.agents.strategic_agent as strategic_agent_module
+
+        sample_project.auto_publish_enabled = True
+        sample_project.auto_publish_min_score = 85
+        db_session.commit()
+
+        calendar_item = ContentCalendar(
+            project_id=sample_project.id,
+            title="測試日曆",
+            keywords="骨刺",
+            month=date.today().month,
+            week=1,
+            status="planned",
+        )
+        db_session.add(calendar_item)
+        db_session.commit()
+
+        plan = StrategicPlan(
+            project_id=sample_project.id,
+            plan_date=date.today(),
+            plan_type="daily",
+            actions_json=json.dumps([
+                {"action": "generate", "calendar_id": calendar_item.id, "priority": 1, "reason": "test"}
+            ]),
+            total_count=1,
+            status="pending",
+        )
+        db_session.add(plan)
+        db_session.commit()
+
+        fake_draft = SimpleNamespace(
+            content_markdown="# 測試文章\n\n內容",
+            meta_title="測試標題",
+            meta_description="測試描述",
+            slug="publish-me",
+            faq_schema_json="",
+            article_schema_json="",
+            seo_score=92,
+            internal_link_suggestions=[],
+        )
+        fake_result = SimpleNamespace(draft=fake_draft, status="review_required")
+
+        def _assert_platform(*, db=None, project_id=None):
+            assert db is db_session
+            assert project_id == sample_project.id
+            return "native"
+
+        with patch("contentflow.agents.strategic_agent.SessionLocal") as mock_sl, \
+             patch("contentflow.agents.orchestrator.run_orchestrator", new=AsyncMock(return_value=fake_result)), \
+             patch("contentflow.agents.strategic_agent.resolve_publish_platform", side_effect=_assert_platform), \
+             patch("contentflow.agents.strategic_agent.build_native_publish_url", return_value="https://client.example/blog/publish-me"), \
+               patch("contentflow.scheduler.record_action_outcome"), \
+             patch("contentflow.agents.strategic_agent.settings") as mock_settings:
+
+            mock_settings.slack_webhook_url = None
+            mock_sl.return_value.__enter__ = MagicMock(return_value=db_session)
+            mock_sl.return_value.__exit__ = MagicMock(return_value=False)
+
+            await strategic_agent_module._execute_generate(
+                {"action": "generate", "calendar_id": calendar_item.id, "priority": 1, "reason": "test"},
+                sample_project.id,
+                plan_id=plan.id,
+            )
+
+        article = db_session.query(Article).filter(Article.project_id == sample_project.id).first()
+        assert article is not None
+        assert article.status == "published"
+        assert article.publish_url == "https://client.example/blog/publish-me"
+
+    @pytest.mark.asyncio
     async def test_optimize_meta_passes_gsc_feedback_to_seo_qa(self, db_session, sample_project):
         pid = sample_project.id
         art = Article(

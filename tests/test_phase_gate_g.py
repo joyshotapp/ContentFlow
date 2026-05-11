@@ -707,6 +707,35 @@ class TestRunRefreshPipeline:
         assert result["publish_result"] is None
         assert "常見問題 FAQ" in result["patched_content"]
 
+    def test_pipeline_passes_current_session_to_fetcher(self, db_session, sample_project):
+        article = self._make_article(db_session, sample_project)
+        mock_fetched = self._mock_fetched()
+
+        async def _fake_fetch_forgebase(self, post_id, project_id=None, db=None, api_base_url=None, api_token=None):
+            assert post_id == "knee-pipeline"
+            assert project_id == article.project_id
+            assert db is db_session
+            return mock_fetched
+
+        with (
+            patch.object(ContentFetcher, "fetch_forgebase", new=_fake_fetch_forgebase),
+            patch.object(RefreshDiffAnalyzer, "analyze", return_value=self._mock_plan()),
+        ):
+            result = asyncio.get_event_loop().run_until_complete(
+                run_refresh_pipeline(
+                    article=article,
+                    keyword="膝蓋疼痛",
+                    session=db_session,
+                    serp_summary="競品普遍有 FAQ",
+                    platform="forgebase",
+                    post_id="knee-pipeline",
+                    generate_content=False,
+                    publish=False,
+                )
+            )
+
+        assert result["fetched"].title == "膝蓋疼痛完整指南"
+
     def test_pipeline_publish_enabled(self, db_session, sample_project):
         """CF-06-07: publish=True → publish_result 非 None"""
         from contentflow.publishers.base import PublishResult

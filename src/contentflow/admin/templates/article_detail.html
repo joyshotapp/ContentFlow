@@ -30,7 +30,7 @@
 {% elif art.status == 'reviewing' %}
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="published">
-  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 GoodBone</button>
+  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 {{ site_name }}</button>
 </form>
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="writing">
@@ -39,7 +39,7 @@
 {% elif art.status == 'approved' %}
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="published">
-  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 GoodBone</button>
+  <button type="submit" class="btn btn-primary btn-sm">✓ 批准並發佈到 {{ site_name }}</button>
 </form>
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="writing">
@@ -48,7 +48,7 @@
 {% elif art.status == 'review_required' %}
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="published">
-  <button type="submit" class="btn btn-primary btn-sm" onclick="return confirm('⚠️ 此文章有事實查核待確認項目，確定發布？')">⚠️ 確認後發佈到 GoodBone</button>
+  <button type="submit" class="btn btn-primary btn-sm" onclick="return confirm('⚠️ 此文章有事實查核待確認項目，確定發布？')">⚠️ 確認後發佈到 {{ site_name }}</button>
 </form>
 <form action="/admin/articles/{{ art.id }}/status" method="post" style="display:inline;">
   <input type="hidden" name="status" value="writing">
@@ -463,8 +463,8 @@ async function saveArticle(refs) {
   }
 }
 
-// 發布到 GoodBone：透過「✓ 批准並發佈」按鈕（status → published）即可上線
-// publish_url 由後端自動設為 https://goodbone.com.tw/blog/{slug}
+// 發布到站點：透過「✓ 批准並發佈」按鈕（status → published）即可上線
+// publish_url 由後端依站點設定自動產生
 </script>
 
 {% if seo_history %}

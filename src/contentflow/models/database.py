@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -34,6 +35,8 @@ class Project(Base):
     brand_name = Column(String, default="")
     brand_url = Column(String, default="")
     brand_description = Column(Text, default="")
+    site_contact_email = Column(String, default="")
+    site_blog_path = Column(String, default="/blog")
     industry = Column(String, default="")
     writing_principles = Column(Text, default="")
 
@@ -73,9 +76,56 @@ class Project(Base):
     authors = relationship("Author", back_populates="project")
     backlink_snapshots = relationship("BacklinkSnapshot", back_populates="project")
     gbp_metrics = relationship("GoogleBusinessMetric", back_populates="project")
+    integrations = relationship("ProjectIntegration", back_populates="project", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Project '{self.slug}' ({self.name})>"
+
+
+class ProjectIntegration(Base):
+    __tablename__ = "project_integrations"
+    __table_args__ = (
+        UniqueConstraint("project_id", "integration_type", name="uq_project_integrations_project_type"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    integration_type = Column(String, nullable=False, index=True)   # wordpress / forgebase
+    label = Column(String, default="")
+    base_url = Column(String, default="")
+    username = Column(String, default="")
+    secret_value = Column(Text, default="")
+    seo_plugin = Column(String, default="yoast")
+    publish_mode = Column(String, default="publish")
+    is_enabled = Column(Boolean, default=True)
+    config_json = Column(Text, default="{}")
+    health_status = Column(String, default="unknown")
+    last_checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="integrations")
+
+    def __repr__(self):
+        return f"<ProjectIntegration project={self.project_id} type={self.integration_type}>"
+
+
+class ProjectAuditLog(Base):
+    __tablename__ = "project_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    actor = Column(String, default="system")
+    action_type = Column(String, nullable=False, index=True)
+    summary = Column(Text, default="")
+    payload_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    project = relationship("Project")
+
+    def __repr__(self):
+        return f"<ProjectAuditLog project={self.project_id} action={self.action_type}>"
 
 
 # ── 關鍵字表 ─────────────────────────────────────────────────

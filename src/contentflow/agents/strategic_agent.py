@@ -48,6 +48,12 @@ from .strategic_controls import (
 from .strategic_context import collect_project_context_impl
 from .strategic_execution import execute_strategic_plan_impl, run_strategic_agent_impl
 from .strategic_outcomes import _build_action_outcome_stats
+from ..project_integrations import (
+    build_forgebase_publisher,
+    build_native_publish_url,
+    build_wordpress_publisher,
+    resolve_publish_platform,
+)
 from ..utils.topic_hygiene import is_viable_topic
 
 
@@ -1033,24 +1039,14 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                     and (article.seo_score or 0) >= (project.auto_publish_min_score or 85)
                 )
                 if auto_pub and article.slug:
-                    # 決定發布平台：WordPress > ForgeBase > 原生 blog
-                    wp_configured = bool(
-                        settings.wordpress_site_url
-                        and settings.wordpress_username
-                        and settings.wordpress_app_password
-                    )
-                    fb_configured = bool(
-                        settings.forgebase_api_base_url
-                        and settings.forgebase_api_token
-                    )
-                    _pub_platform = (
-                        "wordpress" if wp_configured
-                        else "forgebase" if fb_configured
-                        else "native"
+                    _pub_platform = resolve_publish_platform(
+                        db=session,
+                        project_id=project.id if project else article.project_id,
                     )
                     _pub_article_id = art_id
                     _pub_draft = result.draft
                     _pub_slug = article.slug
+                    _pub_project_id = project.id if project else article.project_id
                 elif auto_pub:
                     # slug 尚未生成（罕見），fallback 到排程器
                     article.status = "approved"
@@ -1080,8 +1076,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
         # 實際執行自動發布（session 已 commit 後再執行，避免 DB 鎖定）
         if _pub_platform == "native":
             # 原生 FastAPI blog：DB 直接標記已發布即可（/blog/{slug} 從 DB 讀取）
-            site_root = settings.site_url.rstrip("/")
-            pub_url = f"{site_root}/blog/{_pub_slug}"
+            pub_url = build_native_publish_url(_pub_slug, project_id=_pub_project_id)
             with SessionLocal() as s2:
                 _art = s2.get(Article, _pub_article_id)
                 if _art:
@@ -1094,7 +1089,6 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
         elif _pub_platform == "wordpress":
             try:
-                from ..publishers.wordpress import WordPressPublisher
                 from contentflow.models.schemas import ArticleDraft as _Draft
                 wp_draft = _Draft(
                     title=_pub_draft.title,
@@ -1105,7 +1099,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                     faq_schema_json=_pub_draft.faq_schema_json or "",
                     article_schema_json=_pub_draft.article_schema_json or "",
                 )
-                wp_pub = WordPressPublisher()
+                wp_pub = build_wordpress_publisher(project_id=_pub_project_id)
                 # 直接以 publish 狀態建立（不走 draft → publish 兩步）
                 wp_result = await wp_pub._create_post(wp_draft, status="publish")
                 if wp_result.success:
@@ -1137,8 +1131,7 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
 
         elif _pub_platform == "forgebase":
             try:
-                from ..publishers.forgebase import ForgeBasePublisher
-                fb_pub = ForgeBasePublisher()
+                fb_pub = build_forgebase_publisher(project_id=_pub_project_id)
                 # Step 1+2: create brief → page（草稿）
                 fb_result = await fb_pub.publish_draft(
                     _pub_draft, primary_keyword=_pub_draft.title
@@ -1438,14 +1431,17 @@ async def _execute_optimize_meta(action: dict, project_id: int) -> None:
                 meta_title=new_title or "",
                 meta_description=new_desc or "",
             )
-            if art_wp_id:
-                from ..publishers.wordpress import WordPressPublisher
-                pub = WordPressPublisher()
+            with SessionLocal() as session:
+                if art_wp_id:
+                    pub = build_wordpress_publisher(db=session, project_id=article.project_id)
+                elif art_fb_id:
+                    pub = build_forgebase_publisher(db=session, project_id=article.project_id)
+                else:
+                    pub = None
+            if art_wp_id and pub is not None:
                 await pub.update_post(art_wp_id, draft_obj)
                 logger.info(f"[StrategicExecutor/optimize_meta] '{art_title}' WP meta 已回寫")
-            elif art_fb_id:
-                from ..publishers.forgebase import ForgeBasePublisher
-                pub = ForgeBasePublisher()
+            elif art_fb_id and pub is not None:
                 await pub.update_post(art_fb_id, draft_obj)
                 logger.info(f"[StrategicExecutor/optimize_meta] '{art_title}' ForgeBase meta 已回寫")
 
@@ -1530,13 +1526,18 @@ async def _execute_inject_internal_links(action: dict, project_id: int) -> None:
         meta_description=art_meta_desc,
     )
     try:
-        if art_wp_id:
-            from ..publishers.wordpress import WordPressPublisher
-            await WordPressPublisher().update_post(art_wp_id, draft_obj)
+        with SessionLocal() as session:
+            if art_wp_id:
+                publisher = build_wordpress_publisher(db=session, project_id=article.project_id)
+            elif art_fb_id:
+                publisher = build_forgebase_publisher(db=session, project_id=article.project_id)
+            else:
+                publisher = None
+        if art_wp_id and publisher is not None:
+            await publisher.update_post(art_wp_id, draft_obj)
             logger.info(f"[StrategicExecutor/inject_links] '{art_title}' WP 已更新（注入 {injected} 條連結）")
-        elif art_fb_id:
-            from ..publishers.forgebase import ForgeBasePublisher
-            await ForgeBasePublisher().update_post(art_fb_id, draft_obj)
+        elif art_fb_id and publisher is not None:
+            await publisher.update_post(art_fb_id, draft_obj)
             logger.info(f"[StrategicExecutor/inject_links] '{art_title}' ForgeBase 已更新（注入 {injected} 條連結）")
         else:
             logger.info(

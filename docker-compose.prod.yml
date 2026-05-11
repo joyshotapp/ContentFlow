@@ -26,14 +26,14 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.site
     restart: unless-stopped
-    # 只跑 site sub-app，4 workers，綁定 127.0.0.1 讓 nginx 代理
     command: >
-      uvicorn contentflow.site.app:site_app
-        --host 127.0.0.1
-        --port 8000
-        --workers 4
-        --proxy-headers
-        --forwarded-allow-ips=*
+      sh -c '
+        if [ "${PLATFORM_MODE:-managed-site}" = "control-plane" ] || [ "${MANAGED_SITE_ENABLED:-true}" = "false" ]; then
+          exec uvicorn contentflow.api:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers --forwarded-allow-ips=*
+        else
+          exec uvicorn contentflow.site.app:site_app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers --forwarded-allow-ips=*
+        fi
+      '
     env_file: .env.prod
     environment:
       DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD}@localhost:5432/contentflow
@@ -50,7 +50,7 @@ services:
         condition: service_healthy
     network_mode: host
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); sys.exit(0 if r.status==200 else 1)"]
+      test: ["CMD", "sh", "-c", "if [ \"${PLATFORM_MODE:-managed-site}\" = \"control-plane\" ] || [ \"${MANAGED_SITE_ENABLED:-true}\" = \"false\" ]; then python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/admin/health'); sys.exit(0 if r.status==200 else 1)\"; else python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); sys.exit(0 if r.status==200 else 1)\"; fi"]
       interval: 30s
       timeout: 10s
       retries: 3

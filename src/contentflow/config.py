@@ -82,6 +82,13 @@ class Settings(BaseSettings):
 
     # API 認證
     api_secret_key: str = Field(default="", alias="API_SECRET_KEY")
+    admin_reviewer_secret: str = Field(default="", alias="ADMIN_REVIEWER_SECRET")
+    admin_editor_secret: str = Field(default="", alias="ADMIN_EDITOR_SECRET")
+    connector_secret_key: str = Field(
+        default="",
+        alias="CONNECTOR_SECRET_KEY",
+        description="Connector secret encryption key；留空則 fallback 到 API_SECRET_KEY",
+    )
 
     # AgentOps
     agentops_api_key: str = Field(default="", alias="AGENTOPS_API_KEY")
@@ -137,12 +144,37 @@ class Settings(BaseSettings):
         description="Admin 介面對外根 URL（不含結尾斜線），用於通知連結",
     )
     site_name: str = Field(
-        default="GoodBone 好骨頭",
+        default="ContentFlow Health",
         alias="SITE_NAME",
     )
     site_description: str = Field(
-        default="以科學文獻為基礎的骨科健康知識平台，提供骨骼健康、關節保護與骨科治療的專業內容。",
+        default="以科學文獻為基礎的健康知識平台，提供清楚、可追溯且持續更新的專業內容。",
         alias="SITE_DESCRIPTION",
+    )
+    site_contact_email: str = Field(
+        default="editor@example.com",
+        alias="SITE_CONTACT_EMAIL",
+        description="Reference Site 對外聯絡信箱",
+    )
+    site_blog_path: str = Field(
+        default="/blog",
+        alias="SITE_BLOG_PATH",
+        description="Reference Site 文章路徑前綴，預設為 /blog",
+    )
+    site_project_slug: str = Field(
+        default="",
+        alias="SITE_PROJECT_SLUG",
+        description="Reference Site 綁定的 project slug；留空則沿用全域站點設定",
+    )
+    platform_mode: str = Field(
+        default="hybrid",
+        alias="PLATFORM_MODE",
+        description="平台模式：hybrid / control-plane / managed-site",
+    )
+    managed_site_enabled: bool = Field(
+        default=True,
+        alias="MANAGED_SITE_ENABLED",
+        description="是否啟用內建 managed site 前台；關閉後只保留 control plane/admin",
     )
 
     # 反向連結監控（DataForSEO）

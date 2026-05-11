@@ -3,14 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from loguru import logger
+from sqlalchemy.orm import Session
 
 from contentflow.config import settings
 from contentflow.models.database import Article
+from contentflow.project_integrations import build_native_publish_url
 
 
-def _native_blog_url(slug: str) -> str:
-    base = settings.site_url.rstrip("/")
-    return f"{base}/blog/{slug}"
+def _native_blog_url(slug: str, project_id: int | None = None, db: Session | None = None) -> str:
+    return build_native_publish_url(slug, db=db, project_id=project_id)
 
 
 def _mark_article_published(art: Article, publish_url: str | None = None) -> None:
