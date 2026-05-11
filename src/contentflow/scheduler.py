@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import time
@@ -19,7 +18,6 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
-from statistics import median
 from typing import Callable, Awaitable
 
 try:
@@ -37,7 +35,20 @@ from loguru import logger
 
 from contentflow.config import settings
 from contentflow.db import SessionLocal
-from contentflow.models.database import ActionOutcome, GAPageMetric, OperationsHealthSnapshot, PipelineRun, SEORanking, SchedulerLog
+from contentflow.models.database import SchedulerLog
+from contentflow.scheduler_job_registry import SCHEDULER_JOB_SPECS
+from contentflow.scheduler_operations import persist_operations_health_snapshot_impl
+from contentflow.scheduler_outcomes import (
+    _build_outcome_evaluation_snapshot,
+    _classify_outcome_success,
+    _get_gsc_snapshot,
+)
+from contentflow.scheduler_runtime import (
+    scheduler_heartbeat_path,
+    send_failure_alert,
+    write_scheduler_heartbeat,
+    write_scheduler_log,
+)
 from sqlalchemy import func
 
 # ── 全域 scheduler 實例 ───────────────────────────────────────
@@ -48,20 +59,21 @@ scheduler = AsyncIOScheduler(
 )
 
 
+def _build_job_trigger(job_spec):
+    if job_spec["trigger_type"] == "cron":
+        return CronTrigger(**job_spec["trigger_kwargs"])
+    if job_spec["trigger_type"] == "interval":
+        return IntervalTrigger(**job_spec["trigger_kwargs"])
+    raise ValueError(f"Unknown trigger type: {job_spec['trigger_type']}")
+
+
 def _scheduler_heartbeat_path() -> Path:
-    return Path(settings.scheduler_heartbeat_path)
+    return scheduler_heartbeat_path(settings)
 
 
 def _write_scheduler_heartbeat(reason: str) -> None:
     """更新 scheduler heartbeat，供跨 container 健康檢查使用。"""
-    payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "pid": os.getpid(),
-        "reason": reason,
-    }
-    heartbeat_path = _scheduler_heartbeat_path()
-    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
-    heartbeat_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    write_scheduler_heartbeat(settings=settings, reason=reason)
 
 # ── SchedulerLog 寫入 helper ──────────────────────────────────
 
@@ -75,19 +87,16 @@ def _write_log(
     duration_seconds: float | None = None,
 ) -> None:
     """同步寫入 SchedulerLog（在 async job 中以 thread-safe 方式呼叫）。"""
-    with SessionLocal() as session:
-        log = SchedulerLog(
-            job_id=job_id,
-            job_name=job_name,
-            status=status,
-            started_at=started_at,
-            finished_at=datetime.now(timezone.utc),
-            retry_count=retry_count,
-            error_message=error_message,
-            duration_seconds=duration_seconds,
-        )
-        session.add(log)
-        session.commit()
+    write_scheduler_log(
+        session_factory=SessionLocal,
+        job_id=job_id,
+        job_name=job_name,
+        status=status,
+        started_at=started_at,
+        retry_count=retry_count,
+        error_message=error_message,
+        duration_seconds=duration_seconds,
+    )
 
 
 async def _scheduler_heartbeat_job() -> None:
@@ -96,196 +105,13 @@ async def _scheduler_heartbeat_job() -> None:
 
 async def _send_failure_alert(job_name: str, error: str) -> None:
     """排程任務超過最大重試次數時發 Slack 通知。"""
-    import httpx
-    if not settings.slack_webhook_url:
-        return
-    msg = f"🚨 ContentFlow Scheduler 失敗\n任務：{job_name}\n錯誤：{error[:200]}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(settings.slack_webhook_url, json={"text": msg})
-    except Exception as exc:
-        logger.warning(f"[Scheduler] Slack 通知失敗：{exc}")
-
-
-def _normalize_url_path(url: str) -> str:
-    if not url:
-        return ""
-    from urllib.parse import urlparse
-
-    parsed = urlparse(url)
-    path = (parsed.path or url).strip()
-    if not path:
-        return ""
-    if not path.startswith("/"):
-        path = f"/{path.lstrip('/')}"
-    return path.rstrip("/") or "/"
-
-
-def _get_gsc_snapshot(
-    session,
-    project_id: int,
-    keyword: str,
-    target_date,
-    *,
-    landing_page: str | None = None,
-    window_days: int = 2,
-):
-    from contentflow.models.database import SEORanking
-
-    window_start = target_date - timedelta(days=window_days)
-    window_end = target_date + timedelta(days=window_days)
-    rows = (
-        session.query(SEORanking)
-        .filter(
-            SEORanking.project_id == project_id,
-            SEORanking.keyword == keyword,
-            SEORanking.tracked_date >= window_start,
-            SEORanking.tracked_date <= window_end,
-        )
-        .all()
+    await send_failure_alert(
+        settings=settings,
+        webhook_url=settings.slack_webhook_url,
+        logger=logger,
+        job_name=job_name,
+        error=error,
     )
-    if not rows:
-        return None
-
-    target_path = _normalize_url_path(landing_page or "")
-    if target_path:
-        path_rows = [row for row in rows if _normalize_url_path(row.landing_page or "") == target_path]
-        if path_rows:
-            rows = path_rows
-
-    latest_date = max((row.tracked_date for row in rows if row.tracked_date), default=None)
-    if latest_date is None:
-        return None
-
-    latest_rows = [row for row in rows if row.tracked_date == latest_date]
-    positions = [float(row.position) for row in latest_rows if row.position is not None]
-    impressions = sum(int(row.impressions or 0) for row in latest_rows)
-    clicks = sum(int(row.clicks or 0) for row in latest_rows)
-    ctr = round((clicks / impressions), 4) if impressions > 0 else 0.0
-
-    return {
-        "rank": round(sum(positions) / len(positions), 1) if positions else None,
-        "impressions": impressions,
-        "clicks": clicks,
-        "ctr": ctr,
-        "tracked_date": latest_date,
-    }
-
-
-def _classify_outcome_success(outcome, snapshot: dict[str, object]) -> tuple[str, str, float | None]:
-    rank = snapshot.get("rank")
-    if rank is None:
-        return "stable", "low", None
-
-    if outcome.baseline_rank is None:
-        if rank <= 50:
-            return "improved", "medium", None
-        return "stable", "low", None
-
-    rank_delta = round(float(rank) - float(outcome.baseline_rank), 1)
-    click_delta = int(snapshot.get("clicks", 0) or 0) - int(outcome.baseline_clicks or 0)
-    ctr_delta = round(float(snapshot.get("ctr", 0.0) or 0.0) - float(outcome.baseline_ctr or 0.0), 4)
-
-    if rank_delta <= -3:
-        return "improved", "high", rank_delta
-    if rank_delta <= 0 and (click_delta > 0 or ctr_delta >= 0.01):
-        return "improved", "medium", rank_delta
-    if rank_delta <= 3 and (click_delta >= 0 or ctr_delta >= 0.0):
-        return "stable", "medium", rank_delta
-    return "declined", "high", rank_delta
-
-
-def _evaluation_weight(outcome) -> float:
-    confidence_weight = {
-        "low": 0.75,
-        "medium": 1.0,
-        "high": 1.25,
-    }.get((outcome.learning_confidence or "low").lower(), 0.75)
-    traffic_reference = max(
-        int(outcome.baseline_impressions or 0),
-        int(outcome.impressions_after_28d or 0),
-    )
-    traffic_weight = 1.0 + min(0.35, traffic_reference / 800.0)
-    rank_delta = abs(float(outcome.rank_delta or 0.0))
-    rank_weight = 1.0 + min(rank_delta, 10.0) * 0.03
-    return round(confidence_weight * traffic_weight * rank_weight, 4)
-
-
-def _evaluation_clamp(value: float, lower: float = -1.0, upper: float = 1.0) -> float:
-    return max(lower, min(upper, value))
-
-
-def _outcome_effects(outcome) -> dict[str, float | None]:
-    rank_delta = float(outcome.rank_delta) if outcome.rank_delta is not None else None
-
-    baseline_clicks_raw = getattr(outcome, "baseline_clicks", None)
-    after_clicks_raw = getattr(outcome, "clicks_after_28d", None)
-    if baseline_clicks_raw is None and after_clicks_raw is None:
-        click_delta = None
-    else:
-        click_delta = int(after_clicks_raw or 0) - int(baseline_clicks_raw or 0)
-
-    baseline_ctr_raw = getattr(outcome, "baseline_ctr", None)
-    after_ctr_raw = getattr(outcome, "ctr_after_28d", None)
-    if baseline_ctr_raw is None and after_ctr_raw is None:
-        ctr_delta = None
-    else:
-        ctr_delta = round(float(after_ctr_raw or 0.0) - float(baseline_ctr_raw or 0.0), 4)
-
-    return {
-        "rank_delta": rank_delta,
-        "click_delta": click_delta,
-        "ctr_delta": ctr_delta,
-    }
-
-
-def _control_baseline(outcomes) -> dict[str, float]:
-    rank_deltas: list[float] = []
-    click_deltas: list[float] = []
-    ctr_deltas: list[float] = []
-
-    for outcome in outcomes:
-        effects = _outcome_effects(outcome)
-        if effects["rank_delta"] is not None:
-            rank_deltas.append(float(effects["rank_delta"]))
-        if effects["click_delta"] is not None:
-            click_deltas.append(float(effects["click_delta"]))
-        if effects["ctr_delta"] is not None:
-            ctr_deltas.append(float(effects["ctr_delta"]))
-
-    return {
-        "rank_delta_median": round(float(median(rank_deltas)), 3) if rank_deltas else 0.0,
-        "click_delta_median": round(float(median(click_deltas)), 3) if click_deltas else 0.0,
-        "ctr_delta_median": round(float(median(ctr_deltas)), 4) if ctr_deltas else 0.0,
-    }
-
-
-def _build_outcome_evaluation_snapshot(outcome, reference_outcomes) -> dict[str, float | None]:
-    effects = _outcome_effects(outcome)
-    baseline = _control_baseline(reference_outcomes)
-
-    rank_advantage = 0.0 if effects["rank_delta"] is None else baseline["rank_delta_median"] - float(effects["rank_delta"])
-    click_advantage = 0.0 if effects["click_delta"] is None else float(effects["click_delta"]) - baseline["click_delta_median"]
-    ctr_advantage = 0.0 if effects["ctr_delta"] is None else float(effects["ctr_delta"]) - baseline["ctr_delta_median"]
-
-    rank_component = _evaluation_clamp(rank_advantage / 5.0)
-    click_component = _evaluation_clamp(click_advantage / 10.0)
-    ctr_component = _evaluation_clamp(ctr_advantage / 0.015)
-    control_adjustment = (rank_component * 0.35) + (click_component * 0.15) + (ctr_component * 0.2)
-
-    return {
-        "outcome_weight": _evaluation_weight(outcome),
-        "rank_delta": round(float(effects["rank_delta"]), 3) if effects["rank_delta"] is not None else None,
-        "click_delta": round(float(effects["click_delta"]), 3) if effects["click_delta"] is not None else None,
-        "ctr_delta": round(float(effects["ctr_delta"]), 4) if effects["ctr_delta"] is not None else None,
-        "control_rank_delta_median": baseline["rank_delta_median"],
-        "control_click_delta_median": baseline["click_delta_median"],
-        "control_ctr_delta_median": baseline["ctr_delta_median"],
-        "rank_advantage_vs_baseline": round(rank_advantage, 3),
-        "click_advantage_vs_baseline": round(click_advantage, 3),
-        "ctr_advantage_vs_baseline": round(ctr_advantage, 4),
-        "control_adjustment": round(control_adjustment, 3),
-    }
 
 
 # ── Retry wrapper ─────────────────────────────────────────────
@@ -2098,90 +1924,7 @@ async def sync_gbp_metrics() -> None:
 
 @with_retry(max_retries=1)
 async def persist_operations_health_snapshot() -> None:
-    """每日持久化 operations health 摘要，供 dashboard 與月度回顧使用。"""
-    now = datetime.now(timezone.utc)
-    snapshot_date = now.date()
-    with SessionLocal() as session:
-        latest_gsc = session.query(func.max(SEORanking.tracked_date)).scalar()
-        latest_ga4 = session.query(func.max(GAPageMetric.tracked_date)).scalar()
-        stale_sources = 0
-        if latest_gsc is None or (snapshot_date - latest_gsc).days > 4:
-            stale_sources += 1
-        if latest_ga4 is None or (snapshot_date - latest_ga4).days > 4:
-            stale_sources += 1
-
-        scheduler_cutoff = now - timedelta(days=7)
-        pipeline_cutoff = now - timedelta(days=30)
-        outcome_cutoff = snapshot_date - timedelta(days=90)
-
-        scheduler_rows = session.query(SchedulerLog).filter(SchedulerLog.started_at >= scheduler_cutoff).all()
-        scheduler_total = len(scheduler_rows)
-        scheduler_ok = sum(1 for row in scheduler_rows if row.status == "success")
-        scheduler_success_rate = round((scheduler_ok / scheduler_total * 100), 2) if scheduler_total else None
-
-        pipeline_rows = session.query(PipelineRun).filter(PipelineRun.started_at >= pipeline_cutoff).all()
-        pipeline_total = len(pipeline_rows)
-        pipeline_ok = sum(1 for row in pipeline_rows if row.status == "completed")
-        pipeline_success_rate = round((pipeline_ok / pipeline_total * 100), 2) if pipeline_total else None
-
-        outcome_rows = (
-            session.query(ActionOutcome)
-            .filter(ActionOutcome.checked_28d_at.isnot(None), ActionOutcome.action_date >= outcome_cutoff)
-            .all()
-        )
-        outcome_total = len(outcome_rows)
-        outcome_improved = sum(1 for row in outcome_rows if row.success_flag == "improved")
-        outcome_improved_rate = round((outcome_improved / outcome_total * 100), 2) if outcome_total else None
-
-        alert_count = 0
-        if stale_sources:
-            alert_count += stale_sources
-        if scheduler_success_rate is not None and scheduler_success_rate < 90:
-            alert_count += 1
-        if pipeline_success_rate is not None and pipeline_success_rate < 85:
-            alert_count += 1
-        if outcome_improved_rate is not None and outcome_improved_rate < 50:
-            alert_count += 1
-
-        overall_status = "healthy"
-        if alert_count >= 3:
-            overall_status = "critical"
-        elif alert_count >= 1:
-            overall_status = "warning"
-
-        summary = {
-            "latest_gsc": latest_gsc.isoformat() if latest_gsc else None,
-            "latest_ga4": latest_ga4.isoformat() if latest_ga4 else None,
-            "scheduler_total": scheduler_total,
-            "pipeline_total": pipeline_total,
-            "outcome_total": outcome_total,
-        }
-
-        snapshot = (
-            session.query(OperationsHealthSnapshot)
-            .filter(
-                OperationsHealthSnapshot.snapshot_date == snapshot_date,
-                OperationsHealthSnapshot.snapshot_type == "daily",
-            )
-            .first()
-        )
-        if snapshot is None:
-            snapshot = OperationsHealthSnapshot(snapshot_date=snapshot_date, snapshot_type="daily")
-            session.add(snapshot)
-
-        snapshot.overall_status = overall_status
-        snapshot.stale_sources = stale_sources
-        snapshot.scheduler_success_rate = scheduler_success_rate
-        snapshot.pipeline_success_rate = pipeline_success_rate
-        snapshot.outcome_improved_rate = outcome_improved_rate
-        snapshot.alert_count = alert_count
-        snapshot.summary_json = json.dumps(summary, ensure_ascii=False)
-        session.commit()
-
-    logger.info(
-        f"[OperationsSnapshot] 已寫入 {snapshot_date} status={overall_status} "
-        f"stale={stale_sources} alerts={alert_count}"
-    )
+    await persist_operations_health_snapshot_impl(session_factory=SessionLocal, logger=logger)
 
 
 def schedule_all_jobs() -> None:
@@ -2204,28 +1947,13 @@ def schedule_all_jobs() -> None:
         logger.info("[Scheduler] 另一個 worker 已持有排程鎖，跳過")
         return
 
-    scheduler.add_job(sync_gsc_all_projects,      CronTrigger(hour=3,  minute=0),                              id="gsc_sync",        replace_existing=True)
-    scheduler.add_job(sync_ga4_all_projects,       CronTrigger(hour=3,  minute=30),                             id="ga4_sync",        replace_existing=True)
-    scheduler.add_job(sync_keyword_trends,         CronTrigger(day=1,   hour=3,  minute=45),                    id="trends_sync",     replace_existing=True)
-    scheduler.add_job(backfill_action_outcomes,     CronTrigger(hour=4,  minute=0),                              id="outcome_backfill", replace_existing=True)
-    scheduler.add_job(check_scheduled_publishes,   CronTrigger(hour=4,  minute=5),                              id="sched_publish",   replace_existing=True)
-    scheduler.add_job(check_published_noindex,      CronTrigger(hour=4,  minute=10),                             id="publish_verify",  replace_existing=True)
-    scheduler.add_job(persist_operations_health_snapshot, CronTrigger(hour=4, minute=20),                        id="operations_snapshot", replace_existing=True)
-    scheduler.add_job(check_gsc_sitemap_health,    CronTrigger(day_of_week="mon", hour=4, minute=45),           id="sitemap_health",  replace_existing=True)
-    scheduler.add_job(run_competitor_serp_check,   CronTrigger(day_of_week="mon", hour=4, minute=30),           id="competitor_serp", replace_existing=True)
-    scheduler.add_job(run_attribution_engine,      CronTrigger(day_of_week="mon", hour=5, minute=0),            id="attribution",     replace_existing=True)
-    scheduler.add_job(check_refresh_triggers,      CronTrigger(day_of_week="tue", hour=4, minute=0),            id="refresh_check",   replace_existing=True)
-    scheduler.add_job(run_l1_pattern_analysis,     CronTrigger(day=1,   hour=6,  minute=0),                     id="l1_learn",        replace_existing=True)
-    scheduler.add_job(run_l2_roi_analysis,         CronTrigger(day=1,   hour=7,  minute=0),                     id="l2_learn",        replace_existing=True)
-    scheduler.add_job(run_auto_pipeline,           CronTrigger(hour=8,  minute=0),                              id="auto_pipeline",   replace_existing=True)
-    scheduler.add_job(run_render_verification,     CronTrigger(hour=10, minute=0),                              id="render_verify",   replace_existing=True)
-    scheduler.add_job(run_weekly_reflection,        CronTrigger(day_of_week="sun", hour=8, minute=0),            id="weekly_reflection", replace_existing=True)
-    scheduler.add_job(send_weekly_report,          CronTrigger(day_of_week="sun", hour=9, minute=0),            id="weekly_report",   replace_existing=True)
-    scheduler.add_job(check_ranking_drops,         CronTrigger(day_of_week="wed", hour=6, minute=0),            id="ranking_drops",   replace_existing=True)
-    scheduler.add_job(run_index_coverage_check,    CronTrigger(day_of_week="fri", hour=5, minute=0),            id="index_coverage",  replace_existing=True)
-    scheduler.add_job(sync_gbp_metrics,            CronTrigger(hour=3,  minute=50),                             id="gbp_sync",        replace_existing=True)
-    scheduler.add_job(sync_backlink_metrics,       CronTrigger(day_of_week="tue", hour=5, minute=30),           id="backlink_sync",   replace_existing=True)
-    scheduler.add_job(_scheduler_heartbeat_job,    IntervalTrigger(minutes=1),                                  id="scheduler_heartbeat", replace_existing=True)
+    for job_spec in SCHEDULER_JOB_SPECS:
+        scheduler.add_job(
+            globals()[job_spec["callable_name"]],
+            _build_job_trigger(job_spec),
+            id=job_spec["scheduler_id"],
+            replace_existing=True,
+        )
 
     scheduler.start()
     _write_scheduler_heartbeat("startup")

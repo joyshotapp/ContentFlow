@@ -48,25 +48,5 @@ services:
       - ./data:/app/data
       - ./outputs:/app/outputs
 
-  ui:
-    build: .
-    restart: unless-stopped
-    command: streamlit run app/Home.py --server.port 8501 --server.address 0.0.0.0
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://contentflow:${DB_PASSWORD:-changeme}@db:5432/contentflow
-      CHROMA_PERSIST_DIR: /app/data/chroma
-    depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./src:/app/src
-      - ./app:/app/app
-      - ./data:/app/data
-
 volumes:
   pgdata:

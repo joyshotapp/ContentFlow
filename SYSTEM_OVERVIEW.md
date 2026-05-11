@@ -12,7 +12,7 @@
 4. [資料模型（ORM）](#4-資料模型orm)
 5. [Agent 流水線](#5-agent-流水線)
 6. [工具模組（Tools）](#6-工具模組tools)
-7. [前端介面（Streamlit）](#7-前端介面streamlit)
+7. [管理介面（FastAPI Admin）](#7-管理介面fastapi-admin)
 8. [設定與環境變數](#8-設定與環境變數)
 9. [CLI 入口](#9-cli-入口)
 10. [測試覆蓋](#10-測試覆蓋)
@@ -40,7 +40,7 @@
 
 - **多租戶（Multi-project）**：每筆資料都綁定 `project_id`，在同一資料庫支援多個品牌/客戶。
 - **低成本首選**：主力使用 `gpt-4o-mini`（約 $0.02–0.05/篇），僅特定場景升級使用 `claude-sonnet-4-5`。
-- **可審核**：所有 AI 輸出先存資料庫，人工可在 Streamlit UI 查看、修改後才發布。
+- **可審核**：所有 AI 輸出先存資料庫，人工可在 FastAPI Admin 查看、修改後才發布。
 - **可擴展**：Agent 以純函式設計，可獨立呼叫，也可透過 Orchestrator 串接。
 
 ---
@@ -49,9 +49,8 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                     前端介面                         │
-│             Streamlit (app/)                        │
-│   Home | 文章管理 | 關鍵字 | 日曆 | 規範 | AI研究中心  │
+│                Web 管理與站台入口                    │
+│      FastAPI Site + Admin (/ + /admin)             │
 └─────────────────────┬───────────────────────────────┘
                       │ SQLAlchemy ORM
 ┌─────────────────────▼───────────────────────────────┐
@@ -80,7 +79,6 @@
 
 | 套件 | 版本 | 用途 |
 |------|------|------|
-| `streamlit` | ≥1.38 | Web UI |
 | `langchain` / `langgraph` | ≥0.3 / ≥0.2 | Agent 框架（目前 Pipeline 未大量使用 Graph） |
 | `openai` | ≥1.50 | GPT-4o-mini 推理 |
 | `anthropic` | ≥0.34 | Claude 寫作（可配置） |
@@ -96,19 +94,6 @@
 ```
 ContentFlow/
 ├── pyproject.toml             # 套件設定、依賴、工具鏈
-├── app/                       # Streamlit 前端
-│   ├── Home.py                # 首頁儀表板（KPI + 文章狀態 + 關鍵字Top10）
-│   ├── project_selector.py    # 全域 Sidebar 專案切換元件
-│   └── pages/
-│       ├── 1_📝_文章管理.py    # 文章列表、篩選、狀態追蹤
-│       ├── 2_🔑_關鍵字.py     # 關鍵字資料庫查詢
-│       ├── 3_📅_內容日曆.py   # 月/週度內容排程
-│       ├── 4_📜_撰寫規範.py   # 品牌寫作規範管理
-│       ├── 5_🏢_競品分析.py   # 競業市場研究
-│       ├── 6_📦_產品資訊.py   # 產品系列資料
-│       ├── 7_⚖️_法規合規.py  # 食品廣告用詞法規
-│       ├── 8_🔬_AI研究.py    # AI 產文中心（主要操作入口）
-│       └── 9_⚙️_設定.py      # Excel 匯入、API 狀態
 ├── src/contentflow/           # 核心套件
 │   ├── __init__.py
 │   ├── cli.py                 # CLI 工具（contentflow research）
@@ -313,31 +298,26 @@ async def run_orchestrator(
 
 ---
 
-## 7. 前端介面（Streamlit）
+## 7. 管理介面（FastAPI Admin）
 
 啟動指令：
 ```bash
-streamlit run app/Home.py
+uvicorn contentflow.api:app --reload --port 8000
 ```
 
-### 頁面功能匯整
+主要入口：
+- Admin 後台：`http://localhost:8000/admin`
+- Public Site：`http://localhost:8000/`
 
-| 頁面 | 功能 |
+### 管理功能匯整
+
+| 區塊 | 功能 |
 |------|------|
-| **Home** | KPI 儀表板（關鍵字數、文章數、發布數）、文章狀態分佈圖、月度計劃圖、Top 10 關鍵字 |
-| **📝 文章管理** | 列表篩選（狀態/關鍵字/排序）、文章詳情展開、啟動 AI Pipeline 按鈕 |
-| **🔑 關鍵字** | 搜尋/篩選（優先度/搜尋量/難度）、排序、匯出功能 |
-| **📅 內容日曆** | 月/週度排程瀏覽，文章狀態追蹤 |
-| **📜 撰寫規範** | 品牌寫作規範瀏覽與管理 |
-| **🏢 競品分析** | 競品品牌資料查看 |
-| **📦 產品資訊** | 產品系列資料管理 |
-| **⚖️ 法規合規** | 食品廣告禁用詞查看（allowed/forbidden/caution 分類） |
-| **🔬 AI 研究中心** | **主要操作入口**：五步驟進度顯示、一鍵執行完整 Pipeline、結果 Markdown 預覽 |
-| **⚙️ 設定** | Excel 上傳匯入、本機路徑匯入（開發模式）、API 狀態、DB 資料統計 |
-
-### 專案切換機制
-
-`project_selector.py` 的 `get_current_project_id()` 在每個頁面的 Sidebar 顯示專案下拉選單，透過 `st.session_state._project_id` 跨頁面保持選擇狀態。
+| **Dashboard** | KPI 儀表板、Agent 成本、最近 pipeline 與系統摘要 |
+| **Articles / Calendar / Keywords / Clusters** | 內容管理、排程追蹤、關鍵字與 Topic Cluster 瀏覽 |
+| **SEO / Competitors / Content Health** | GSC/GA4 成效、競品觀測、內容健康檢查 |
+| **Agents / Strategic Plans / Knowledge** | AI 執行記錄、策略計畫審核、知識庫管理 |
+| **Scheduler / Health / Settings** | 排程監控、營運健康、專案目標與系統設定 |
 
 ---
 
@@ -465,7 +445,7 @@ pytest 設定：`asyncio_mode = "auto"`（所有 async 測試自動支援）
      + seo_score + factcheck flags)
                │
                ▼
-        Streamlit UI 審閱
+        Admin 後台審閱
         人工修改 → 發布
 ```
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
@@ -29,6 +30,27 @@ from contentflow.models.database import Article, KnowledgeEntry, SEORanking
 from contentflow.publishers.forgebase import ForgeBasePublisher
 from contentflow.publishers.wordpress import WordPressPublisher
 
+# ── Admin Dashboard ──────────────────────────────────────────
+from contentflow.admin.app import admin_app  # noqa: E402
+
+# ── Reference Site（SEO 閉環驗證前端） ─────────────────────────
+from contentflow.site.app import site_app  # noqa: E402
+
+
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    init_db()
+    from contentflow.scheduler import schedule_all_jobs
+
+    schedule_all_jobs()
+    logger.info("ContentFlow API 啟動完成")
+    yield
+    from contentflow.scheduler import scheduler
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("Scheduler 已停止")
+
+
 # ─────────────────────────────────────────────────────────────
 # App init
 # ─────────────────────────────────────────────────────────────
@@ -39,31 +61,10 @@ app = FastAPI(
     description="SEO 文章自動化 AI Agent — REST API",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=_app_lifespan,
 )
-
-# ── Admin Dashboard ──────────────────────────────────────────
-from contentflow.admin.app import admin_app  # noqa: E402
 app.mount("/admin", admin_app)
-
-# ── Reference Site（SEO 閉環驗證前端） ─────────────────────────
-from contentflow.site.app import site_app  # noqa: E402
 app.mount("/site", site_app)
-
-
-@app.on_event("startup")
-async def _startup():
-    init_db()
-    from contentflow.scheduler import schedule_all_jobs
-    schedule_all_jobs()
-    logger.info("ContentFlow API 啟動完成")
-
-
-@app.on_event("shutdown")
-async def _shutdown():
-    from contentflow.scheduler import scheduler
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
-        logger.info("Scheduler 已停止")
 
 
 # ─────────────────────────────────────────────────────────────

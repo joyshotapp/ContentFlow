@@ -186,8 +186,8 @@ def test_with_retry_failure_writes_failed_log(monkeypatch):
 
 # ── 5. cron 排程數量確認 ──────────────────────────────────────────────────
 
-def test_scheduler_has_20_jobs_defined():
-    """scheduler.py 中應定義 22 個 job，包含 operations snapshot 與 scheduler heartbeat。"""
+def test_scheduler_job_registry_has_expected_jobs():
+    """scheduler registry 應定義 22 個 job，包含 operations snapshot 與 scheduler heartbeat。"""
     expected_job_ids = {
         "gsc_sync",
         "ga4_sync",
@@ -212,12 +212,11 @@ def test_scheduler_has_20_jobs_defined():
         "l2_learn",
         "scheduler_heartbeat",
     }
-    import inspect
-    from contentflow import scheduler as sched_mod
-    src = inspect.getsource(sched_mod.schedule_all_jobs)
-    assert src.count("scheduler.add_job(") == 22
-    for jid in expected_job_ids:
-        assert jid in src, f"schedule_all_jobs 缺少 job id: {jid}"
+    from contentflow.scheduler_job_registry import SCHEDULER_JOB_SPECS
+
+    registry_ids = {job["scheduler_id"] for job in SCHEDULER_JOB_SPECS}
+    assert len(SCHEDULER_JOB_SPECS) == 22
+    assert registry_ids == expected_job_ids
 
 
 def test_write_scheduler_heartbeat(tmp_path, monkeypatch):

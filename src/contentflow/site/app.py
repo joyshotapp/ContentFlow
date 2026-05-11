@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -234,17 +235,8 @@ def _get_related_articles(db: Session, article: Article, limit: int = 4) -> list
 # Sub-app
 # ─────────────────────────────────────────────────────────────
 
-site_app = FastAPI(
-    title="ContentFlow Reference Site",
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
-)
-site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-
-@site_app.on_event("startup")
-async def _startup():
+@asynccontextmanager
+async def _site_lifespan(_: FastAPI):
     """初始化 DB + 排程（只在第一個 worker 啟動排程）。"""
     from contentflow.db import init_db
     from contentflow.scheduler import scheduler, schedule_all_jobs
@@ -253,13 +245,20 @@ async def _startup():
     # site service 可選擇不持有 scheduler，避免多 worker 下的假健康狀態。
     if settings.scheduler_enabled and not scheduler.running:
         schedule_all_jobs()
-
-
-@site_app.on_event("shutdown")
-async def _shutdown():
+    yield
     from contentflow.scheduler import scheduler
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+
+site_app = FastAPI(
+    title="ContentFlow Reference Site",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=_site_lifespan,
+)
+site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @site_app.get("/health")

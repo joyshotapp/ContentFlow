@@ -64,9 +64,6 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "google-analytics-data>=0.18.0",
 
-    # 審核介面
-    "streamlit>=1.38.0",
-
     # 日誌與通知
     "loguru>=0.7.0",
     "rich>=13.8.0",

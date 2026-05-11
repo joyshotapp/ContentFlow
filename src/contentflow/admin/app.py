@@ -26,9 +26,8 @@ import difflib
 import json
 import secrets
 import uuid
-from collections import Counter, defaultdict
+from collections import defaultdict
 from types import SimpleNamespace
-from typing import Any
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
@@ -38,10 +37,14 @@ from fastapi.templating import Jinja2Templates
 from loguru import logger
 from pathlib import Path
 from sqlalchemy import desc, func, inspect, literal
+from typing import Any
 
 from starlette.middleware.sessions import SessionMiddleware
 
 from contentflow.config import settings
+from contentflow.admin.article_ops import _mark_article_published, _native_blog_url, _submit_to_google_indexing
+from contentflow.admin.health_ops import _build_operations_health, _get_agent_cost_metrics, _serialize_operations_health
+from contentflow.admin.scheduler_registry import get_known_scheduler_jobs, get_scheduler_job_map
 from contentflow.db import SessionLocal
 from contentflow.models.database import (
     ActionOutcome,
@@ -56,6 +59,7 @@ from contentflow.models.database import (
     KnowledgeAuditLog,
     Keyword,
     LegalTerm,
+    OperationsHealthSnapshot,
     PipelineRun,
     Product,
     Project,
@@ -66,7 +70,6 @@ from contentflow.models.database import (
     StrategicPlan,
     TopicCluster,
     ClusterMember,
-    OperationsHealthSnapshot,
     WritingRule,
     ContentStrategy,
 )
@@ -85,292 +88,12 @@ _here = Path(__file__).resolve().parent
 _static_dir = _here / "static"
 admin_app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 templates = Jinja2Templates(directory=str(_here / "templates"))
-# Add custom Jinja2 filters
 templates.env.filters["fromjson"] = json.loads
-# Global variables available in all templates
 templates.env.globals["site_url"] = settings.site_url
 
 
 def _db():
     return SessionLocal()
-
-
-def _native_blog_url(slug: str) -> str:
-    base = settings.site_url.rstrip("/")
-    return f"{base}/blog/{slug}"
-
-
-def _mark_article_published(art: Article, publish_url: str | None = None) -> None:
-    now = datetime.now(timezone.utc)
-    art.status = "published"
-    art.published_at = now
-    art.publish_date = now.strftime("%Y-%m-%d")
-    art.updated_at = now
-    if publish_url:
-        art.publish_url = publish_url
-
-
-def _get_agent_cost_metrics(db):
-    """回傳 Agent 真實成本彙總；AgentDecisionLog 無資料時 fallback 至 PipelineRun.total_cost。"""
-    run_costs: dict = {}
-    total_cost_raw = None
-    monthly_cost_raw = None
-    avg_run_cost = None
-
-    cost_col = getattr(AgentDecisionLog, "cost_usd", None)
-    if cost_col is not None:
-        valid_filters = [cost_col.isnot(None), cost_col > 0]
-        run_cost_rows = (
-            db.query(
-                AgentDecisionLog.run_id,
-                func.sum(cost_col).label("run_cost"),
-            )
-            .filter(*valid_filters)
-            .group_by(AgentDecisionLog.run_id)
-            .all()
-        )
-        run_costs = {
-            run_id: round(float(run_cost), 4)
-            for run_id, run_cost in run_cost_rows
-            if run_cost
-        }
-        total_cost_raw = (
-            db.query(func.sum(cost_col))
-            .filter(*valid_filters)
-            .scalar()
-        )
-        monthly_cost_raw = (
-            db.query(func.sum(cost_col))
-            .filter(
-                *valid_filters,
-                AgentDecisionLog.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
-            )
-            .scalar()
-        )
-        if run_costs:
-            avg_run_cost = round(sum(run_costs.values()) / len(run_costs), 4)
-
-    # ── Fallback to PipelineRun.total_cost when AgentDecisionLog has no cost data ──
-    if not run_costs and total_cost_raw is None:
-        pr_total = db.query(func.sum(PipelineRun.total_cost)).filter(
-            PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0
-        ).scalar()
-        if pr_total:
-            total_cost_raw = pr_total
-            pr_run_rows = db.query(PipelineRun.run_id, PipelineRun.total_cost).filter(
-                PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0
-            ).all()
-            run_costs = {r.run_id: round(float(r.total_cost), 4) for r in pr_run_rows if r.total_cost}
-            avg_run_cost = round(sum(run_costs.values()) / len(run_costs), 4) if run_costs else None
-            monthly_cost_raw = db.query(func.sum(PipelineRun.total_cost)).filter(
-                PipelineRun.total_cost.isnot(None), PipelineRun.total_cost > 0,
-                PipelineRun.started_at >= datetime.now(timezone.utc) - timedelta(days=30),
-            ).scalar()
-
-    return {
-        "avg_run_cost": avg_run_cost,
-        "monthly_cost": round(float(monthly_cost_raw), 2) if monthly_cost_raw else None,
-        "total_cost": round(float(total_cost_raw), 2) if total_cost_raw else None,
-        "run_costs": run_costs,
-    }
-
-
-def _health_tone(status: str) -> tuple[str, str]:
-    if status == "healthy":
-        return "正常", "success"
-    if status == "warning":
-        return "注意", "warning"
-    return "異常", "danger"
-
-
-def _coerce_datetime(value):
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
-        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-    return None
-
-
-def _staleness_status(latest_value, now: datetime, *, warn_hours: int, critical_hours: int):
-    latest_dt = _coerce_datetime(latest_value)
-    if latest_dt is None:
-        status = "critical"
-        hours = None
-    else:
-        hours = max((now - latest_dt).total_seconds() / 3600, 0)
-        if hours > critical_hours:
-            status = "critical"
-        elif hours > warn_hours:
-            status = "warning"
-        else:
-            status = "healthy"
-    label, tone = _health_tone(status)
-    return SimpleNamespace(status=status, label=label, tone=tone, hours=hours, latest=latest_dt)
-
-
-def _build_operations_health(db, *, now: datetime | None = None):
-    now = now or datetime.now(timezone.utc)
-
-    latest_gsc = db.query(func.max(SEORanking.tracked_date)).scalar()
-    latest_ga4 = db.query(func.max(GAPageMetric.tracked_date)).scalar()
-    latest_scheduler = db.query(func.max(SchedulerLog.started_at)).scalar()
-    latest_pipeline = db.query(func.max(PipelineRun.started_at)).scalar()
-
-    gsc_freshness = _staleness_status(latest_gsc, now, warn_hours=60, critical_hours=108)
-    ga4_freshness = _staleness_status(latest_ga4, now, warn_hours=60, critical_hours=108)
-    scheduler_freshness = _staleness_status(latest_scheduler, now, warn_hours=24, critical_hours=48)
-    pipeline_freshness = _staleness_status(latest_pipeline, now, warn_hours=72, critical_hours=168)
-
-    freshness_items = [
-        SimpleNamespace(name="GSC 同步", detail=(gsc_freshness.latest.strftime("%Y-%m-%d") if gsc_freshness.latest else "尚無資料"), metric=(f"{gsc_freshness.hours:.0f}h" if gsc_freshness.hours is not None else "—"), **gsc_freshness.__dict__),
-        SimpleNamespace(name="GA4 同步", detail=(ga4_freshness.latest.strftime("%Y-%m-%d") if ga4_freshness.latest else "尚無資料"), metric=(f"{ga4_freshness.hours:.0f}h" if ga4_freshness.hours is not None else "—"), **ga4_freshness.__dict__),
-        SimpleNamespace(name="Scheduler 日誌", detail=(scheduler_freshness.latest.strftime("%Y-%m-%d %H:%M") if scheduler_freshness.latest else "尚無資料"), metric=(f"{scheduler_freshness.hours:.0f}h" if scheduler_freshness.hours is not None else "—"), **scheduler_freshness.__dict__),
-        SimpleNamespace(name="Pipeline 執行", detail=(pipeline_freshness.latest.strftime("%Y-%m-%d %H:%M") if pipeline_freshness.latest else "尚無資料"), metric=(f"{pipeline_freshness.hours:.0f}h" if pipeline_freshness.hours is not None else "—"), **pipeline_freshness.__dict__),
-    ]
-
-    scheduler_cutoff = now - timedelta(days=7)
-    scheduler_7d = db.query(SchedulerLog).filter(SchedulerLog.started_at >= scheduler_cutoff).all()
-    scheduler_ok = sum(1 for row in scheduler_7d if row.status == "success")
-    scheduler_fail = sum(1 for row in scheduler_7d if row.status == "failed")
-    scheduler_total = len(scheduler_7d)
-    scheduler_success_rate = (scheduler_ok / scheduler_total * 100) if scheduler_total else None
-    scheduler_status = "critical" if scheduler_fail >= 3 else ("warning" if scheduler_fail >= 1 else "healthy")
-    scheduler_label, scheduler_tone = _health_tone(scheduler_status)
-
-    pipeline_cutoff = now - timedelta(days=30)
-    pipeline_30d = db.query(PipelineRun).filter(PipelineRun.started_at >= pipeline_cutoff).all()
-    pipeline_ok = sum(1 for row in pipeline_30d if row.status == "completed")
-    pipeline_fail = sum(1 for row in pipeline_30d if row.status == "failed")
-    pipeline_running = sum(1 for row in pipeline_30d if row.status == "running")
-    pipeline_total = len(pipeline_30d)
-    pipeline_success_rate = (pipeline_ok / pipeline_total * 100) if pipeline_total else None
-    pipeline_status = "critical" if pipeline_fail >= 5 else ("warning" if pipeline_fail >= 1 else "healthy")
-    pipeline_label, pipeline_tone = _health_tone(pipeline_status)
-
-    execution_items = [
-        SimpleNamespace(name="Scheduler 7d 成功率", metric=(f"{scheduler_success_rate:.0f}%" if scheduler_success_rate is not None else "—"), detail=(f"成功 {scheduler_ok} / 失敗 {scheduler_fail}" if scheduler_total else "近 7 天無排程紀錄"), status=scheduler_status, label=scheduler_label, tone=scheduler_tone),
-        SimpleNamespace(name="Pipeline 30d 成功率", metric=(f"{pipeline_success_rate:.0f}%" if pipeline_success_rate is not None else "—"), detail=(f"完成 {pipeline_ok} / 失敗 {pipeline_fail} / 執行中 {pipeline_running}" if pipeline_total else "近 30 天無 pipeline 紀錄"), status=pipeline_status, label=pipeline_label, tone=pipeline_tone),
-    ]
-
-    outcome_cutoff = now - timedelta(days=90)
-    evaluated_outcomes = (
-        db.query(ActionOutcome)
-        .filter(
-            ActionOutcome.checked_28d_at.isnot(None),
-            ActionOutcome.action_date >= outcome_cutoff.date(),
-        )
-        .all()
-    )
-    overall_outcomes = len(evaluated_outcomes)
-    improved_total = sum(1 for row in evaluated_outcomes if row.success_flag == "improved")
-    overall_improved_rate = (improved_total / overall_outcomes * 100) if overall_outcomes else None
-
-    by_action: dict[str, list[ActionOutcome]] = defaultdict(list)
-    for row in evaluated_outcomes:
-        by_action[row.action_type or "unknown"].append(row)
-
-    outcome_items = []
-    for action_type in sorted(by_action.keys()):
-        rows = by_action[action_type]
-        total = len(rows)
-        improved = sum(1 for row in rows if row.success_flag == "improved")
-        stable = sum(1 for row in rows if row.success_flag == "stable")
-        declined = sum(1 for row in rows if row.success_flag == "declined")
-        improved_rate = (improved / total * 100) if total else None
-        status = "healthy"
-        if total >= 3 and improved_rate is not None:
-            if improved_rate < 35:
-                status = "critical"
-            elif improved_rate < 55:
-                status = "warning"
-        label, tone = _health_tone(status)
-        outcome_items.append(SimpleNamespace(
-            name=action_type,
-            metric=(f"{improved_rate:.0f}%" if improved_rate is not None else "—"),
-            detail=f"improved {improved} / stable {stable} / declined {declined}",
-            total=total,
-            status=status,
-            label=label,
-            tone=tone,
-        ))
-
-    alerts: list[SimpleNamespace] = []
-    for item in freshness_items:
-        if item.status == "critical":
-            alerts.append(SimpleNamespace(level="critical", message=f"{item.name} 超過新鮮度門檻：{item.detail}"))
-        elif item.status == "warning":
-            alerts.append(SimpleNamespace(level="warning", message=f"{item.name} 接近過期：{item.detail}"))
-    if scheduler_fail:
-        alerts.append(SimpleNamespace(level=("critical" if scheduler_fail >= 3 else "warning"), message=f"近 7 天 Scheduler 失敗 {scheduler_fail} 次"))
-    if pipeline_fail:
-        alerts.append(SimpleNamespace(level=("critical" if pipeline_fail >= 5 else "warning"), message=f"近 30 天 Pipeline 失敗 {pipeline_fail} 次"))
-    for item in outcome_items:
-        if item.status in ("warning", "critical"):
-            alerts.append(SimpleNamespace(level=item.status, message=f"{item.name} 近 90 天成效偏弱：{item.detail}"))
-
-    summary_cards = [
-        SimpleNamespace(title="資料新鮮度異常", value=sum(1 for item in freshness_items if item.status != "healthy"), tone=("danger" if any(item.status == "critical" for item in freshness_items) else "warning")),
-        SimpleNamespace(title="Scheduler 7d 成功率", value=(f"{scheduler_success_rate:.0f}%" if scheduler_success_rate is not None else "—"), tone=("success" if scheduler_status == "healthy" else ("warning" if scheduler_status == "warning" else "danger"))),
-        SimpleNamespace(title="Pipeline 30d 成功率", value=(f"{pipeline_success_rate:.0f}%" if pipeline_success_rate is not None else "—"), tone=("success" if pipeline_status == "healthy" else ("warning" if pipeline_status == "warning" else "danger"))),
-        SimpleNamespace(title="Outcome improved rate", value=(f"{overall_improved_rate:.0f}%" if overall_improved_rate is not None else "—"), tone=("success" if overall_improved_rate is not None and overall_improved_rate >= 55 else ("warning" if overall_improved_rate is not None and overall_improved_rate >= 35 else "danger"))),
-    ]
-
-    return {
-        "summary_cards": summary_cards,
-        "freshness_items": freshness_items,
-        "execution_items": execution_items,
-        "outcome_items": outcome_items,
-        "alerts": alerts,
-    }
-
-
-def _serialize_operations_health(operations_health: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "summary_cards": [
-            {"title": card.title, "value": card.value, "tone": card.tone}
-            for card in operations_health.get("summary_cards", [])
-        ],
-        "freshness_items": [
-            {
-                "name": item.name,
-                "status": item.status,
-                "label": item.label,
-                "tone": item.tone,
-                "detail": item.detail,
-                "metric": item.metric,
-            }
-            for item in operations_health.get("freshness_items", [])
-        ],
-        "execution_items": [
-            {
-                "name": item.name,
-                "status": item.status,
-                "label": item.label,
-                "tone": item.tone,
-                "detail": item.detail,
-                "metric": item.metric,
-            }
-            for item in operations_health.get("execution_items", [])
-        ],
-        "outcome_items": [
-            {
-                "name": item.name,
-                "status": item.status,
-                "label": item.label,
-                "tone": item.tone,
-                "detail": item.detail,
-                "metric": item.metric,
-                "total": getattr(item, "total", 0),
-            }
-            for item in operations_health.get("outcome_items", [])
-        ],
-        "alerts": [
-            {"level": alert.level, "message": alert.message}
-            for alert in operations_health.get("alerts", [])
-        ],
-    }
 
 
 def _goal_config_for_template(raw_value: str | None) -> dict[str, Any]:
@@ -1071,41 +794,6 @@ async def publish_to_wordpress(request: Request, article_id: int):
             return JSONResponse({"ok": False, "error": result.error}, status_code=502)
     finally:
         db.close()
-
-
-async def _submit_to_google_indexing(url: str) -> None:
-    """Submit a URL to Google Indexing API for faster crawling (Phase 5 §7.3)."""
-    try:
-        import httpx
-        from contentflow.config import settings
-        service_account_path = settings.google_service_account_file
-        if not service_account_path:
-            return
-        try:
-            import google.oauth2.service_account as _sa
-            import google.auth.transport.requests as _gtr
-            creds = _sa.Credentials.from_service_account_file(
-                service_account_path,
-                scopes=["https://www.googleapis.com/auth/indexing"],
-            )
-            auth_req = _gtr.Request()
-            creds.refresh(auth_req)
-            token = creds.token
-        except Exception as e:
-            logger.warning(f"[Indexing API] 憑證讀取失敗: {e}")
-            return
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                "https://indexing.googleapis.com/v3/urlNotifications:publish",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                json={"url": url, "type": "URL_UPDATED"},
-            )
-            if resp.status_code == 200:
-                logger.info(f"[Indexing API] 已提交: {url}")
-            else:
-                logger.warning(f"[Indexing API] 失敗 {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        logger.warning(f"[Indexing API] 例外: {e}")
 
 
 @admin_app.post("/articles/{article_id}/set-author")
@@ -2570,24 +2258,7 @@ async def trigger_scheduler_job(request: Request, job_id: str):
     """手動觸發排程任務（僅限已知 job）"""
     if not _check_login(request):
         return RedirectResponse("/admin/login", status_code=303)
-    from contentflow import scheduler as sched_mod
-    job_map = {
-        "sync_gsc_all_projects":    sched_mod.sync_gsc_all_projects,
-        "sync_ga4_all_projects":    sched_mod.sync_ga4_all_projects,
-        "sync_keyword_trends":      sched_mod.sync_keyword_trends,
-        "check_scheduled_publishes": sched_mod.check_scheduled_publishes,
-        "backfill_action_outcomes": sched_mod.backfill_action_outcomes,
-        "run_auto_pipeline":        sched_mod.run_auto_pipeline,
-        "run_render_verification":  sched_mod.run_render_verification,
-        "run_competitor_serp_check": sched_mod.run_competitor_serp_check,
-        "run_attribution_engine":   sched_mod.run_attribution_engine,
-        "check_refresh_triggers":   sched_mod.check_refresh_triggers,
-        "run_weekly_reflection":    sched_mod.run_weekly_reflection,
-        "send_weekly_report":       sched_mod.send_weekly_report,
-        "run_l1_pattern_analysis":  sched_mod.run_l1_pattern_analysis,
-        "run_l2_roi_analysis":      sched_mod.run_l2_roi_analysis,
-        "check_ranking_drops":      sched_mod.check_ranking_drops,
-    }
+    job_map = get_scheduler_job_map()
     fn = job_map.get(job_id)
     if not fn:
         return RedirectResponse("/admin/scheduler?error=unknown_job", status_code=303)
@@ -2612,23 +2283,7 @@ async def scheduler_page(request: Request):
             if log.job_id not in job_latest:
                 job_latest[log.job_id] = log
 
-        known_jobs = [
-            {"id": "sync_gsc_all_projects",    "name": "GSC 排名同步",    "schedule": "每日 03:00",        "icon": "📊"},
-            {"id": "sync_ga4_all_projects",     "name": "GA4 頁面指標",    "schedule": "每日 03:30",        "icon": "📈"},
-            {"id": "sync_keyword_trends",       "name": "關鍵字趨勢同步",  "schedule": "每月 1 號 03:45",   "icon": "📈"},
-            {"id": "backfill_action_outcomes",  "name": "行動成效回填",    "schedule": "每日 04:00",        "icon": "🎯"},
-            {"id": "check_scheduled_publishes", "name": "定時發佈檢查",    "schedule": "每日 04:05",        "icon": "🗓️"},
-            {"id": "run_auto_pipeline",         "name": "自動 AI Pipeline", "schedule": "每日 08:00",        "icon": "🤖"},
-            {"id": "run_render_verification",   "name": "前台 Render 驗證", "schedule": "每日 10:00",        "icon": "🧪"},
-            {"id": "run_competitor_serp_check", "name": "競品 SERP 追蹤",  "schedule": "每週一 04:30",      "icon": "🔍"},
-            {"id": "run_attribution_engine",    "name": "成效歸因分析",    "schedule": "每週一 05:00",      "icon": "🧮"},
-            {"id": "check_refresh_triggers",    "name": "內容更新檢查",    "schedule": "每週二 04:00",      "icon": "🔄"},
-            {"id": "check_ranking_drops",       "name": "排名掉落偵測",    "schedule": "每週三 06:00",      "icon": "📉"},
-            {"id": "run_weekly_reflection",     "name": "週級反思學習",    "schedule": "每週日 08:00",      "icon": "🧠"},
-            {"id": "send_weekly_report",        "name": "週報推送",        "schedule": "每週日 09:00",      "icon": "📬"},
-            {"id": "run_l1_pattern_analysis",   "name": "L1 模式學習",      "schedule": "每月 1 號 06:00",   "icon": "🔬"},
-            {"id": "run_l2_roi_analysis",       "name": "L2 ROI 分析",      "schedule": "每月 1 號 07:00",   "icon": "💰"},
-        ]
+        known_jobs = get_known_scheduler_jobs()
         for j in known_jobs:
             j["latest"] = job_latest.get(j["id"])
 

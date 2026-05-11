@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy import desc, func
 
+from ..admin.scheduler_registry import get_known_scheduler_jobs, get_scheduler_job_map
 from ..config import settings
 from ..db import SessionLocal
 from ..models.database import (
@@ -62,6 +63,8 @@ SYSTEM_PROMPT = """\
 你代表的系統名稱是「ContentFlow」，品牌名稱是「{site_name}」。
 現在時間：{now}
 """.strip()
+
+_SCHEDULER_JOB_IDS = [job["id"] for job in get_known_scheduler_jobs()]
 
 # ── Tool definitions (OpenAI function calling schema) ─────────
 
@@ -291,16 +294,7 @@ TOOLS = [
                     "job_id": {
                         "type": "string",
                         "description": "排程 Job ID",
-                        "enum": [
-                            "sync_gsc_all_projects", "sync_ga4_all_projects",
-                            "sync_keyword_trends", "check_scheduled_publishes",
-                            "backfill_action_outcomes", "run_auto_pipeline",
-                            "run_render_verification", "run_competitor_serp_check",
-                            "run_attribution_engine", "check_refresh_triggers",
-                            "run_weekly_reflection", "send_weekly_report",
-                            "run_l1_pattern_analysis", "run_l2_roi_analysis",
-                            "check_ranking_drops",
-                        ],
+                        "enum": _SCHEDULER_JOB_IDS,
                     },
                 },
                 "required": ["job_id"],
@@ -1019,23 +1013,12 @@ def _tool_trigger_refresh(**kwargs: Any) -> dict:
 
 async def _tool_trigger_scheduler_job(**kwargs: Any) -> dict:
     """手動觸發排程 Job。"""
-    from .. import scheduler as sched_mod
-
     job_id = kwargs["job_id"]
-    valid_jobs = [
-        "sync_gsc_all_projects", "sync_ga4_all_projects",
-        "sync_keyword_trends", "check_scheduled_publishes",
-        "backfill_action_outcomes", "run_auto_pipeline",
-        "run_render_verification", "run_competitor_serp_check",
-        "run_attribution_engine", "check_refresh_triggers",
-        "run_weekly_reflection", "send_weekly_report",
-        "run_l1_pattern_analysis", "run_l2_roi_analysis",
-        "check_ranking_drops",
-    ]
-    if job_id not in valid_jobs:
+    job_map = get_scheduler_job_map()
+    if job_id not in job_map:
         return {"error": f"未知的排程 Job: {job_id}"}
 
-    fn = getattr(sched_mod, job_id, None)
+    fn = job_map.get(job_id)
     if not fn:
         return {"error": f"排程函數 {job_id} 不存在"}
 

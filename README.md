@@ -133,7 +133,7 @@ docker-compose up -d
 - **Admin 後台**：`http://localhost:8000/admin`（密碼：`API_SECRET_KEY`）
 - **Public 站台**：`http://localhost:8000/`
 
-PostgreSQL 資料庫由 Docker Compose 自動建立；`migrate` service 會在 `api` / `ui` 啟動前自動執行 bootstrap runner。空庫會自動建 schema 並對齊 Alembic revision，既有庫則會升級到最新 head。
+PostgreSQL 資料庫由 Docker Compose 自動建立；`migrate` service 會在 `api` 啟動前自動執行 bootstrap runner。空庫會自動建 schema 並對齊 Alembic revision，既有庫則會升級到最新 head。
 
 ### 4b. 本地開發（不使用 Docker）
 
@@ -340,7 +340,7 @@ pytest tests/test_seo_check_agent.py -v
 
 ## CLI 工具
 
-除了 Streamlit UI 之外，也可透過命令列直接操作：
+除了 Web Admin 之外，也可透過命令列直接操作：
 
 ```bash
 # 執行單一關鍵字的研究階段
@@ -367,13 +367,9 @@ ContentFlow/
 ├── .env                         # 本地環境變數（不提交 git）
 ├── .env.example                 # 環境變數範本
 ├── pyproject.toml               # 套件設定、依賴宣告、工具設定
-├── docker-compose.yml           # 本地開發容器編排（api + ui + db）
+├── docker-compose.yml           # 本地開發容器編排（api + db）
 ├── Dockerfile                   # 主服務映像
 ├── SYSTEM_OVERVIEW.md           # 進階系統技術文件
-│
-├── app/                         # Streamlit 輔助介面（非主要入口）
-│   ├── Home.py
-│   └── pages/
 │
 ├── src/contentflow/             # 核心套件
 │   ├── config.py                # 全域設定（pydantic-settings，讀取 .env）
@@ -602,15 +598,13 @@ ContentFlow/
 
 ---
 
-### ⚠️ TD-02：部分非同步 DB Session 尚未統一
+### ✅ TD-02：舊 Streamlit 後台已退役（已解決）
 
-**現況：** `db.py` 使用同步 SQLAlchemy Session，正式部署的 PostgreSQL driver 為 `psycopg2`。`app/` 目錄下的 Streamlit 頁面屬輔助介面，主要後台與 scheduler 由 FastAPI 提供。
+**解決時間：** 本 session
 
-**風險：** Streamlit 側尚未完整清除的同步橋接若在高並發下執行，可能阻塞事件迴圈。目前 Streamlit 作為輔助工具使用，與 FastAPI 隔離執行，風險可控。
+**現況：** 舊的 `app/` Streamlit 後台與 `docker-compose.yml` 的 `ui` service 已移除，專案只保留 FastAPI site + admin + scheduler 路徑。`db.py` 仍使用同步 SQLAlchemy Session 與 `psycopg2`，但已無第二套 Web UI 直接連 DB 的結構性分叉。
 
-**建議做法：** 若 Streamlit 的使用比重增加，逐步將 `app/pages/*.py` 改為呼叫 FastAPI REST API，而非直接存取 DB。
-
-**影響評估：** 中。FastAPI 側已無問題，僅 Streamlit 頁面需後續清理。
+**影響評估：** 中低。啟動與部署路徑已收斂，後續只需針對 FastAPI 管理介面持續演進。
 
 ---
 

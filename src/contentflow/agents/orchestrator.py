@@ -48,6 +48,7 @@ def _init_agentops() -> bool:
             api_key=key,
             default_tags=["contentflow", "langgraph"],
             instrument_llm_calls=True,
+            log_session_replay_url=False,
         )
         logger.info("[AgentOps] 初始化成功")
         return True
