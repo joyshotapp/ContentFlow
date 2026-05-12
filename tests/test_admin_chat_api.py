@@ -489,6 +489,50 @@ def test_save_project_persists_policy_profile_fields():
         engine.dispose()
 
 
+def test_create_project_redirects_to_policy_wizard():
+    session, engine = _make_threadsafe_session()
+    try:
+        with patch("contentflow.admin.app._check_login", return_value=True), \
+             patch("contentflow.admin.app._require_role", return_value="owner"), \
+             patch("contentflow.admin.app._db", return_value=session):
+            response = client.post(
+                "/settings/project/save",
+                data={
+                    "project_id": 0,
+                    "slug": "new-brand",
+                    "name": "New Brand",
+                    "brand_name": "New Brand",
+                    "brand_url": "https://new.example",
+                    "brand_description": "new",
+                    "site_contact_email": "team@new.example",
+                    "site_blog_path": "/blog",
+                    "industry": "科技",
+                    "writing_principles": "清楚",
+                    "domain_profile": "tech",
+                    "compliance_profile": "general",
+                    "default_content_format": "knowledge",
+                    "reviewer_role_label": "",
+                    "disclaimer_template": "",
+                    "evidence_policy": "none",
+                    "image_style_override": "",
+                    "extra_schema_types_json": "[]",
+                    "factcheck_mode_override": "",
+                    "serp_gl": "tw",
+                    "serp_hl": "zh-tw",
+                    "business_goals": "",
+                    "target_audience": "",
+                    "ga4_property_id": "",
+                },
+                follow_redirects=False,
+            )
+
+        assert response.status_code == 303
+        assert response.headers["location"].endswith("#policy-wizard")
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_save_project_integration_persists_connector():
     session, engine = _make_threadsafe_session()
     try:
@@ -738,6 +782,66 @@ def test_login_submit_sets_reviewer_role_in_session_context():
         assert response.status_code == 200
         assert "目前登入角色" in response.text
         assert "reviewer" in response.text
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_settings_page_reviewer_sees_policy_wizard_but_form_is_readonly():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(
+            slug="review-brand",
+            name="Review Brand",
+            domain_profile="law",
+            compliance_profile="ymyl_legal",
+            default_content_format="comparison",
+        )
+        session.add(project)
+        session.commit()
+
+        with TestClient(admin_app) as role_client, \
+             patch("contentflow.admin.app.settings.api_secret_key", "owner-secret"), \
+             patch("contentflow.admin.app.settings.admin_reviewer_secret", "reviewer-secret"), \
+             patch("contentflow.admin.app.settings.admin_editor_secret", "editor-secret"), \
+             patch("contentflow.admin.app._db", return_value=session):
+            role_client.post("/login", data={"password": "reviewer-secret"}, follow_redirects=False)
+            response = role_client.get(f"/settings?project_id={project.id}")
+
+        assert response.status_code == 200
+        assert "Policy Setup Wizard" in response.text
+        assert "Advanced Overrides" in response.text
+        assert "目前角色為唯讀" in response.text
+        assert "fieldset disabled" in response.text
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_settings_page_editor_hides_advanced_overrides():
+    session, engine = _make_threadsafe_session()
+    try:
+        project = Project(
+            slug="editor-policy-brand",
+            name="Editor Policy Brand",
+            domain_profile="law",
+            compliance_profile="ymyl_legal",
+            default_content_format="comparison",
+        )
+        session.add(project)
+        session.commit()
+
+        with TestClient(admin_app) as role_client, \
+             patch("contentflow.admin.app.settings.api_secret_key", "owner-secret"), \
+             patch("contentflow.admin.app.settings.admin_reviewer_secret", "reviewer-secret"), \
+             patch("contentflow.admin.app.settings.admin_editor_secret", "editor-secret"), \
+             patch("contentflow.admin.app._db", return_value=session):
+            role_client.post("/login", data={"password": "editor-secret"}, follow_redirects=False)
+            response = role_client.get(f"/settings?project_id={project.id}")
+
+        assert response.status_code == 200
+        assert "Policy Setup Wizard" in response.text
+        assert "Advanced Overrides" not in response.text
     finally:
         session.close()
         engine.dispose()

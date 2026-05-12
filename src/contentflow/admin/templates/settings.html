@@ -4,16 +4,19 @@
 {% block page_subtitle %}{{ project.name if project else '尚未設定專案' }}{% endblock %}
 
 {% block topbar_actions %}
+{% if can_manage_settings %}
 <button onclick="document.getElementById('new-project-panel').classList.toggle('hidden')"
   class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
   新增專案
 </button>
+{% endif %}
 {% endblock %}
 
 {% block content %}
 
 <!-- ── New Project Panel ──────────────────────────────────────── -->
+{% if can_manage_settings %}
 <div id="new-project-panel" class="hidden cf-card cf-card-p animate-up" style="margin-bottom:20px;border:1.5px solid #6366f1;">
   <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:14px;">📁 新增專案</div>
   <form method="post" action="/admin/settings/project/save">
@@ -72,6 +75,7 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 {% if projects | length > 1 %}
 <!-- ── Project switcher ──────────────────────────────────────── -->
@@ -107,6 +111,7 @@
         <div class="section-title" style="margin-bottom:14px;">基本資訊與 Site Profile</div>
         <form method="post" action="/admin/settings/project/save">
           <input type="hidden" name="project_id" value="{{ project.id }}">
+          <fieldset {% if not can_manage_settings %}disabled{% endif %} style="border:none;padding:0;margin:0;min-inline-size:auto;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
               <label class="form-label">專案名稱</label>
@@ -149,8 +154,9 @@
             <label class="form-label">Writing Principles</label>
             <textarea class="form-input" name="writing_principles" rows="3">{{ project.writing_principles or '' }}</textarea>
           </div>
-          <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;">
+          <div id="policy-setup" style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;">
             <div class="section-title" style="margin-bottom:14px;">Policy Setup</div>
+            <div style="font-size:12px;color:#64748b;line-height:1.6;margin-bottom:12px;">正式上線專案至少要明確指定 Domain、Compliance 與 Default Content Format。其餘設定屬於進階覆寫。</div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
               <div class="form-group">
                 <label class="form-label">Domain Profile</label>
@@ -180,44 +186,52 @@
                 </select>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div class="form-group">
-                <label class="form-label">Evidence Policy</label>
-                {% set evidence_value = project.evidence_policy or '' %}
-                <select class="form-input" name="evidence_policy">
-                  <option value="" {% if not evidence_value %}selected{% endif %}>跟隨 Domain</option>
-                  <option value="none" {% if evidence_value == 'none' %}selected{% endif %}>none</option>
-                  <option value="manual_reference" {% if evidence_value == 'manual_reference' %}selected{% endif %}>manual_reference</option>
-                  <option value="pubmed" {% if evidence_value == 'pubmed' %}selected{% endif %}>pubmed</option>
-                </select>
+            {% if can_view_advanced_overrides %}
+            <details style="margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;" {% if can_manage_settings %}open{% endif %}>
+              <summary style="padding:12px 14px;cursor:pointer;font-size:13px;font-weight:700;color:#0f172a;list-style:none;">Advanced Overrides</summary>
+              <div style="padding:0 14px 14px;">
+                <div style="font-size:12px;color:#64748b;line-height:1.6;margin-bottom:12px;">只有在預設 profile 不足時才需要覆寫。reviewer 可查看，owner 可修改。</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                  <div class="form-group">
+                    <label class="form-label">Evidence Policy</label>
+                    {% set evidence_value = project.evidence_policy or '' %}
+                    <select class="form-input" name="evidence_policy">
+                      <option value="" {% if not evidence_value %}selected{% endif %}>跟隨 Domain</option>
+                      <option value="none" {% if evidence_value == 'none' %}selected{% endif %}>none</option>
+                      <option value="manual_reference" {% if evidence_value == 'manual_reference' %}selected{% endif %}>manual_reference</option>
+                      <option value="pubmed" {% if evidence_value == 'pubmed' %}selected{% endif %}>pubmed</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">FactCheck Mode</label>
+                    {% set factcheck_value = project.factcheck_mode_override or '' %}
+                    <select class="form-input" name="factcheck_mode_override">
+                      <option value="" {% if not factcheck_value %}selected{% endif %}>跟隨 Compliance</option>
+                      <option value="light" {% if factcheck_value == 'light' %}selected{% endif %}>light</option>
+                      <option value="moderate" {% if factcheck_value == 'moderate' %}selected{% endif %}>moderate</option>
+                      <option value="strict" {% if factcheck_value == 'strict' %}selected{% endif %}>strict</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Reviewer Label</label>
+                  <input class="form-input" type="text" name="reviewer_role_label" value="{{ project.reviewer_role_label or '' }}" placeholder="例：法律審閱 / 財務審閱">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Disclaimer Template</label>
+                  <textarea class="form-input" name="disclaimer_template" rows="3" placeholder="文章結尾使用的免責聲明">{{ project.disclaimer_template or '' }}</textarea>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Hero Image Style Override</label>
+                  <textarea class="form-input" name="image_style_override" rows="2" placeholder="需要覆蓋預設圖片風格時使用">{{ project.image_style_override or '' }}</textarea>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Extra Schema Types</label>
+                  <textarea class="form-input" name="extra_schema_types_json" rows="2" placeholder='可輸入 JSON array 或逗號分隔，例如 ["FAQPage"]'>{{ project.extra_schema_types_json or '[]' }}</textarea>
+                </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">FactCheck Mode</label>
-                {% set factcheck_value = project.factcheck_mode_override or '' %}
-                <select class="form-input" name="factcheck_mode_override">
-                  <option value="" {% if not factcheck_value %}selected{% endif %}>跟隨 Compliance</option>
-                  <option value="light" {% if factcheck_value == 'light' %}selected{% endif %}>light</option>
-                  <option value="moderate" {% if factcheck_value == 'moderate' %}selected{% endif %}>moderate</option>
-                  <option value="strict" {% if factcheck_value == 'strict' %}selected{% endif %}>strict</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Reviewer Label</label>
-              <input class="form-input" type="text" name="reviewer_role_label" value="{{ project.reviewer_role_label or '' }}" placeholder="例：法律審閱 / 財務審閱">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Disclaimer Template</label>
-              <textarea class="form-input" name="disclaimer_template" rows="3" placeholder="文章結尾使用的免責聲明">{{ project.disclaimer_template or '' }}</textarea>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Hero Image Style Override</label>
-              <textarea class="form-input" name="image_style_override" rows="2" placeholder="需要覆蓋預設圖片風格時使用">{{ project.image_style_override or '' }}</textarea>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Extra Schema Types</label>
-              <textarea class="form-input" name="extra_schema_types_json" rows="2" placeholder='可輸入 JSON array 或逗號分隔，例如 ["FAQPage"]'>{{ project.extra_schema_types_json or '[]' }}</textarea>
-            </div>
+            </details>
+            {% endif %}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
@@ -231,8 +245,12 @@
           </div>
           <input type="hidden" name="business_goals" value="{{ project.business_goals or '' }}">
           <input type="hidden" name="target_audience" value="{{ project.target_audience_json or '' }}">
+          </fieldset>
           <div style="margin-top:12px;display:flex;gap:8px;">
-            <button type="submit" class="btn btn-primary btn-sm">儲存專案設定</button>
+            {% if not can_manage_settings %}
+            <div style="font-size:12px;color:#64748b;align-self:center;">目前角色為唯讀，僅 owner 可修改 Project 與 Policy 設定。</div>
+            {% endif %}
+            <button type="submit" class="btn btn-primary btn-sm" {% if not can_manage_settings %}disabled{% endif %}>儲存專案設定</button>
           </div>
         </form>
       </div>
@@ -336,6 +354,50 @@
       </div>
     </div>
 
+    <div id="policy-wizard" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">🧠 Policy Setup Wizard</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% for step in policy_onboarding_wizard %}
+          <div style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+              <div>
+                <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ step.title }}</div>
+                <div style="font-size:12px;color:#475569;margin-top:4px;line-height:1.6;">{{ step.detail }}</div>
+                <div style="font-size:11px;color:#64748b;margin-top:6px;">目前值：{{ step.current_value }}</div>
+              </div>
+              <div style="font-size:11px;font-weight:700;color:{% if step.done %}#166534{% else %}#92400e{% endif %};background:{% if step.done %}#dcfce7{% else %}#fef3c7{% endif %};padding:4px 8px;border-radius:999px;white-space:nowrap;">{{ step.state_label }}</div>
+            </div>
+            <div style="margin-top:10px;">
+              <a href="{{ step.cta_href }}" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:#0f172a;color:#fff;font-size:12px;font-weight:700;text-decoration:none;">{{ step.cta_label }}</a>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="cf-card cf-card-p">
+        <div class="section-title" style="margin-bottom:14px;">⚠️ Policy Readiness</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">
+            <div style="font-size:12px;color:#475569;line-height:1.7;">
+              Domain 決定知識來源與品牌語氣。<br>
+              Compliance 決定審閱需求、免責聲明與 factcheck。<br>
+              Default Content Format 決定 schema 主型別與圖片構圖。
+            </div>
+          </div>
+          {% if policy_warnings %}
+          <div style="padding:12px;background:#fff7ed;border-radius:10px;border:1px solid #fdba74;display:flex;flex-direction:column;gap:6px;">
+            {% for warning in policy_warnings %}
+            <div style="font-size:12px;color:#9a3412;line-height:1.6;">{{ warning }}</div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div style="padding:12px;background:#f0fdf4;border-radius:10px;border:1px solid #86efac;font-size:12px;color:#166534;line-height:1.6;">目前 policy 設定已達可用狀態，沒有偵測到額外警示。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
       <div id="connector-wizard" class="cf-card cf-card-p">
         <div class="section-title" style="margin-bottom:14px;">🪄 Connector Setup Wizard</div>
@@ -393,6 +455,7 @@
         <div class="section-title" style="margin-bottom:14px;">🎯 Goal-weighted Decision Model</div>
         <form method="post" action="/admin/settings/project/goals/save">
           <input type="hidden" name="project_id" value="{{ project.id }}">
+            <fieldset {% if not can_manage_settings %}disabled{% endif %} style="border:none;padding:0;margin:0;min-inline-size:auto;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
               <label class="form-label">Primary goal</label>
@@ -432,6 +495,7 @@
             </div>
           </div>
           <button type="submit" class="btn btn-primary btn-sm">儲存 Goal-weighted Model</button>
+          </fieldset>
         </form>
       </div>
 
@@ -649,6 +713,7 @@
       <div class="section-title" style="margin-bottom:14px;">🚀 自動發佈設定</div>
       <form method="post" action="/admin/settings/auto-publish/save">
         <input type="hidden" name="project_id" value="{{ project.id }}">
+        <fieldset {% if not can_manage_settings %}disabled{% endif %} style="border:none;padding:0;margin:0;min-inline-size:auto;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:end;">
           <div class="form-group" style="margin-bottom:0;">
             <label class="form-label" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
@@ -679,6 +744,7 @@
           {% endif %}
           <button type="submit" class="btn btn-primary btn-sm">儲存發佈設定</button>
         </div>
+        </fieldset>
       </form>
     </div>
     {% endif %}
@@ -689,6 +755,7 @@
         <form method="post" action="/admin/settings/project/integration/save">
           <input type="hidden" name="project_id" value="{{ project.id }}">
           <input type="hidden" name="integration_type" value="wordpress">
+          <fieldset {% if not can_manage_settings %}disabled{% endif %} style="border:none;padding:0;margin:0;min-inline-size:auto;">
           <div class="form-group">
             <label class="form-label" style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" name="is_enabled" value="on" {% if wordpress_integration.is_enabled %}checked{% endif %}
@@ -725,6 +792,7 @@
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary btn-sm">儲存 WordPress Connector</button>
           </div>
+          </fieldset>
         </form>
         <form method="post" action="/admin/settings/project/integration/test" style="margin-top:8px;">
           <input type="hidden" name="project_id" value="{{ project.id }}">
@@ -738,6 +806,7 @@
         <form method="post" action="/admin/settings/project/integration/save">
           <input type="hidden" name="project_id" value="{{ project.id }}">
           <input type="hidden" name="integration_type" value="forgebase">
+          <fieldset {% if not can_manage_settings %}disabled{% endif %} style="border:none;padding:0;margin:0;min-inline-size:auto;">
           <div class="form-group">
             <label class="form-label" style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" name="is_enabled" value="on" {% if forgebase_integration.is_enabled %}checked{% endif %}
@@ -764,6 +833,7 @@
             <div style="font-size:11px;color:#94a3b8;margin-top:4px;">{{ integrations_by_type.get('forgebase').last_checked_at.strftime('%Y-%m-%d %H:%M') if integrations_by_type.get('forgebase') and integrations_by_type.get('forgebase').last_checked_at else '尚未檢查' }}</div>
           </div>
           <button type="submit" class="btn btn-primary btn-sm">儲存 ForgeBase Connector</button>
+          </fieldset>
         </form>
         <form method="post" action="/admin/settings/project/integration/test" style="margin-top:8px;">
           <input type="hidden" name="project_id" value="{{ project.id }}">

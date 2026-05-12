@@ -8,6 +8,8 @@ from loguru import logger
 from ..config import settings
 from ..llm_client import chat_sync
 from ..models import ResearchReport, PubMedSearchResult
+from ..policy_resolver import resolve_policy
+from ..project_context import load_project_context
 from ..tools import search_pubmed, search_serp, extract_keywords_from_serp
 
 
@@ -74,7 +76,9 @@ async def run_research_agent(
     search_keywords: list[str] | None = None,
     serp_gl: str = "tw",
     serp_hl: str = "zh-tw",
-    use_pubmed: bool = True,
+    use_pubmed: bool | None = None,
+    project_id: int | None = None,
+    article_type: str | None = None,
 ) -> ResearchReport:
     """
     執行 Research Agent，傳入文章標題與關鍵字，回傳完整研究報告。
@@ -86,7 +90,9 @@ async def run_research_agent(
         search_keywords:      通用搜尋關鍵字（若未指定 ingredient/condition 則使用此項）
         serp_gl:              Google 搜尋國家代碼
         serp_hl:              Google 搜尋語言代碼
-        use_pubmed:           是否查詢 PubMed（非健康類可關閉）
+        use_pubmed:           是否查詢 PubMed；若未指定則由 project policy 決定
+        project_id:           專案 ID，供 policy resolver 判斷領域與證據來源
+        article_type:         文章型態，可參與 policy format 決策
 
     Returns:
         ResearchReport：包含競品分析、建議關鍵字、PAA
@@ -97,6 +103,12 @@ async def run_research_agent(
     condition_keywords = condition_keywords or []
     search_keywords = search_keywords or []
     all_keywords = ingredient_keywords + condition_keywords + search_keywords
+
+    if use_pubmed is None and project_id:
+        ctx = load_project_context(project_id)
+        use_pubmed = resolve_policy(ctx, article_type=article_type).use_pubmed
+    elif use_pubmed is None:
+        use_pubmed = True
 
     # ── Step 1：並行執行 PubMed（可選）+ SERP ────────────────
     tasks = []

@@ -161,7 +161,9 @@ async def research_node(state: dict) -> dict:
         search_keywords=task.keywords or [task.title],
         serp_gl=ctx.serp_gl,
         serp_hl=ctx.serp_hl,
-        use_pubmed=state.get("use_pubmed", True),
+        use_pubmed=state.get("use_pubmed"),
+        project_id=ctx.project_id,
+        article_type=state.get("article_type"),
     )
     pubmed_count = sum(len(r.articles) for r in report.pubmed_results)
     decisions = _append_decision(

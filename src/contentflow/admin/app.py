@@ -180,6 +180,11 @@ def _build_onboarding_checklist(
         SimpleNamespace(title="聯絡信箱", done=bool(project.site_contact_email), detail=project.site_contact_email or "尚未設定站點聯絡信箱"),
         SimpleNamespace(title="文章路徑", done=bool(project.site_blog_path), detail=project.site_blog_path or "尚未設定文章 URL path"),
         SimpleNamespace(
+            title="內容政策",
+            done=bool(project.domain_profile and project.compliance_profile and project.default_content_format),
+            detail=" / ".join(filter(None, [project.domain_profile or "—", project.compliance_profile or "—", project.default_content_format or "—"])),
+        ),
+        SimpleNamespace(
             title="WordPress Connector",
             done=bool(wordpress_integration and wordpress_integration.configured and wordpress_integration.is_enabled),
             detail=(wordpress_integration.base_url if wordpress_integration and wordpress_integration.base_url else "未啟用"),
@@ -250,6 +255,48 @@ def _build_onboarding_wizard(
             ),
             cta_label="查看模式說明",
             cta_href="#platform-mode",
+        ),
+    ]
+
+
+def _build_policy_setup_wizard(project: Project | None) -> list[SimpleNamespace]:
+    if not project:
+        return []
+
+    domain_value = project.domain_profile or "general"
+    compliance_value = project.compliance_profile or "general"
+    format_value = project.default_content_format or "knowledge"
+
+    return [
+        SimpleNamespace(
+            step_key="domain_policy",
+            title="Step 1. Domain Profile",
+            done=bool(domain_value),
+            state_label=(DOMAIN_PROFILES.get(domain_value).label if domain_value in DOMAIN_PROFILES else "ACTION"),
+            detail="決定知識來源、品牌語氣與圖片語境。正式上線專案不可省略。",
+            current_value=domain_value,
+            cta_label="前往 Policy Setup",
+            cta_href="#policy-setup",
+        ),
+        SimpleNamespace(
+            step_key="compliance_policy",
+            title="Step 2. Compliance Profile",
+            done=bool(compliance_value),
+            state_label=(COMPLIANCE_PROFILES.get(compliance_value).label if compliance_value in COMPLIANCE_PROFILES else "ACTION"),
+            detail="決定免責聲明、審閱需求與 fact check 強度。",
+            current_value=compliance_value,
+            cta_label="檢查合規設定",
+            cta_href="#policy-setup",
+        ),
+        SimpleNamespace(
+            step_key="format_policy",
+            title="Step 3. Default Content Format",
+            done=bool(format_value),
+            state_label=(CONTENT_FORMAT_PROFILES.get(format_value).label if format_value in CONTENT_FORMAT_PROFILES else "ACTION"),
+            detail="決定 schema 主型別、FAQ/HowTo 偏好與圖片構圖方向。",
+            current_value=format_value,
+            cta_label="檢查內容型態",
+            cta_href="#policy-setup",
         ),
     ]
 
@@ -391,7 +438,7 @@ def _normalize_schema_types_input(raw_value: str | None) -> str:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
-def _build_policy_preview(project_id: int, *, article=None) -> tuple[dict[str, Any], list[str]]:
+def _build_policy_preview(project_id: int, *, db=None, article=None) -> tuple[dict[str, Any], list[str]]:
     ctx = load_project_context(project_id=project_id)
     preview_ctx = SimpleNamespace(**ctx.__dict__)
     article_type = getattr(article, "article_type", None) if article else None
@@ -415,6 +462,31 @@ def _build_policy_preview(project_id: int, *, article=None) -> tuple[dict[str, A
             warnings.append("此 policy 需要專業審閱，但 reviewer_role_label 尚未設定。")
         if not policy.disclaimer_template:
             warnings.append("此 policy 需要免責聲明，但 disclaimer_template 尚未設定。")
+        if db is not None:
+            reviewer_role_candidates = []
+            if policy.compliance_profile.startswith("ymyl_"):
+                reviewer_role_candidates.append(policy.compliance_profile.split("_", 1)[1])
+            if policy.reviewer_role_label == "專業審閱":
+                reviewer_role_candidates.append("general")
+            reviewer_exists = None
+            if reviewer_role_candidates:
+                candidates = (
+                    db.query(Author)
+                    .filter(Author.project_id == project_id)
+                    .all()
+                )
+                reviewer_exists = next(
+                    (
+                        author for author in candidates
+                        if (author.reviewer_role in reviewer_role_candidates)
+                        or ("medical" in reviewer_role_candidates and author.is_medical_reviewer)
+                    ),
+                    None,
+                )
+            if reviewer_role_candidates and not reviewer_exists:
+                warnings.append("此 policy 需要對應 reviewer，但目前專案尚未建立符合角色的審閱者。")
+    if policy.evidence_policy == "pubmed" and policy.domain_profile != "health":
+        warnings.append("目前使用 PubMed 作為證據來源，但 Domain Profile 不是 health，請確認這是刻意覆寫。")
 
     reviewer_role_key = ""
     if policy.compliance_profile.startswith("ymyl_"):
@@ -1117,7 +1189,7 @@ async def article_detail(request: Request, article_id: int):
             except Exception:
                 pass
 
-        policy_preview, policy_warnings = _build_policy_preview(article.project_id, article=article)
+        policy_preview, policy_warnings = _build_policy_preview(article.project_id, db=db, article=article)
 
         return templates.TemplateResponse(request, "article_detail.html", {
             "request": request, "page": "articles",
@@ -3531,7 +3603,7 @@ async def save_project(
                 actor=role,
             )
             db.commit(); db.refresh(proj)
-            return RedirectResponse(f"/admin/settings?project_id={proj.id}&saved=1", status_code=303)
+            return RedirectResponse(f"/admin/settings?project_id={proj.id}&saved=1#policy-wizard", status_code=303)
     finally:
         db.close()
 
@@ -3616,6 +3688,7 @@ async def settings_page(request: Request, project_id: int = 0):
             wordpress_integration=wordpress_integration,
             forgebase_integration=forgebase_integration,
         )
+        policy_onboarding_wizard = _build_policy_setup_wizard(current_project)
         connector_wizard = _build_connector_wizard(
             wordpress_integration=wordpress_integration,
             forgebase_integration=forgebase_integration,
@@ -3624,7 +3697,7 @@ async def settings_page(request: Request, project_id: int = 0):
         policy_preview = {}
         policy_warnings: list[str] = []
         if current_project:
-            policy_preview, policy_warnings = _build_policy_preview(current_project.id)
+            policy_preview, policy_warnings = _build_policy_preview(current_project.id, db=db)
 
         return templates.TemplateResponse(request, "settings.html", {
             "request": request, "page": "settings",
@@ -3649,6 +3722,7 @@ async def settings_page(request: Request, project_id: int = 0):
             "onboarding_completed": onboarding_completed,
             "recent_project_audits": audit_view,
             "onboarding_wizard": onboarding_wizard,
+            "policy_onboarding_wizard": policy_onboarding_wizard,
             "connector_wizard": connector_wizard,
             "policy_preview": policy_preview,
             "policy_warnings": policy_warnings,
@@ -3660,6 +3734,7 @@ async def settings_page(request: Request, project_id: int = 0):
             "session_role": session_role,
             "can_manage_settings": _has_role(request, "owner"),
             "can_review_actions": _has_role(request, "reviewer"),
+            "can_view_advanced_overrides": _has_role(request, "reviewer"),
             "env_vars": _get_env_var_status(),
             "llm_writing_model": settings.llm_writing_model,
             "llm_lite_model": settings.llm_lite_model,
