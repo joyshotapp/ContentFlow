@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Agent 治理{% endblock %}
+{% block page_title %}Agent 治理{% endblock %}
+{% block page_subtitle %}發布安全閘成效 · 意圖命中 → Refresh 優先（Phase A）{% endblock %}
+
+{% block content %}
+
+{% if projects | length > 1 %}
+<div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;">
+  {% for proj in projects %}
+  <a href="/admin/agent-governance?project_id={{ proj.id }}"
+     style="padding:6px 14px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid var(--cf-border);text-decoration:none;
+            {% if proj.id == project_id %}background:#6366f1;color:#fff;border-color:#6366f1;{% else %}background:#fff;color:#475569;{% endif %}">
+    {{ proj.name }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ── 發布安全閘 KPI ─────────────────────────────────────── -->
+<div style="font-size:13px;font-weight:700;color:#64748b;margin-bottom:10px;">🛡️ 發布安全閘（規則層 · 非模型機率）</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p cf-card-hover animate-up">
+    <div style="font-size:22px;font-weight:800;color:#0f172a;">{{ gate.review_required }}</div>
+    <div style="font-size:11px;color:#94a3b8;">待審核 review_required</div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d1">
+    <div style="font-size:22px;font-weight:800;color:#059669;">{{ gate.approved_ready_to_auto_publish }}</div>
+    <div style="font-size:11px;color:#94a3b8;">可自動發布（已通過閘）</div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d2">
+    <div style="font-size:22px;font-weight:800;color:#dc2626;">{{ gate.factcheck_risk_count }}</div>
+    <div style="font-size:11px;color:#94a3b8;">FactCheck 高風險篇數</div>
+  </div>
+  <div class="cf-card cf-card-p cf-card-hover animate-up d3">
+    <div style="font-size:22px;font-weight:800;color:#d97706;">{{ gate.seo_below_threshold }}</div>
+    <div style="font-size:11px;color:#94a3b8;">SEO &lt; 門檻 {{ gate.seo_threshold }}</div>
+  </div>
+</div>
+
+<div class="cf-card animate-up" style="margin-bottom:20px;padding:14px 18px;">
+  <div style="font-size:12.5px;color:#475569;line-height:1.6;">
+    專案 <strong>{{ gate.project_name }}</strong> ·
+    自動發布 {% if gate.auto_publish_enabled %}<span style="color:#059669;">已開啟</span>{% else %}<span style="color:#dc2626;">已關閉</span>{% endif %} ·
+    共 {{ gate.total_articles }} 篇文章 ·
+    已發布 {{ gate.published }} ·
+    知識庫意圖低分紀錄 {{ gate.intent_low_knowledge_entries }} 筆
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:#94a3b8;">
+    攔截邏輯：<code>approved</code> + 無 FactCheck 風險 + 專案允許自動發布（見 <code>publish_safety.can_auto_publish_article</code>）
+  </div>
+</div>
+
+<div class="cf-card animate-up d1" style="margin-bottom:24px;">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);display:flex;align-items:center;gap:8px;">
+    <span style="font-size:16px;">🚧</span>
+    <div class="section-title">未通過自動發布閘（最多 25 筆）</div>
+  </div>
+  {% if gate.blocked_candidates %}
+  <div style="overflow-x:auto;">
+    <table class="cf-table" style="width:100%;font-size:12.5px;">
+      <thead>
+        <tr>
+          <th>ID</th><th>標題</th><th>狀態</th><th>SEO</th><th>原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in gate.blocked_candidates %}
+        <tr>
+          <td><a href="/admin/articles/{{ row.id }}" style="color:#6366f1;font-weight:600;">#{{ row.id }}</a></td>
+          <td>{{ row.title }}</td>
+          <td>{{ row.status }}</td>
+          <td>{{ row.seo_score }}</td>
+          <td style="color:#64748b;">{{ row.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="padding:24px;text-align:center;color:#94a3b8;">目前無候選稿件，或皆已通過閘門。</div>
+  {% endif %}
+</div>
+
+<!-- ── 意圖 → Refresh ─────────────────────────────────────── -->
+<div style="font-size:13px;font-weight:700;color:#64748b;margin-bottom:10px;">🎯 意圖命中 → Refresh 優先</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;">
+  <div class="cf-card cf-card-p">
+    <div style="font-size:22px;font-weight:800;">{{ intent.published_count }}</div>
+    <div style="font-size:11px;color:#94a3b8;">已發布文章</div>
+  </div>
+  <div class="cf-card cf-card-p">
+    <div style="font-size:22px;font-weight:800;color:#dc2626;">{{ intent.low_intent_count }}</div>
+    <div style="font-size:11px;color:#94a3b8;">意圖分 &lt; {{ intent.intent_threshold }}</div>
+  </div>
+  <div class="cf-card cf-card-p">
+    <div style="font-size:22px;font-weight:800;">{{ intent.avg_intent_score if intent.avg_intent_score is not none else '—' }}</div>
+    <div style="font-size:11px;color:#94a3b8;">平均意圖分（已評分者）</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 320px;gap:16px;">
+  <div class="cf-card animate-up d2">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+      <div class="section-title">Refresh 優先佇列</div>
+      <span style="font-size:11px;color:#94a3b8;">高優先：低意圖分 · 中優先：逾期未評分</span>
+    </div>
+    {% if intent.queue %}
+    <div style="padding:12px 18px;">
+      {% for item in intent.queue %}
+      <div style="padding:12px;border:1px solid var(--cf-border);border-radius:8px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <a href="/admin/articles/{{ item.id }}" style="font-weight:600;color:#0f172a;text-decoration:none;font-size:13px;">{{ item.title }}</a>
+          <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9999px;
+            {% if item.priority == 'high' %}background:#fee2e2;color:#b91c1c{% else %}background:#fef3c7;color:#b45309{% endif %}">
+            {{ item.priority }}
+          </span>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-top:6px;">{{ item.reason }}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:4px;">
+          KW: {{ item.primary_keyword or '—' }}
+          {% if item.intent_match_score is not none %} · 意圖分 {{ item.intent_match_score }}{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="padding:24px;text-align:center;color:#94a3b8;">尚無低意圖或待評分項目。</div>
+    {% endif %}
+  </div>
+
+  <div class="cf-card animate-up d3">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--cf-border);">
+      <div class="section-title">知識庫信號</div>
+    </div>
+    {% if intent.kb_hints %}
+    <div style="padding:12px 14px;">
+      {% for hint in intent.kb_hints %}
+      <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #f1f5f9;">
+        <div style="font-size:11px;font-weight:700;color:#6366f1;">{{ hint.category }}</div>
+        <div style="font-size:12px;font-weight:600;margin-top:4px;">{{ hint.title }}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:4px;">{{ hint.content_preview }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="padding:20px;font-size:12px;color:#94a3b8;text-align:center;">排程寫入的 intent_match_low / refresh_priority 會顯示於此。</div>
+    {% endif %}
+    <div style="padding:12px 14px;border-top:1px solid var(--cf-border);">
+      <a href="/admin/content-health?project_id={{ project_id }}" style="font-size:12px;color:#6366f1;font-weight:600;">→ 內容健康度（自蝕 · Refresh 觸發）</a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

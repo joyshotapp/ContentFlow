@@ -250,11 +250,26 @@ ssh root@172.235.216.10 'curl -sf http://127.0.0.1:8000/health | python3 -m json
 
 ---
 
-## 11. 修訂紀錄
+## 11. Phase A：Admin Agent 治理儀表（2026-05-25）
+
+| 項目 | 說明 |
+|------|------|
+| 路徑 | `/admin/agent-governance`（側欄：策略與優化 → **Agent 治理**） |
+| 程式 | `admin/agent_ops.py`、`admin/templates/agent_governance.html` |
+| 發布閘 | 統計 review_required、FactCheck 高風險、可自動發布數、未通過閘候選與原因 |
+| 意圖→Refresh | 低意圖分優先佇列、知識庫 `intent_match_low` / `refresh_priority` |
+| 測試 | `tests/test_agent_ops.py` |
+
+**刻意未做**：LLM 機率化自省（中長期選項）。
+
+---
+
+## 12. 修訂紀錄
 
 | 日期 | 說明 |
 |------|------|
 | 2026-05-25 | 初版：整合 P0–P3 實作、部署事故、手動 SQL、生產驗證結果 |
+| 2026-05-25 | 新增 Phase A Admin Agent 治理頁 |
 
 ---
 

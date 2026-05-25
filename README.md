@@ -37,7 +37,7 @@ ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造�
 • Research + Writing Agent 生產稿件 • 處理 FactCheck 標記的高風險聲明
 • SEO 評分 → 達標自動發布           • 確認 GSC 偵測到的新機會詞方向
 • 排名回饋 → 知識庫自動更新         • 調整品牌撰寫規範或關鍵字策略
-• 22 個排程任務靜默監控全站健康     • 在 Admin 後台查看週報摘要
+• 27 個排程任務靜默監控全站健康     • 在 Admin 後台查看週報摘要、Agent 治理
 ```
 
 ### 與一般 AI 寫作工具的差異
@@ -46,10 +46,10 @@ ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造�
 |---------|--------------------------|----------------|
 | 觸發方式 | 人給指令 → 輸出文字 | 系統自己看數據 → 自己決定寫什麼 |
 | 選題來源 | 人工輸入關鍵字 | GSC 排名數據 + 日曆策略自動選題 |
-| 品質把關 | 人工審閱 | SEO 規則引擎（11 項）+ LLM QA 最多 3 輪 |
-| 發布 | 人工複製貼上 | 自動發布 WordPress / ForgeBase + Google Indexing API |
+| 品質把關 | 人工審閱 | SEO 規則引擎（含反堆砌）+ LLM QA 最多 3 輪 + FactCheck |
+| 發布 | 人工複製貼上 | **僅 `approved` 且無 FactCheck 風險** 才自動發布（YMYL 閘門） |
 | 學習機制 | 無 | 每週反思 → 知識庫 → 下次寫得更好 |
-| 監控 | 無 | 22 個排程任務持續監控排名、索引、反向連結 |
+| 監控 | 無 | 27 個排程任務 + Agent 治理儀表（閘門 / 意圖→Refresh） |
 
 ---
 
@@ -63,6 +63,8 @@ ContentFlow AI 不是通用 AI 寫作工具，而是**針對特定網站打造�
 - [執行測試](#執行測試)
 - [CLI 工具](#cli-工具)
 - [SEO 閉環與後台](#seo-閉環與後台)
+- [生產環境部署（goodbone）](#生產環境部署goodbone)
+- [SEO 強化文件（P0–P3）](#seo-強化文件p0p3)
 - [目錄結構](#目錄結構)
 - [Agent Pipeline 說明](#agent-pipeline-說明)
 - [資料庫設計](#資料庫設計)
@@ -107,7 +109,7 @@ ContentFlow 已完成「Phase 0–6 產品獨立化」，從「GoodBone 網站�
         ↓
 7. Budget Guard → 確認 LLM 呼叫 ≤ 15 次 / 成本 ≤ $2.00
         ↓
-8. 草稿進 Admin 後台等人工審閱（或達標自動發布）
+8. 草稿進 Admin（`review_required` 或 `approved`；僅後者且通過 `publish_safety` 可自動發布）
         ↓
 9. 發布至 WordPress / ForgeBase + Google Indexing API 主動送交收錄
         ↓
@@ -400,6 +402,7 @@ uvicorn contentflow.api:app --reload --port 8000
 | `/admin/clusters` | Topic Cluster 主題叢集管理 |
 | `/admin/seo` | GSC 排名趨勢、關鍵字等級分布、機會詞 |
 | `/admin/content-health` | 關鍵字自蝕偵測、Refresh 待辦 |
+| `/admin/agent-governance` | **發布安全閘成效**、意圖命中→Refresh 優先佇列 |
 | `/admin/tech-seo` | Core Web Vitals、GA4 頁面指標 |
 | `/admin/knowledge` | 知識庫管理（AI 學習成果）|
 | `/admin/reports` | 週報/月報/季報中心 |
@@ -418,22 +421,72 @@ uvicorn contentflow.api:app --reload --port 8000
 
 - **Admin 後台** `/admin`：完整管理介面，含 AI Pipeline 觸發、排程監控、SEO 報表
 - **Public Reference Site** `/`：SEO 驗證前端，支援 JSON-LD schema、BreadcrumbList、TOC、FAQ 手風琴、E-E-A-T 信號
-- **Scheduler**：獨立 `scheduler` service，APScheduler 驅動 21 個排程任務（含每分鐘 heartbeat），涵蓋 GSC/GA4 同步、反向連結監控、GBP 整合、策略分析、自動發布、索引健康監控、反思學習等。Heartbeat 機制每分鐘寫入 `scheduler_heartbeat.json`，`/health` 端點透過 heartbeat 新鮮度驗證排程器真實活性（非僅 PID 存活）
+- **Scheduler**：獨立 `scheduler` service，APScheduler 驅動 **27** 個排程任務（含每分鐘 heartbeat），涵蓋 GSC 日級、意圖命中、品牌提及、CWV 監控、自蝕執行等。Heartbeat 寫入 `scheduler_heartbeat.json`，`/health` 以新鮮度驗證排程器活性。
 
-管理員登入密碼：`API_SECRET_KEY` 環境變數；**未設定時系統回傳 503 拒絕啟動，不提供任何 fallback 密碼**（安全設計）
+管理員登入密碼：`API_SECRET_KEY` 環境變數；**未設定時系統回傳 503 拒絕啟動**（無 fallback 密碼）。
 
-**自動發布機制**：每個 Project 可獨立設定 `auto_publish_enabled` 與 `auto_publish_min_score`（預設 85 分）。Pipeline 完成後若分數達標，系統自動發布至 WordPress 或 ForgeBase，並呼叫 Google Indexing API 主動請求收錄。
+**自動發布機制**（2026-05 強化）：除 `auto_publish_enabled` 與 `auto_publish_min_score`（預設 85）外，必須 **`status=approved`** 且 **`factcheck_flags_json` 無需審核項目**（見 `utils/publish_safety.py`）。`review_required` 不會被排程直接發布。
 
-### 目前實際部署現況
+### 目前實際部署現況（goodbone 租戶）
 
-- 公網主站：`https://goodbone.com.tw/`（繁體中文骨科保健）
-- Admin 後台：`https://goodbone.com.tw/admin`
-- 資料庫：PostgreSQL 16（Docker）
-- Scheduler：獨立 service，21 個排程任務，heartbeat 機制確保真實活性
-- 已發布文章：23 篇（截至 2026-05）
-- 自動發布：Project id=2「好骨科診所」已啟用，最低分數 85 分
-- 建置驗證：`398 passed`，`/health` 回傳 `status=ok`、`scheduler=running`
-- 最新 commit：`bb21fe9`（匿名 /health 探針 + 強固化部署腳本）
+| 項目 | 說明 |
+|------|------|
+| 主站 | https://goodbone.com.tw/ |
+| Admin | https://goodbone.com.tw/admin |
+| 伺服器 | Linode 2GB（JP Osaka），`root@172.235.216.10` |
+| 程式更新 | `./src` volume 掛載 → **rsync + restart**，勿在 VPS 全量 `docker build` |
+| 測試 | `pytest` 全 suite **421+ passed**（含 `test_publish_safety`、`test_seo_p1_p3`、`test_agent_ops`） |
+
+---
+
+## 生產環境部署（goodbone）
+
+### 建議方式（程式變更，2GB VPS）
+
+```bash
+# 本機：同步程式（不含 .venv / data）
+rsync -e "ssh" -avz \
+  --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='outputs/' \
+  ./ root@172.235.216.10:/root/contentflow/
+
+# 重啟（載入 src volume）
+ssh root@172.235.216.10 \
+  'docker restart contentflow-site-1 contentflow-scheduler-1'
+```
+
+### 慎用：全量遠端 build
+
+`DOMAIN=goodbone.com.tw ./deploy/setup_remote.sh` 內含 `docker compose build`，在 **2GB RAM** 上可能 OOM，導致 SSH / 網站無回應。僅在升級依賴或 Dockerfile 變更時使用，並建議先升級 RAM 或在本機 build 後推送 image。
+
+### Schema 變更
+
+```bash
+ssh root@172.235.216.10 \
+  'docker exec contentflow-site-1 python -m contentflow.db_bootstrap'
+```
+
+生產若 Alembic revision 與 repo 不一致，請參考 [SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md](SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md) 第 5 節。
+
+### 驗證
+
+```bash
+curl -sI -X HEAD https://goodbone.com.tw/    # 預期 200（非 405）
+curl -s https://goodbone.com.tw/health       # 本機 127.0.0.1 可；對外可能 nginx 403
+ssh root@172.235.216.10 'curl -sf http://127.0.0.1:8000/health'
+```
+
+---
+
+## SEO 強化文件（P0–P3）
+
+| 文件 | 內容 |
+|------|------|
+| [SEO_EXPERT_EVALUATION_2026-05-25.md](SEO_EXPERT_EVALUATION_2026-05-25.md) | 生產站評估與優先順序 |
+| [SEO_P0_IMPLEMENTATION_2026-05-25.md](SEO_P0_IMPLEMENTATION_2026-05-25.md) | 反堆砌、headline、發布閘 |
+| [SEO_P1_P3_IMPLEMENTATION_2026-05-25.md](SEO_P1_P3_IMPLEMENTATION_2026-05-25.md) | Slug、topic URL、HEAD、GSC 日級、意圖、自蝕等 |
+| [SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md](SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md) | **總覽**、部署事故、驗證、Phase A Admin |
+
+**P0 核心模組**：`utils/publish_safety.py`、`utils/article_schema.py`、`agents/seo_check_agent.py`
 
 ---
 
@@ -470,7 +523,7 @@ pytest tests/test_seo_check_agent.py -v
 | `test_image_agent.py` | Image Agent Prompt 生成 |
 | `test_pipeline_utils.py` | Pipeline 工具函式 |
 
-> 目前 398 個測試通過（`asyncio_mode = "auto"`）。`AgentOps` 已改為可選依賴，不再阻塞測試收集。
+> 目前 **421+** 個測試通過（`asyncio_mode = "auto"`）。含 `test_publish_safety.py`、`test_seo_p1_p3.py`、`test_agent_ops.py`。
 
 ---
 
@@ -511,7 +564,7 @@ ContentFlow/
 │   ├── config.py                # 全域設定（pydantic-settings，讀取 .env）
 │   ├── db.py                    # DB 引擎、Session、自動 schema 補丁
 │   ├── api.py                   # FastAPI 主應用（掛載 site + admin）
-    ├── scheduler.py             # APScheduler — 21 個排程任務（含 heartbeat）
+    ├── scheduler.py             # APScheduler — 27 個排程任務（見 scheduler_job_registry.py）
 │   ├── scheduler_runner.py      # 獨立 Scheduler service 進入點
 │   ├── project_context.py       # 載入品牌資訊並注入 Agent prompt
 │   ├── llm_client.py            # 多 Provider LLM（OpenAI → Anthropic failover）
@@ -555,8 +608,14 @@ ContentFlow/
 │   │   ├── wordpress.py         # WordPress REST API 自動發布
 │   │   └── forgebase.py         # ForgeBase API 自動發布
 │   │
+│   ├── utils/
+│   │   ├── publish_safety.py    # YMYL 自動發布閘（P0）
+│   │   ├── article_schema.py    # JSON-LD headline 同步（P0）
+│   │   └── slug_governance.py   # Slug 治理（P1）
+│   │
 │   ├── admin/
-│   │   └── app.py               # FastAPI Admin 後台（3100+ 行，含全部路由）
+│   │   ├── app.py               # FastAPI Admin 後台
+│   │   └── agent_ops.py         # Agent 治理儀表資料（Phase A）
 │   │
 │   └── site/
 │       └── app.py               # Public Reference Site（SEO 驗證前端）
@@ -568,7 +627,7 @@ ContentFlow/
 │   ├── migrate_sqlite_to_pg.py  # SQLite → PostgreSQL 遷移
 │   └── verify_db.py             # DB 健康檢查
 │
-└── tests/                       # pytest 測試套件（398 個測試）
+└── tests/                       # pytest 測試套件（421+）
 ```
 
 ---
@@ -625,19 +684,19 @@ ContentFlow/
    存入 DB（draft_content + seo_score + factcheck_flags + schemas）
        │
        ▼
-   ┌─ 自動發布（seo_score ≥ auto_publish_min_score）→ WordPress / ForgeBase
+   ┌─ 自動發布（approved + publish_safety + 分數達標）→ WordPress / ForgeBase
    │       └── Google Indexing API 主動送交收錄
-   └─ 人工審閱（Admin 後台）→ 手動發布
+   └─ 人工審閱（review_required / FactCheck 風險）→ Admin 核准後發布
 ```
 
-### Scheduler 排程任務（共 21 個）
+### Scheduler 排程任務（共 27 個）
 
-> Scheduler 以獨立 service 運行（`scheduler_runner.py`），不內嵌於 web workers。每分鐘 heartbeat 寫入 `scheduler_heartbeat.json`，`/health` 端點以 heartbeat 新鮮度驗證排程器真實活性，確保 job dispatch 持續正常運作。
+> 完整清單以 `src/contentflow/scheduler_job_registry.py` 為準。Scheduler 獨立 service 運行，每分鐘 heartbeat。
 
 | 任務 | 排程 | 說明 |
 |------|------|------|
-| `_scheduler_heartbeat_job` | 每分鐘 | 寫入 heartbeat 時間戳，供 `/health` 驗證排程器活性 |
-| `sync_gsc_all_projects` | 每日 03:00 | 同步 Google Search Console 排名 |
+| `_scheduler_heartbeat_job` | 每分鐘 | heartbeat，供 `/health` 驗證活性 |
+| `sync_gsc_all_projects` | 每日 03:00 | GSC 排名 + **日級增量**（`gsc_daily_metrics`） |
 | `sync_ga4_all_projects` | 每日 03:30 | 同步 GA4 頁面指標（含分頁，上限 500 筆）|
 | `sync_keyword_trends` | 每月 1 號 03:45 | 更新關鍵字 Google Trends 熱度分數 |
 | `sync_gbp_metrics` | 每日 03:50 | 同步 Google Business Profile 每日曝光 / 點擊指標 |
@@ -657,6 +716,11 @@ ContentFlow/
 | `send_weekly_report` | 每週日 09:00 | 產出 Slack 週報摘要 |
 | `run_l1_pattern_analysis` | 每月 1 號 06:00 | L1 學習：統計高分文章格式模式 |
 | `run_l2_roi_analysis` | 每月 1 號 07:00 | L2 學習：ROI 分析，更新策略偏好 |
+| `run_intent_match_evaluation` | 每週四 05:30 | 上線後意圖命中評分（P2） |
+| `sync_brand_mentions_all_projects` | 每週三 05:30 | 品牌提及監測（P2） |
+| `check_missing_hero_images` | 每週二 06:30 | Hero 圖覆蓋檢查（P2） |
+| `backfill_topic_cluster_slugs` | 每月 2 號 02:00 | Topic slug 補齊（P1） |
+| `run_cwv_monitoring_all_projects` | 每週六 06:00 | Core Web Vitals（P3，需 `GOOGLE_API_KEY`） |
 
 **專案上下文注入**：每個 Agent 均透過 `project_context.py` 載入品牌名稱、撰寫原則、法規詞庫、ChromaDB 知識庫，確保輸出符合品牌調性。
 
@@ -854,13 +918,13 @@ Admin 後台：`http://localhost:8000/admin`，Password = `API_SECRET_KEY` 環�
 
 **Q: 自動發布如何設定？**
 
-在 Admin → 設定 → 自動發布規則，設定 `auto_publish_min_score`（建議 85+）與目標 Publisher（WordPress / ForgeBase）。Pipeline 完成且 SEO 分數達標後自動發布並呼叫 Google Indexing API。
+Admin → 設定：開啟 `auto_publish_enabled`、設定 `auto_publish_min_score`（建議 85+）。此外稿件須為 **`approved`** 且 **無 FactCheck 需審核旗標**（見 `/admin/agent-governance`）。醫療 YMYL 專案建議關閉自動發布，改人工核准。
 
 ---
 
 **Q: Scheduler 排程如何開啟？**
 
-`.env` 設定 `SCHEDULER_ENABLED=true`（Docker Compose 預設已開啟）。Scheduler 以獨立 service 運行，Admin → 排程管理頁可查看所有 21 個任務的執行狀態與 heartbeat 健康，並可手動觸發個別任務。`/health` 端點的 `scheduler_heartbeat_age_seconds` 欄位可確認排程器真實活性。
+`.env` 設定 `SCHEDULER_ENABLED=true`。Admin → 排程管理可查看 **27** 個任務與 heartbeat；`/health` 的 `scheduler_heartbeat_age_seconds` 可確認活性。
 
 ---
 
@@ -876,5 +940,4 @@ Admin → 知識庫（`/admin/knowledge`）可查看 Reflective Agent 自動整�
 
 ---
 
-*詳細技術架構請參閱 [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md)。*
-*產品獨立性評估請參閱 [PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md](PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md)。*
+*技術架構：[SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) · 產品獨立性：[PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md](PRODUCT_INDEPENDENCE_ASSESSMENT_2026-05-11.md) · SEO 實作與部署：[SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md](SEO_P0_P3_DEPLOYMENT_AND_VERIFICATION_2026-05-25.md)*

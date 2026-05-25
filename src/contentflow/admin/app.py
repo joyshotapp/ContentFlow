@@ -43,6 +43,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from contentflow.config import settings
 from contentflow.admin.article_ops import _mark_article_published, _native_blog_url, _submit_to_google_indexing
+from contentflow.admin.agent_ops import build_intent_refresh_queue, build_publish_gate_snapshot
 from contentflow.admin.health_ops import _build_operations_health, _get_agent_cost_metrics, _serialize_operations_health
 from contentflow.admin.scheduler_registry import get_known_scheduler_jobs, get_scheduler_job_map
 from contentflow.db import SessionLocal
@@ -3105,6 +3106,39 @@ async def content_health_page(request: Request, project_id: int = 0):
             "refresh_recs": refresh_recs,
             "refresh_queue_items": refresh_queue_items,
             "stale_articles": stale_articles,
+            "now": datetime.now(timezone.utc),
+        })
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# AGENT GOVERNANCE  /agent-governance
+# ═══════════════════════════════════════════════════════════════
+
+@admin_app.get("/agent-governance", response_class=HTMLResponse)
+async def agent_governance_page(request: Request, project_id: int = 0):
+    if not _check_login(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db = _db()
+    try:
+        projects = db.query(Project).order_by(Project.name).all()
+        if project_id == 0 and projects:
+            project_id = projects[0].id
+
+        gate: dict = {}
+        intent: dict = {"queue": [], "kb_hints": []}
+        if project_id:
+            gate = build_publish_gate_snapshot(db, project_id)
+            intent = build_intent_refresh_queue(db, project_id)
+
+        return templates.TemplateResponse(request, "agent_governance.html", {
+            "request": request,
+            "page": "agent-governance",
+            "projects": projects,
+            "project_id": project_id,
+            "gate": gate,
+            "intent": intent,
             "now": datetime.now(timezone.utc),
         })
     finally:
