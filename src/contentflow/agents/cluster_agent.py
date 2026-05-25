@@ -318,14 +318,21 @@ def _save_cluster_to_db(
         .first()
     )
 
+    from contentflow.utils.slug_governance import slugify_topic_keyword
+
+    cluster_slug = slugify_topic_keyword(tc.pillar_keyword)
+
     if existing:
         existing.pillar_title = tc.pillar_title
         existing.pillar_article_id = pillar_art_id
+        if not (existing.slug or "").strip():
+            existing.slug = cluster_slug
         cluster_db = existing
     else:
         cluster_db = TopicClusterModel(
             project_id=project_id,
             pillar_keyword=tc.pillar_keyword,
+            slug=cluster_slug,
             pillar_title=tc.pillar_title,
             pillar_article_id=pillar_art_id,
             status="building",

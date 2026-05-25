@@ -92,6 +92,7 @@ async def execute_strategic_plan_impl(
     execute_alert,
     execute_optimize_meta,
     execute_inject_internal_links,
+    execute_resolve_cannibalization=None,
 ) -> None:
     with session_factory() as session:
         plan = session.get(StrategicPlan, plan_id)
@@ -131,6 +132,8 @@ async def execute_strategic_plan_impl(
                 await execute_optimize_meta(action, project_id)
             elif action_type == "inject_internal_links":
                 await execute_inject_internal_links(action, project_id)
+            elif action_type == "resolve_cannibalization" and execute_resolve_cannibalization:
+                await execute_resolve_cannibalization(action, project_id)
             else:
                 logger.warning(f"[StrategicExecutor] 未知 action 類型：{action_type}")
                 action["execution_status"] = "skipped"

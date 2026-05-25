@@ -264,6 +264,8 @@ class Article(Base):
     forgebase_id = Column(String, default="")       # ForgeBase page ID
     hero_image_url = Column(String, default="")     # AI 生成 Hero 圖片（Cloudflare R2 URL）
     old_slugs = Column(Text, default="[]")           # 曾用過的 slug（JSON 陣列）—收到請求時發 301
+    intent_match_score = Column(Float, nullable=True)   # 上線後 GSC 意圖命中分數 0-100
+    intent_match_checked_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -390,6 +392,91 @@ class SEORanking(Base):
 
     def __repr__(self):
         return f"<SEORanking '{self.keyword}' pos={self.position}>"
+
+
+class GSCDailyMetric(Base):
+    """GSC 日級增量（P1 歸因用，非 28 天重疊窗口）。"""
+    __tablename__ = "gsc_daily_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "keyword", "landing_page", "metric_date",
+            name="uq_gsc_daily_project_kw_page_date",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    keyword = Column(String, default="")
+    landing_page = Column(String, default="")
+    metric_date = Column(Date, nullable=False, index=True)
+    clicks = Column(Integer, default=0)
+    impressions = Column(Integer, default=0)
+    ctr = Column(Float, nullable=True)
+    position = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class BrandMentionSnapshot(Base):
+    __tablename__ = "brand_mention_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    brand_query = Column(String, default="")
+    mention_url = Column(String, default="")
+    mention_title = Column(String, default="")
+    mention_snippet = Column(Text, default="")
+    tracked_date = Column(Date, nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class OutreachTask(Base):
+    __tablename__ = "outreach_tasks"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    task_type = Column(String, default="brand_mention")
+    target_url = Column(String, default="")
+    target_domain = Column(String, default="")
+    suggested_action = Column(Text, default="")
+    status = Column(String, default="open")
+    priority = Column(Integer, default=3)
+    metadata_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ContentExperiment(Base):
+    __tablename__ = "content_experiments"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id"), nullable=True, index=True)
+    experiment_key = Column(String, default="")
+    variant = Column(String, default="control")
+    holdout = Column(Boolean, default=False)
+    baseline_metric_json = Column(Text, default="{}")
+    result_metric_json = Column(Text, default="{}")
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    status = Column(String, default="running")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class CWVSnapshot(Base):
+    __tablename__ = "cwv_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    url = Column(String, default="")
+    strategy = Column(String, default="mobile")
+    lcp = Column(Float, nullable=True)
+    inp = Column(Float, nullable=True)
+    cls = Column(Float, nullable=True)
+    performance_score = Column(Integer, nullable=True)
+    tracked_date = Column(Date, nullable=True, index=True)
+    error = Column(String, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 # ── 分類規劃、關鍵字配置 ─────────────────────────────────────
@@ -613,6 +700,7 @@ class TopicCluster(Base):
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
     pillar_keyword = Column(String, nullable=False)         # 支柱關鍵字
+    slug = Column(String, default="", index=True)            # 語意化 URL（P1）
     pillar_title = Column(String, default="")               # 支柱頁建議標題
     pillar_article_id = Column(Integer, ForeignKey("articles.id"), nullable=True)
     status = Column(String, default="building")             # planned / building / complete

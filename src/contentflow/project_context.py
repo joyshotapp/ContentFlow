@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import re
 from loguru import logger
 
+from .market_packs import market_prompt_block
 from .policy_resolver import resolve_policy
 
 
@@ -70,6 +71,7 @@ class ProjectContext:
                         parts.append(f"- 目標受眾：{' / '.join(desc_parts)}")
             except (ValueError, TypeError):
                 pass
+        parts.append(market_prompt_block(self.locale))
         parts.append("")
 
         if self.writing_rules:

@@ -30,6 +30,8 @@ def _ensure_sqlite_columns(conn) -> None:
             "article_schema_json": 'ALTER TABLE articles ADD COLUMN article_schema_json TEXT DEFAULT ""',
             "seo_score": 'ALTER TABLE articles ADD COLUMN seo_score INTEGER',
             "old_slugs": 'ALTER TABLE articles ADD COLUMN old_slugs TEXT DEFAULT "[]"',
+            "intent_match_score": "ALTER TABLE articles ADD COLUMN intent_match_score FLOAT",
+            "intent_match_checked_at": "ALTER TABLE articles ADD COLUMN intent_match_checked_at DATETIME",
             "content_format_override": 'ALTER TABLE articles ADD COLUMN content_format_override VARCHAR DEFAULT ""',
             "reviewer_required_override": 'ALTER TABLE articles ADD COLUMN reviewer_required_override BOOLEAN',
             "custom_disclaimer": 'ALTER TABLE articles ADD COLUMN custom_disclaimer TEXT DEFAULT ""',
@@ -60,6 +62,9 @@ def _ensure_sqlite_columns(conn) -> None:
         },
         "authors": {
             "reviewer_role": 'ALTER TABLE authors ADD COLUMN reviewer_role VARCHAR DEFAULT ""',
+        },
+        "topic_clusters": {
+            "slug": 'ALTER TABLE topic_clusters ADD COLUMN slug VARCHAR DEFAULT ""',
         },
     }
 

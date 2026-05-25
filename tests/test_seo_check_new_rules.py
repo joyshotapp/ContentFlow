@@ -65,6 +65,18 @@ class TestSeoCheckNewRules:
     def _get_check(self, name: str, checks: list[dict]) -> dict | None:
         return next((c for c in checks if c["name"] == name), None)
 
+    def test_first_paragraph_keyword_stuffing_fails(self):
+        kw = "落枕怎麼辦"
+        stuffed = (
+            f"{kw}的首段開場。" * 4
+            + "\n\n## 原因\n\n說明。\n\n## 治療\n\n說明。\n\n## FAQ\n\n### 問題？\n\n答案。\n"
+        )
+        draft = _make_draft(stuffed, kw=kw)
+        result = run_seo_check_agent(draft, primary_keyword=kw)
+        check = self._get_check("first_paragraph_no_keyword_stuffing", result["checks"])
+        assert check is not None
+        assert check["passed"] is False
+
     def test_keyword_density_check_present(self):
         content = (
             "骨刺是一種常見的骨科問題。骨刺會造成疼痛不適。\n\n"

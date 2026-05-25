@@ -27,7 +27,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 import markdown as md_module
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
@@ -163,13 +164,15 @@ def _site_url(path: str = "", site_profile: dict | None = None) -> str:
 
 def _common_ctx(request: Request, site_profile: dict | None = None) -> dict:
     profile = site_profile or _site_profile()
+    base = _site_url(site_profile=profile)
     return {
-        "site_url": _site_url(site_profile=profile),
+        "site_url": base,
         "site_name": profile["site_name"],
         "site_description": profile["site_description"],
         "site_contact_email": profile["site_contact_email"],
         "ga4_id": settings.ga4_measurement_id,
         "article_type_map": _ARTICLE_TYPE_MAP,
+        "topic_cluster_url": lambda cluster: f"{base}{_topic_cluster_path(cluster)}",
     }
 
 
@@ -286,6 +289,49 @@ site_app = FastAPI(
     lifespan=_site_lifespan,
 )
 site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@site_app.middleware("http")
+async def _support_head_requests(request: Request, call_next):
+    """P1：HEAD 與 GET 共用路由，避免監控工具收到 405。"""
+    if request.method != "HEAD":
+        return await call_next(request)
+    request.scope["method"] = "GET"
+    response = await call_next(request)
+    if isinstance(response, RedirectResponse):
+        return Response(
+            status_code=response.status_code,
+            headers=dict(response.headers),
+        )
+    if hasattr(response, "body_iterator"):
+        return Response(
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.media_type,
+        )
+    return Response(
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=getattr(response, "media_type", None),
+    )
+
+
+def _topic_cluster_path(cluster) -> str:
+    slug = (getattr(cluster, "slug", None) or "").strip()
+    return f"/topic/{quote(slug, safe='')}" if slug else f"/topic/{cluster.id}"
+
+
+def _resolve_topic_cluster(db, site_profile: dict, cluster_ref: str):
+    query = _topic_clusters_q(db, site_profile)
+    if cluster_ref.isdigit():
+        cluster = query.filter(TopicCluster.id == int(cluster_ref)).first()
+        if cluster and (cluster.slug or "").strip():
+            return cluster, RedirectResponse(
+                url=_topic_cluster_path(cluster),
+                status_code=301,
+            )
+        return cluster, None
+    return query.filter(TopicCluster.slug == cluster_ref).first(), None
 
 
 @site_app.get("/health")
@@ -426,7 +472,15 @@ async def blog_post(slug: str, request: Request, db: DBDep):
     canonical_url = _site_url(f"/blog/{slug}", site_profile)
 
     faq_schema = _parse_json_safe(article.faq_schema_json)
-    article_schema = _parse_json_safe(article.article_schema_json)
+    from contentflow.utils.article_schema import sync_article_schema_headline
+
+    synced_schema_json = sync_article_schema_headline(
+        article.article_schema_json or "",
+        meta_title=article.meta_title or "",
+        title=article.title or "",
+        meta_description=article.meta_description or "",
+    )
+    article_schema = _parse_json_safe(synced_schema_json)
 
     if article_schema and isinstance(article_schema, dict):
         article_schema.setdefault("url", canonical_url)
@@ -550,16 +604,18 @@ async def category_page(article_type: str, request: Request, db: DBDep, page: in
 
 # ─── Topic Cluster page ──────────────────────────────────────
 
-@site_app.get("/topic/{cluster_id}", response_class=HTMLResponse)
-async def topic_cluster_page(cluster_id: int, request: Request, db: DBDep):
+@site_app.get("/topic/{cluster_ref}", response_class=HTMLResponse)
+async def topic_cluster_page(cluster_ref: str, request: Request, db: DBDep):
     from contentflow.models.database import ClusterMember
 
     _ensure_managed_site_enabled()
     site_profile = _site_profile(db)
-    cluster_query = _topic_clusters_q(db, site_profile).filter(TopicCluster.id == cluster_id)
-    cluster = cluster_query.first()
+    cluster, redirect = _resolve_topic_cluster(db, site_profile, cluster_ref)
+    if redirect:
+        return redirect
     if not cluster:
         raise HTTPException(status_code=404, detail="Topic cluster not found")
+    cluster_id = cluster.id
 
     members = db.query(ClusterMember).filter(ClusterMember.cluster_id == cluster_id).all()
     member_articles = []
@@ -625,10 +681,12 @@ async def sitemap(db: DBDep):
         lines.append(f'  <url><loc>{xml_escape(base + path)}</loc>'
                      f'<changefreq>{freq}</changefreq><priority>{priority}</priority></url>')
     for atype in _ARTICLE_TYPE_MAP:
-        lines.append(f'  <url><loc>{xml_escape(base)}/category/{xml_escape(atype)}</loc>'
+        cat_path = f"/category/{quote(atype, safe='')}"
+        lines.append(f'  <url><loc>{xml_escape(base)}{xml_escape(cat_path)}</loc>'
                      f'<changefreq>weekly</changefreq><priority>0.7</priority></url>')
     for c in clusters:
-        lines.append(f'  <url><loc>{xml_escape(base)}/topic/{c.id}</loc>'
+        topic_path = _topic_cluster_path(c)
+        lines.append(f'  <url><loc>{xml_escape(base)}{xml_escape(topic_path)}</loc>'
                      f'<changefreq>weekly</changefreq><priority>0.7</priority></url>')
     for a in articles:
         lastmod = f"<lastmod>{a.updated_at.strftime('%Y-%m-%d')}</lastmod>" if a.updated_at else ""

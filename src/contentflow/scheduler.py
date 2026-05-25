@@ -211,7 +211,8 @@ async def sync_gsc_all_projects() -> None:
         if project.brand_url:
             site_url = _to_gsc_site_url(project.brand_url)
             await client.sync_to_db(project_id=project.id, site_url=site_url)
-    logger.info(f"[GSCSync] 已同步 {len(projects)} 個專案")
+            await client.sync_daily_incremental(project_id=project.id, site_url=site_url)
+    logger.info(f"[GSCSync] 已同步 {len(projects)} 個專案（含日級增量）")
 
 
 @with_retry(max_retries=3)
@@ -1064,12 +1065,17 @@ async def _notify_google_indexing(url: str) -> None:
 async def check_scheduled_publishes() -> None:
     """每日 04:05 — 掃描已到期的排程發布文章，自動推送至各平台。
 
-    觸發條件（OR 關係）：
+    觸發條件：
     1. status="approved"，且 scheduled_publish_at <= now（有預訂時間且到期）
     2. status="approved"，且 scheduled_publish_at IS NULL（人工核准、無排程 → 立即發布）
-    3. status="review_required"，且 seo_score >= project.auto_publish_min_score
-       （seo 分數符合自動發布門檻但因舊 bug 未被自動發布的文章，補救發布）
+
+    另：review_required 且接近門檻者，可先經 SEO QA 補救升級為 approved（不直接發布）。
+    實際發布前須通過 publish_safety gate（approved + 無 factcheck 風險）。
     """
+    from contentflow.utils.publish_safety import (
+        article_has_factcheck_risk,
+        can_auto_publish_article,
+    )
     from contentflow.agents.seo_check_agent import run_seo_check_agent
     from contentflow.agents.seo_qa_agent import run_seo_qa_agent
     from contentflow.models.database import Article, Project
@@ -1094,14 +1100,6 @@ async def check_scheduled_publishes() -> None:
                 pass
 
         return [item.strip() for item in re.split(r"[,，、\n]+", text) if item.strip()]
-
-    def _article_has_factcheck_risk(article: Article) -> bool:
-        raw_flags = article.factcheck_flags_json or "[]"
-        try:
-            payload = json.loads(raw_flags)
-        except (TypeError, ValueError):
-            return True
-        return isinstance(payload, list) and len(payload) > 0
 
     def _build_research_report(article: Article) -> ResearchReport:
         payload: dict = {}
@@ -1177,7 +1175,7 @@ async def check_scheduled_publishes() -> None:
         for article_id in candidate_ids:
             with SessionLocal() as session:
                 article = session.get(Article, article_id)
-                if not article or not (article.draft_content or "").strip() or _article_has_factcheck_risk(article):
+                if not article or not (article.draft_content or "").strip() or article_has_factcheck_risk(article.factcheck_flags_json):
                     continue
 
                 primary_keyword = (article.primary_keyword or article.title or "").strip()
@@ -1266,24 +1264,7 @@ async def check_scheduled_publishes() -> None:
             .all()
         )
 
-        # 條件 3：review_required 且 seo_score >= 門檻（補救自動發布）
-        review_rescue_articles = (
-            session.query(Article)
-            .filter(
-                Article.status == "review_required",
-                Article.project_id.in_(list(project_thresholds.keys())),
-                Article.seo_score.isnot(None),
-                Article.slug.isnot(None),
-            )
-            .all()
-        )
-        # 按專案門檻過濾
-        review_rescue_articles = [
-            a for a in review_rescue_articles
-            if (a.seo_score or 0) >= project_thresholds.get(a.project_id, 85)
-        ]
-
-        due_articles = approved_articles + review_rescue_articles
+        due_articles = approved_articles
 
     if not due_articles:
         logger.info("[ScheduledPublish] 無到期排程文章")
@@ -1291,12 +1272,25 @@ async def check_scheduled_publishes() -> None:
 
     logger.info(
         f"[ScheduledPublish] 找到 {len(due_articles)} 篇待發布文章"
-        f"（approved={len(approved_articles)} 補救={len(review_rescue_articles)}"
-        f" 近門檻修補={rescued_review_required}）"
+        f"（approved={len(approved_articles)} 近門檻修補={rescued_review_required}）"
     )
     published_count = 0
 
     for article in due_articles:
+        project = None
+        with SessionLocal() as session:
+            project = session.get(Project, article.project_id)
+        if not project or not can_auto_publish_article(
+            pipeline_status=article.status,
+            factcheck_flags_json=article.factcheck_flags_json,
+            compliance_profile=project.compliance_profile,
+            auto_publish_enabled=bool(project.auto_publish_enabled),
+        ):
+            logger.info(
+                f"[ScheduledPublish] 跳過 article={article.id}：未通過 publish_safety gate "
+                f"(status={article.status}, factcheck_risk={article_has_factcheck_risk(article.factcheck_flags_json)})"
+            )
+            continue
         try:
             result = None
             if article.wp_post_id:
@@ -1920,6 +1914,157 @@ async def sync_gbp_metrics() -> None:
             logger.warning(f"[GBP] location={location_id} 失敗：{exc}")
 
     logger.info("[GBP] GBP 指標同步完成")
+
+
+@with_retry(max_retries=2)
+async def run_intent_match_evaluation() -> None:
+    """P2：為發布 14/28 天的文章計算 GSC 意圖命中分，低分觸發 refresh 建議。"""
+    from datetime import timedelta
+    from contentflow.models.database import Article, Project
+    from contentflow.tools.intent_match import evaluate_published_article_intent
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        projects = session.query(Project).all()
+        for project in projects:
+            articles = (
+                session.query(Article)
+                .filter(
+                    Article.project_id == project.id,
+                    Article.status == "published",
+                    Article.published_at.isnot(None),
+                    Article.primary_keyword.isnot(None),
+                )
+                .all()
+            )
+            for article in articles:
+                if not article.published_at:
+                    continue
+                pub_at = article.published_at
+                if pub_at.tzinfo is None:
+                    pub_at = pub_at.replace(tzinfo=timezone.utc)
+                age_days = (now - pub_at).days
+                if not (13 <= age_days <= 15 or 27 <= age_days <= 29):
+                    continue
+                score, _detail = await evaluate_published_article_intent(
+                    project_id=project.id,
+                    article_id=article.id,
+                    primary_keyword=article.primary_keyword or "",
+                    publish_url=article.publish_url or "",
+                    days_since_publish=min(age_days, 28) or 14,
+                )
+                article.intent_match_score = score
+                article.intent_match_checked_at = now
+                if score < 45 and age_days >= 14:
+                    from contentflow.models.database import KnowledgeEntry
+
+                    session.add(
+                        KnowledgeEntry(
+                            project_id=project.id,
+                            category="intent_match_low",
+                            pattern=f"article:{article.id} score={score}",
+                            evidence_count=1,
+                            confidence_level="unverified",
+                            metadata_json=f'{{"article_id": {article.id}, "score": {score}}}',
+                            is_active=True,
+                        )
+                    )
+            session.commit()
+    logger.info("[IntentMatch] 意圖命中評分排程完成")
+
+
+@with_retry(max_retries=1)
+async def sync_brand_mentions_all_projects() -> None:
+    """P2：同步各專案品牌提及並建立外展任務。"""
+    from contentflow.models.database import Project
+    from contentflow.tools.brand_mentions import sync_brand_mentions
+
+    with SessionLocal() as session:
+        projects = session.query(Project).all()
+    total = 0
+    for project in projects:
+        brand = (project.brand_name or project.name or "").strip()
+        if brand:
+            total += await sync_brand_mentions(project.id, brand)
+    logger.info(f"[BrandMentions] 完成，共 {total} 筆")
+
+
+@with_retry(max_retries=1)
+async def run_cwv_monitoring_all_projects() -> None:
+    """P3：PageSpeed Insights CWV 快照寫入 cwv_snapshots。"""
+    from datetime import date as _date
+    from contentflow.models.database import CWVSnapshot, Project
+    from contentflow.tools.tech_seo import CoreWebVitalsMonitor
+
+    monitor = CoreWebVitalsMonitor(api_key=settings.google_api_key or "")
+    today = _date.today()
+
+    with SessionLocal() as session:
+        projects = session.query(Project).filter(Project.brand_url != "").all()
+
+    for project in projects:
+        base = (project.brand_url or "").rstrip("/")
+        urls = [base, f"{base}/blog"]
+        for url in urls:
+            result = await monitor.fetch(url, strategy="mobile")
+            with SessionLocal() as session:
+                session.add(
+                    CWVSnapshot(
+                        project_id=project.id,
+                        url=url,
+                        strategy=result.strategy,
+                        lcp=result.lcp,
+                        inp=result.inp,
+                        cls=result.cls,
+                        performance_score=result.performance_score,
+                        tracked_date=today,
+                        error=result.error or "",
+                    )
+                )
+                session.commit()
+    logger.info("[CWV] Core Web Vitals 快照完成")
+
+
+@with_retry(max_retries=1)
+async def check_missing_hero_images() -> None:
+    """P2：已發布但無 hero_image_url 的文章 → Slack 提醒。"""
+    from contentflow.models.database import Article
+
+    with SessionLocal() as session:
+        missing = (
+            session.query(Article)
+            .filter(
+                Article.status == "published",
+                (Article.hero_image_url == None) | (Article.hero_image_url == ""),
+            )
+            .limit(50)
+            .all()
+        )
+    if missing:
+        titles = ", ".join(f"#{a.id}" for a in missing[:10])
+        await _send_failure_alert(
+            "HeroImageCheck",
+            f"{len(missing)} 篇已發布文章缺少 Hero/OG 圖：{titles}",
+        )
+    logger.info(f"[HeroCheck] 缺少 hero 圖：{len(missing)} 篇")
+
+
+@with_retry(max_retries=1)
+async def backfill_topic_cluster_slugs() -> None:
+    """P1：補齊 topic_clusters.slug。"""
+    from contentflow.models.database import TopicCluster
+    from contentflow.utils.slug_governance import slugify_topic_keyword
+
+    updated = 0
+    with SessionLocal() as session:
+        clusters = session.query(TopicCluster).filter(
+            (TopicCluster.slug == None) | (TopicCluster.slug == "")
+        ).all()
+        for cluster in clusters:
+            cluster.slug = slugify_topic_keyword(cluster.pillar_keyword)
+            updated += 1
+        session.commit()
+    logger.info(f"[TopicSlug] 補齊 {updated} 個叢集 slug")
 
 
 @with_retry(max_retries=1)

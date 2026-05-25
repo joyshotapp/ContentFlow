@@ -511,18 +511,23 @@ def _generate_article_schema(
     policy: ResolvedPolicy | None = None,
     author_name: str = "",
     author_profile_url: str = "",
+    meta_title: str = "",
 ) -> str:
     """產出 Article (BlogPosting) JSON-LD structured data。
 
     包含 headline, description, author, publisher, datePublished 等
     Google 識別文章所需的基本欄位。
+    headline 與前台 meta_title / title 對齊（P0 SEO）。
     """
+    from contentflow.utils.article_schema import schema_display_title
+
     policy = policy or resolve_policy(ctx)
+    headline = schema_display_title(meta_title, title)[:110]
 
     schema: dict = {
         "@context": "https://schema.org",
         "@type": "BlogPosting",
-        "headline": title[:110],
+        "headline": headline,
         "description": meta_description[:200],
         "wordCount": word_count,
         "inLanguage": ctx.locale or "zh-TW",
@@ -852,8 +857,11 @@ async def run_writing_agent(
     logger.info("[Writing Agent] Step 3/3 — 生成 Meta tags...")
     meta = _generate_meta(article_title, full_content, report.keywords)
 
-    # 5. 生成 SEO URL Slug
-    slug = _generate_slug(article_title)
+    # 5. 生成 SEO URL Slug（P1：優先主關鍵字語意化）
+    primary_kw = (report.keywords[0] if report.keywords else "") or article_title
+    from contentflow.utils.slug_governance import propose_article_slug
+
+    slug = propose_article_slug(primary_keyword=primary_kw, title=article_title)
     logger.info(f"[Writing Agent] Slug：{slug}")
 
     # 6. 注入 CTA 區塊（SEO × CRO）
@@ -888,6 +896,7 @@ async def run_writing_agent(
         policy=policy,
         author_name=author_metadata.get("author_name", ""),
         author_profile_url=author_metadata.get("author_profile_url", ""),
+        meta_title=meta.get("meta_title", article_title),
     )
     logger.info("[Writing Agent] Article JSON-LD 已產出")
 

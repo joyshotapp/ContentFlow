@@ -329,6 +329,7 @@ def collect_project_context_impl(
     cannibalization_summary = [
         {
             "keyword": pair.keyword,
+            "article_ids": pair.article_ids,
             "competing_titles": pair.article_titles[:3],
             "suggestion": pair.suggestion,
         }

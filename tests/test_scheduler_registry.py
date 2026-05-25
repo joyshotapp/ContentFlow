@@ -28,6 +28,6 @@ def test_scheduler_job_map_resolves_operations_snapshot():
 def test_scheduler_runtime_registry_contains_all_job_ids():
     scheduler_ids = {job["scheduler_id"] for job in SCHEDULER_JOB_SPECS}
 
-    assert len(SCHEDULER_JOB_SPECS) == 22
+    assert len(SCHEDULER_JOB_SPECS) == 27
     assert "operations_snapshot" in scheduler_ids
     assert "scheduler_heartbeat" in scheduler_ids

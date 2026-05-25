@@ -1006,6 +1006,7 @@ class TestExecuteStrategicPlan:
         db_session.commit()
 
         fake_draft = SimpleNamespace(
+            title="測試文章",
             content_markdown="# 測試文章\n\n內容",
             meta_title="測試標題",
             meta_description="測試描述",
@@ -1014,8 +1015,9 @@ class TestExecuteStrategicPlan:
             article_schema_json="",
             seo_score=92,
             internal_link_suggestions=[],
+            fact_check_items=[],
         )
-        fake_result = SimpleNamespace(draft=fake_draft, status="review_required")
+        fake_result = SimpleNamespace(draft=fake_draft, status="approved")
 
         def _assert_platform(*, db=None, project_id=None):
             assert db is db_session

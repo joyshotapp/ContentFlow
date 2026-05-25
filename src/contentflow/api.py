@@ -144,9 +144,20 @@ async def _run_pipeline(article_id: int, keyword: str, project_id: int) -> None:
                 article.meta_description = draft.meta_description
                 article.slug = draft.slug
                 article.faq_schema_json = draft.faq_schema_json
-                article.article_schema_json = draft.article_schema_json
+                from contentflow.utils.article_schema import sync_article_schema_headline
+                from contentflow.utils.publish_safety import serialize_factcheck_flags
+
+                article.article_schema_json = sync_article_schema_headline(
+                    draft.article_schema_json or "",
+                    meta_title=draft.meta_title or "",
+                    title=draft.title or "",
+                    meta_description=draft.meta_description or "",
+                )
                 article.seo_score = draft.seo_score or None
-            article.status = result.status
+                article.factcheck_flags_json = serialize_factcheck_flags(draft.fact_check_items)
+            article.status = (
+                result.status.value if hasattr(result.status, "value") else result.status
+            )
             session.commit()
 
         await _notify_draft_ready(article_id, task.title)

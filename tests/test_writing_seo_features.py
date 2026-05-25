@@ -182,9 +182,11 @@ class TestGenerateArticleSchema:
             slug="bone-spur-guide",
             word_count=1800,
             ctx=ctx,
+            meta_title="骨刺治療｜專家完整攻略",
         )
         schema = json.loads(schema_json)
 
+        assert schema["headline"] == "骨刺治療｜專家完整攻略"
         assert "author" not in schema
         assert "datePublished" not in schema
         assert "dateModified" not in schema

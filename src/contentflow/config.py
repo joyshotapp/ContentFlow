@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     dataforseo_password: str = Field(default="", alias="DATAFORSEO_PASSWORD")
 
     # Google
+    google_api_key: str = Field(
+        default="",
+        alias="GOOGLE_API_KEY",
+        description="Google PageSpeed Insights API key（P3 CWV 監控，可選）",
+    )
     google_service_account_file: str = Field(
         default="credentials/google-service-account.json",
         alias="GOOGLE_SERVICE_ACCOUNT_FILE",

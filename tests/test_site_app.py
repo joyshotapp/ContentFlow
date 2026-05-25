@@ -12,6 +12,13 @@ from contentflow.models.database import Base, Project
 client = TestClient(site_app)
 
 
+def test_head_requests_return_200_not_405():
+    """P1：HEAD 應與 GET 同路由，不應回 405。"""
+    for path in ("/health", "/robots.txt"):
+        response = client.head(path)
+        assert response.status_code != 405, path
+
+
 def _make_threadsafe_session():
     engine = create_engine(
         "sqlite://",

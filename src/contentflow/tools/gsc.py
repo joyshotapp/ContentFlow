@@ -183,3 +183,41 @@ class GSCClient:
 
         logger.info(f"[GSCSync] project_id={project_id} 寫入 {written} 筆排名數據")
         return written
+
+    async def sync_daily_incremental(
+        self,
+        project_id: int,
+        site_url: str,
+        metric_date: date | None = None,
+    ) -> int:
+        """同步單日 GSC 數據至 gsc_daily_metrics（P1 日級歸因）。"""
+        from contentflow.db import SessionLocal
+        from contentflow.models.database import GSCDailyMetric
+
+        day = metric_date or (date.today() - timedelta(days=1))
+        start = end = day.isoformat()
+        rows = await self.get_page_performance(site_url, start_date=start, end_date=end, row_limit=1000)
+
+        written = 0
+        with SessionLocal() as session:
+            session.query(GSCDailyMetric).filter(
+                GSCDailyMetric.project_id == project_id,
+                GSCDailyMetric.metric_date == day,
+            ).delete()
+            for row in rows:
+                session.merge(
+                    GSCDailyMetric(
+                        project_id=project_id,
+                        keyword=row.query,
+                        landing_page=row.page,
+                        metric_date=day,
+                        clicks=row.clicks,
+                        impressions=row.impressions,
+                        ctr=row.ctr,
+                        position=row.position,
+                    )
+                )
+                written += 1
+            session.commit()
+        logger.info(f"[GSCDaily] project_id={project_id} date={day} 寫入 {written} 筆")
+        return written

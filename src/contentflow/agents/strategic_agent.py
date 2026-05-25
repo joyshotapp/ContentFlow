@@ -872,6 +872,24 @@ def _fallback_plan(context: dict) -> dict:
             "message": f"有 {reviewing} 篇文章待審閱，請優先處理",
             "priority": 0,
         })
+
+    # P2：關鍵字自蝕 → 自動執行 refresh + 內鏈 + 提醒
+    for risk in context.get("cannibalization_risks", [])[:3]:
+        article_ids = risk.get("article_ids") or []
+        if len(article_ids) < 2:
+            continue
+        weaker_id = article_ids[-1]
+        pillar_id = article_ids[0]
+        actions.append({
+            "action": "resolve_cannibalization",
+            "keyword": risk.get("keyword", ""),
+            "article_ids": article_ids,
+            "weaker_article_id": weaker_id,
+            "pillar_article_id": pillar_id,
+            "reason": risk.get("suggestion") or f"關鍵字「{risk.get('keyword')}」自蝕，系統將刷新衛星文並加強內鏈至支柱文",
+            "priority": 2,
+        })
+
     return {
         "actions": actions,
         "summary": f"Fallback 規則計畫：{len(actions)} 項 action",
@@ -892,6 +910,7 @@ async def execute_strategic_plan(plan_id: int) -> None:
         execute_alert=_execute_alert,
         execute_optimize_meta=_execute_optimize_meta,
         execute_inject_internal_links=_execute_inject_internal_links,
+        execute_resolve_cannibalization=_execute_resolve_cannibalization,
     )
 
 
@@ -1006,8 +1025,23 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                 article.meta_description = result.draft.meta_description
                 article.slug = result.draft.slug
                 article.faq_schema_json = result.draft.faq_schema_json
-                article.article_schema_json = result.draft.article_schema_json
+                from contentflow.utils.article_schema import sync_article_schema_headline
+                from contentflow.utils.publish_safety import (
+                    can_auto_publish_article,
+                    normalize_pipeline_status,
+                    serialize_factcheck_flags,
+                )
+
+                article.article_schema_json = sync_article_schema_headline(
+                    result.draft.article_schema_json or "",
+                    meta_title=getattr(result.draft, "meta_title", "") or "",
+                    title=getattr(result.draft, "title", "") or "",
+                    meta_description=getattr(result.draft, "meta_description", "") or "",
+                )
                 article.seo_score = result.draft.seo_score or None
+                article.factcheck_flags_json = serialize_factcheck_flags(
+                    result.draft.fact_check_items
+                )
                 # 持久化內部連結建議
                 if result.draft.internal_link_suggestions:
                     import json as _json
@@ -1033,10 +1067,16 @@ async def _execute_generate(action: dict, project_id: int, *, plan_id: int | Non
                 #   有排程時間 → approved（等待 04:05 排程 job）
                 #   否則 → review_required（人工審核）
                 now_utc = datetime.now(timezone.utc)
+                pipeline_status = normalize_pipeline_status(result.status)
                 auto_pub = (
                     project
-                    and project.auto_publish_enabled
                     and (article.seo_score or 0) >= (project.auto_publish_min_score or 85)
+                    and can_auto_publish_article(
+                        pipeline_status=pipeline_status,
+                        factcheck_flags_json=article.factcheck_flags_json,
+                        compliance_profile=project.compliance_profile,
+                        auto_publish_enabled=bool(project.auto_publish_enabled),
+                    )
                 )
                 if auto_pub and article.slug:
                     _pub_platform = resolve_publish_platform(
@@ -1546,3 +1586,33 @@ async def _execute_inject_internal_links(action: dict, project_id: int) -> None:
             )
     except Exception as e:
         logger.error(f"[StrategicExecutor/inject_links] '{art_title}' 平台回寫失敗：{e}")
+
+
+async def _execute_resolve_cannibalization(action: dict, project_id: int) -> None:
+    """P2：自蝕自動處理 — 刷新較弱文章、對支柱文注入內鏈、Slack 提醒。"""
+    weaker_id = action.get("weaker_article_id")
+    pillar_id = action.get("pillar_article_id")
+    keyword = action.get("keyword", "")
+
+    if weaker_id:
+        await _execute_refresh(
+            {"article_id": weaker_id, "reason": action.get("reason", "自蝕衛星文刷新")},
+            project_id,
+        )
+    if pillar_id and weaker_id:
+        await _execute_inject_internal_links(
+            {
+                "article_id": pillar_id,
+                "reason": f"自蝕整合：從支柱文連結至相關衛星文（{keyword}）",
+            },
+            project_id,
+        )
+    await _execute_alert(
+        {
+            "message": (
+                f"關鍵字自蝕已觸發自動處理：「{keyword}」"
+                f"（refresh #{weaker_id}，內鏈 pillar #{pillar_id}）"
+            )
+        },
+        project_id,
+    )

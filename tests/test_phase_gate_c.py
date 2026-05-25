@@ -187,7 +187,7 @@ def test_with_retry_failure_writes_failed_log(monkeypatch):
 # ── 5. cron 排程數量確認 ──────────────────────────────────────────────────
 
 def test_scheduler_job_registry_has_expected_jobs():
-    """scheduler registry 應定義 22 個 job，包含 operations snapshot 與 scheduler heartbeat。"""
+    """scheduler registry 應定義 27 個 job，含 P1–P3 SEO 排程與 heartbeat。"""
     expected_job_ids = {
         "gsc_sync",
         "ga4_sync",
@@ -210,12 +210,17 @@ def test_scheduler_job_registry_has_expected_jobs():
         "weekly_report",
         "l1_learn",
         "l2_learn",
+        "intent_match",
+        "brand_mentions",
+        "cwv_monitor",
+        "hero_image_check",
+        "topic_slug_backfill",
         "scheduler_heartbeat",
     }
     from contentflow.scheduler_job_registry import SCHEDULER_JOB_SPECS
 
     registry_ids = {job["scheduler_id"] for job in SCHEDULER_JOB_SPECS}
-    assert len(SCHEDULER_JOB_SPECS) == 22
+    assert len(SCHEDULER_JOB_SPECS) == 27
     assert registry_ids == expected_job_ids
 
 

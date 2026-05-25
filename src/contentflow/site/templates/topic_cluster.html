@@ -6,11 +6,11 @@
 <meta name="description" content="深入了解「{{ cluster.pillar_keyword }}」——以支柱文章為核心，搭配衛星文章構建的完整主題叢集。">
 <meta property="og:type" content="website">
 <meta property="og:title" content="{{ cluster.pillar_keyword }} — 主題叢集">
-<meta property="og:url" content="{{ site_url }}/topic/{{ cluster.id }}">
+<meta property="og:url" content="{{ topic_cluster_url(cluster) }}">
 {% endblock %}
 
 {% block canonical %}
-<link rel="canonical" href="{{ site_url }}/topic/{{ cluster.id }}">
+<link rel="canonical" href="{{ topic_cluster_url(cluster) }}">
 {% endblock %}
 
 {% block jsonld %}
@@ -19,7 +19,7 @@
   "@type": "CollectionPage",
   "name": "{{ cluster.pillar_keyword }}",
   "description": "{{ cluster.pillar_title or cluster.pillar_keyword }}",
-  "url": "{{ site_url }}/topic/{{ cluster.id }}",
+  "url": "{{ topic_cluster_url(cluster) }}",
   "isPartOf": { "@type": "WebSite", "name": "{{ site_name }}", "url": "{{ site_url }}/" }
 }</script>
 {% endblock %}

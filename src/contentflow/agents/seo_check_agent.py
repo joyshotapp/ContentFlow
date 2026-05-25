@@ -47,6 +47,53 @@ def _keyword_in_text(keyword: str, text: str) -> bool:
     return bool(keyword and keyword in (text or ""))
 
 
+def _count_keyword_occurrences(keyword: str, text: str) -> int:
+    if not keyword or not text:
+        return 0
+    return len(re.findall(re.escape(keyword), text))
+
+
+def _first_paragraph_keyword_stuffing(keyword: str, first_paragraph: str, *, max_occurrences: int = 2) -> tuple[bool, str]:
+    """首段主關鍵字出現次數不得過多，避免為通過 SEO 規則而堆砌。"""
+    if not keyword or not first_paragraph:
+        return True, "首段無主關鍵字或無首段"
+    count = _count_keyword_occurrences(keyword, first_paragraph)
+    if count <= max_occurrences:
+        return True, f"首段主關鍵字出現 {count} 次（上限 {max_occurrences}）"
+    return False, f"首段主關鍵字「{keyword}」出現 {count} 次，超過上限 {max_occurrences}（疑似堆砌）"
+
+
+def _opening_section_keyword_stuffing(
+    keyword: str,
+    markdown: str,
+    *,
+    char_window: int = 600,
+    max_occurrences: int = 4,
+) -> tuple[bool, str]:
+    """開頭區塊（首段 + 緊接段落）關鍵字密度過高視為堆砌。"""
+    if not keyword:
+        return True, "未設定主關鍵字"
+    plain_parts: list[str] = []
+    for line in (markdown or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if plain_parts:
+                break
+            continue
+        if stripped.startswith("#"):
+            if plain_parts:
+                break
+            continue
+        plain_parts.append(stripped)
+    opening = _clean_text(" ".join(plain_parts))[:char_window]
+    if not opening:
+        return True, "開頭區塊為空"
+    count = _count_keyword_occurrences(keyword, opening)
+    if count <= max_occurrences:
+        return True, f"開頭 {char_window} 字內主關鍵字出現 {count} 次（上限 {max_occurrences}）"
+    return False, f"開頭區塊主關鍵字「{keyword}」出現 {count} 次，超過上限 {max_occurrences}（疑似堆砌）"
+
+
 def _keyword_density(keyword: str, content_markdown: str) -> float:
     """計算主關鍵字密度（出現次數 × 關鍵字長度 / 去除標記後總字元數）。"""
     if not keyword or not content_markdown:
@@ -169,6 +216,12 @@ def run_seo_check_agent(
     add_check("meta_title_has_primary_keyword", _keyword_in_text(primary_keyword, draft.meta_title), "Meta Title 應包含主關鍵字", weight=2.5)
     add_check("meta_description_has_primary_keyword", _keyword_in_text(primary_keyword, draft.meta_description), "Meta Description 應包含主關鍵字", weight=2.0)
     add_check("first_paragraph_has_primary_keyword", _keyword_in_text(primary_keyword, first_paragraph), "首段應直接提到主關鍵字", weight=2.0)
+
+    fp_stuff_ok, fp_stuff_detail = _first_paragraph_keyword_stuffing(primary_keyword, first_paragraph)
+    add_check("first_paragraph_no_keyword_stuffing", fp_stuff_ok, fp_stuff_detail, weight=2.5)
+
+    open_stuff_ok, open_stuff_detail = _opening_section_keyword_stuffing(primary_keyword, draft.content_markdown)
+    add_check("opening_section_no_keyword_stuffing", open_stuff_ok, open_stuff_detail, weight=2.0)
 
     # 中權重（結構性 SEO）
     add_check("meta_title_length_ok", 10 <= len(draft.meta_title.strip()) <= 30, f"Meta Title 長度目前 {len(draft.meta_title.strip())} 字，建議 10-30 字", weight=1.5)
