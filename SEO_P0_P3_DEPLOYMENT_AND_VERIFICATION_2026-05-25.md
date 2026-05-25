@@ -255,21 +255,43 @@ ssh root@172.235.216.10 'curl -sf http://127.0.0.1:8000/health | python3 -m json
 | 項目 | 說明 |
 |------|------|
 | 路徑 | `/admin/agent-governance`（側欄：策略與優化 → **Agent 治理**） |
-| 程式 | `admin/agent_ops.py`、`admin/templates/agent_governance.html` |
-| 發布閘 | 統計 review_required、FactCheck 高風險、可自動發布數、未通過閘候選與原因 |
-| 意圖→Refresh | 低意圖分優先佇列、知識庫 `intent_match_low` / `refresh_priority` |
+| 登入 | 未登入會 **303 → `/admin/login`**（密碼 = `.env` 的 `API_SECRET_KEY`），屬正常行為 |
+| 程式 | `admin/agent_ops.py`、`admin/templates/agent_governance.html`、`admin/app.py` 路由 |
+| 發布閘 | 統計 review_required、FactCheck 高風險、可自動發布數、未通過閘候選與原因（呼叫 `publish_safety`） |
+| 意圖→Refresh | 低意圖分（&lt;45）優先佇列、知識庫 `intent_match_low` / `refresh_priority` |
 | 測試 | `tests/test_agent_ops.py` |
+| Git | `eed6fae` 新增；`2cb2ccb` 修復 HEAD / 時區比較 |
 
 **刻意未做**：LLM 機率化自省（中長期選項）。
 
+### 11.1 曾發生之 500 與修復（`2cb2ccb`）
+
+| 症狀 | 原因 | 修正檔案 |
+|------|------|----------|
+| 首頁 / `HEAD /` → Internal Server Error | HEAD middleware 保留 GET 的 `Content-Length`，body 為空 | `site/app.py` → `_head_empty_response()` |
+| `/admin/agent-governance` 登入後 500 | PostgreSQL `published_at` 為 naive，與 UTC aware 比較失敗 | `admin/agent_ops.py` → `_as_utc()` |
+
 ---
 
-## 12. 修訂紀錄
+## 12. 接手人閱讀順序（建議）
+
+1. [README.md](README.md) — 系統定位、部署方式、Admin 路由表  
+2. **本文件** — P0–P3 總表、生產部署、驗證、事故、Phase A  
+3. [SEO_P0_IMPLEMENTATION_2026-05-25.md](SEO_P0_IMPLEMENTATION_2026-05-25.md) — 發布閘、反堆砌、headline  
+4. [SEO_P1_P3_IMPLEMENTATION_2026-05-25.md](SEO_P1_P3_IMPLEMENTATION_2026-05-25.md) — 其餘 SEO 項與排程  
+5. [SEO_EXPERT_EVALUATION_2026-05-25.md](SEO_EXPERT_EVALUATION_2026-05-25.md) — 為何做這些、生產抽樣證據  
+
+程式入口速查：`publish_safety.py`（閘門規則）、`scheduler_job_registry.py`（27 jobs）、`orchestrator.py`（產文圖）。
+
+---
+
+## 13. 修訂紀錄
 
 | 日期 | 說明 |
 |------|------|
 | 2026-05-25 | 初版：整合 P0–P3 實作、部署事故、手動 SQL、生產驗證結果 |
 | 2026-05-25 | 新增 Phase A Admin Agent 治理頁 |
+| 2026-05-25 | 補充 HEAD Content-Length、agent-governance 時區 500 修復與接手閱讀順序 |
 
 ---
 
