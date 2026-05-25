@@ -19,6 +19,14 @@ def test_head_requests_return_200_not_405():
         assert response.status_code != 405, path
 
 
+def test_head_empty_body_strips_content_length():
+    """HEAD 空 body 不可保留 GET 的 Content-Length（曾導致 uvicorn 500）。"""
+    response = client.head("/robots.txt")
+    assert response.status_code == 200
+    assert response.content == b""
+    assert response.headers.get("content-length") in (None, "0")
+
+
 def _make_threadsafe_session():
     engine = create_engine(
         "sqlite://",

@@ -93,6 +93,22 @@ def test_intent_queue_prioritizes_low_score(db_session):
     assert data["queue"][0]["intent_match_score"] < INTENT_LOW_THRESHOLD
 
 
+def test_intent_queue_handles_naive_published_at(db_session):
+    session, pid = db_session
+    naive = datetime(2020, 1, 1, 12, 0, 0)  # no tz — simulates PostgreSQL naive
+    session.add(Article(
+        project_id=pid,
+        title="舊文",
+        status="published",
+        slug="old",
+        published_at=naive,
+        intent_match_score=None,
+    ))
+    session.commit()
+    data = build_intent_refresh_queue(session, pid)
+    assert any(item["title"].startswith("舊文") for item in data["queue"])
+
+
 def test_intent_kb_hints(db_session):
     session, pid = db_session
     session.add(KnowledgeEntry(

@@ -291,6 +291,16 @@ site_app = FastAPI(
 site_app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
+def _head_empty_response(response) -> Response:
+    """HEAD 回應須無 body，且不可保留原 GET 的 Content-Length（否則 uvicorn 500）。"""
+    headers = {
+        k: v
+        for k, v in response.headers.items()
+        if k.lower() not in ("content-length", "content-type", "transfer-encoding")
+    }
+    return Response(status_code=response.status_code, headers=headers)
+
+
 @site_app.middleware("http")
 async def _support_head_requests(request: Request, call_next):
     """P1：HEAD 與 GET 共用路由，避免監控工具收到 405。"""
@@ -299,21 +309,10 @@ async def _support_head_requests(request: Request, call_next):
     request.scope["method"] = "GET"
     response = await call_next(request)
     if isinstance(response, RedirectResponse):
-        return Response(
-            status_code=response.status_code,
-            headers=dict(response.headers),
-        )
+        return _head_empty_response(response)
     if hasattr(response, "body_iterator"):
-        return Response(
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=response.media_type,
-        )
-    return Response(
-        status_code=response.status_code,
-        headers=dict(response.headers),
-        media_type=getattr(response, "media_type", None),
-    )
+        return _head_empty_response(response)
+    return _head_empty_response(response)
 
 
 def _topic_cluster_path(cluster) -> str:

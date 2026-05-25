@@ -19,6 +19,15 @@ INTENT_LOW_THRESHOLD = 45.0
 INTENT_STALE_DAYS = 28
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """PostgreSQL 可能回傳 naive datetime，統一為 UTC aware 再比較。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _project_threshold(project: Project | None) -> int:
     if not project:
         return 85
@@ -158,9 +167,11 @@ def build_intent_refresh_queue(db: Session, project_id: int, *, limit: int = 30)
             continue
         score = art.intent_match_score
         checked = art.intent_match_checked_at
-        if score is None and art.published_at and art.published_at < stale_cutoff:
+        published_at = _as_utc(art.published_at)
+        checked_utc = _as_utc(checked)
+        if score is None and published_at and published_at < stale_cutoff:
             _add(art, "medium", f"已發布逾 {INTENT_STALE_DAYS} 天未評分", None)
-        elif score is None and (not checked or checked < stale_cutoff):
+        elif score is None and (not checked_utc or checked_utc < stale_cutoff):
             _add(art, "medium", "尚未有意圖命中評分", None)
 
     kb_rows = (
