@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -33,6 +34,15 @@ def normalize_slug(raw: str) -> str:
     return slug or "article"
 
 
+def _kw_hash_slug(keyword: str) -> str:
+    """中文關鍵字無法轉換為英文 slug 時的確定性 fallback。
+    相同關鍵字永遠產生相同 slug，避免重複呼叫產生漂移。
+    格式：topic-{md5[:8]}，例如 topic-3f2a1b4c。
+    """
+    h = hashlib.md5(keyword.encode("utf-8")).hexdigest()[:8]
+    return f"topic-{h}"
+
+
 def slugify_topic_keyword(keyword: str, *, max_len: int = 80) -> str:
     """主題叢集 / 關鍵字導向的語意 slug（ASCII kebab）。"""
     kw = (keyword or "").strip()
@@ -59,10 +69,15 @@ def slugify_topic_keyword(keyword: str, *, max_len: int = 80) -> str:
             temperature=0.1,
             max_tokens=48,
         )
-        return normalize_slug(raw)[:max_len]
+        candidate = normalize_slug(raw)[:max_len]
+        # LLM 輸出為空或為弱 slug（如 'article'）時改用 hash fallback
+        if not candidate or is_weak_slug(candidate):
+            logger.warning(f"[SlugGovernance] LLM 輸出弱 slug '{candidate}'，改用 hash fallback：{kw!r}")
+            return _kw_hash_slug(kw)
+        return candidate
     except Exception as exc:
         logger.warning(f"[SlugGovernance] topic slug LLM 失敗：{exc}")
-        return normalize_slug(re.sub(r"\s+", "-", kw))[:max_len]
+        return _kw_hash_slug(kw)
 
 
 def propose_article_slug(
