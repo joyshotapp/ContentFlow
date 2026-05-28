@@ -453,9 +453,11 @@ async def blog_post(slug: str, request: Request, db: DBDep):
         import json as _json_r
         from fastapi.responses import RedirectResponse
         # 使用帶引號的 LIKE 避免 substring false-positive（如 slug='c' 誤中 'cervical-c'）
+        # 跳脫 LIKE 萬用字元（% _ \）以防 slug 含底線時誤中其他記錄
+        _escaped = slug.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         candidate = (
             _published_q(db, site_profile)
-            .filter(Article.old_slugs.like(f'%"{slug}"%'))
+            .filter(Article.old_slugs.like(f'%"{_escaped}"%', escape="\\"))
             .first()
         )
         if candidate and candidate.slug:
