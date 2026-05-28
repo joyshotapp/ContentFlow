@@ -434,8 +434,9 @@ uvicorn contentflow.api:app --reload --port 8000
 | 主站 | https://goodbone.com.tw/ |
 | Admin | https://goodbone.com.tw/admin |
 | 伺服器 | Linode 2GB（JP Osaka），`root@172.235.216.10` |
-| 程式更新 | `./src` volume 掛載 → **rsync + restart**，勿在 VPS 全量 `docker build` |
-| 測試 | `pytest` 全 suite **421+ passed**（含 `test_publish_safety`、`test_seo_p1_p3`、`test_agent_ops`） |
+| 程式更新 | `./src` volume 掛載 → **rsync + restart**（見部署指令）；**伺服器無 git repo，不能用 `git pull`** |
+| 最新部署 | 2026-05-28，commit `1918c33`（GSC 日級 fix、old_slug LIKE escape、sitemap dedup、scheduler template 修正）|
+| 測試 | `pytest` 全 suite **421+ passed**（含 `test_publish_safety`、`test_seo_p1_p3`、`test_agent_ops`）|
 
 ---
 
@@ -443,16 +444,28 @@ uvicorn contentflow.api:app --reload --port 8000
 
 ### 建議方式（程式變更，2GB VPS）
 
-```bash
-# 本機：同步程式（不含 .venv / data）
-rsync -e "ssh" -avz \
-  --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='outputs/' \
-  ./ root@172.235.216.10:/root/contentflow/
+> **注意**：生產伺服器 `/root/contentflow/` **無 git repository**，不能使用 `git pull`。
+> 改由本機 rsync 同步 `src/` 後重啟 container。
 
-# 重啟（載入 src volume）
+```bash
+# 本機：同步 src/ 目錄（輕量，不含 .venv / data / outputs）
+rsync -avz --delete \
+  --exclude='__pycache__' --exclude='*.pyc' \
+  src/ root@172.235.216.10:/root/contentflow/src/
+
+# 重啟（載入 src volume，無需 rebuild image）
 ssh root@172.235.216.10 \
   'docker restart contentflow-site-1 contentflow-scheduler-1'
+
+# 驗證
+ssh root@172.235.216.10 \
+  'docker ps --format "table {{.Names}}\t{{.Status}}"'
 ```
+
+> 若只有單一檔案異動，可縮小 rsync 範圍加快同步速度，例如：
+> ```bash
+> rsync -av src/contentflow/tools/gsc.py root@172.235.216.10:/root/contentflow/src/contentflow/tools/gsc.py
+> ```
 
 ### 慎用：全量遠端 build
 
@@ -696,7 +709,7 @@ ContentFlow/
 | 任務 | 排程 | 說明 |
 |------|------|------|
 | `_scheduler_heartbeat_job` | 每分鐘 | heartbeat，供 `/health` 驗證活性 |
-| `sync_gsc_all_projects` | 每日 03:00 | GSC 排名 + **日級增量**（`gsc_daily_metrics`） |
+| `sync_gsc_all_projects` | 每日 03:00 | GSC 排名（`seo_rankings`）+ **日級增量**（`gsc_daily_metrics`，查詢 `date-3` 以迴避 API 2 天延遲）|
 | `sync_ga4_all_projects` | 每日 03:30 | 同步 GA4 頁面指標（含分頁，上限 500 筆）|
 | `sync_keyword_trends` | 每月 1 號 03:45 | 更新關鍵字 Google Trends 熱度分數 |
 | `sync_gbp_metrics` | 每日 03:50 | 同步 Google Business Profile 每日曝光 / 點擊指標 |
@@ -881,6 +894,34 @@ class ArticleVersion(Base):
 
 ---
 
+### ⚠️ TD-08：`gsc_daily_metrics` 歷史資料空白（待 backfill）
+
+**現況：** `sync_daily_incremental` 過去查詢「昨天」資料，而 GSC API 有 ~2 天延遲，導致 2026-05-27 以前的日級資料全為 0 列。**已修正為 `date-3`**（commit `d4c2c94`），新資料從 2026-05-28 起正常寫入。
+
+**剩餘問題：** 歷史空白期（5/22–5/27）無法自動補回。歸因分析、點擊趨勢在此期間資料缺失。
+
+**建議做法：** 對過去 7–14 天執行一次手動 backfill：
+
+```python
+from contentflow.tools.gsc import sync_daily_incremental
+from datetime import date, timedelta
+for i in range(3, 17):
+    sync_daily_incremental(metric_date=date.today() - timedelta(days=i))
+```
+
+---
+
+### ⚠️ TD-09：22 個 Topic Cluster 的 slug 全為 `article`（待根本修復）
+
+**現況：** `slugify_topic_keyword()` 的 LLM fallback 對中文關鍵字穩定輸出 `'article'`，導致 22 個主題叢集 URL 全為 `/topic/article`，Topic 導覽實際上無法精準對應個別主題。`site/app.py` 的 sitemap dedup 已修正（commit `d4c2c94`），避免重複 URL 進 sitemap，但根本原因尚未修復。
+
+**建議做法：**
+1. 修正 `slugify_topic_keyword()` fallback 邏輯（使用中文拼音/UUID 而非英文翻譯）
+2. 執行 `scripts/migrate_weak_slugs.py --dry-run` 預覽影響
+3. 確認後執行正式 backfill
+
+---
+
 ## 常見問題 FAQ
 
 **Q: 我沒有 Anthropic API Key，可以只用 OpenAI 嗎？**
@@ -937,6 +978,18 @@ Admin → 設定：開啟 `auto_publish_enabled`、設定 `auto_publish_min_scor
 **Q: 如何查看 AI 的學習成果？**
 
 Admin → 知識庫（`/admin/knowledge`）可查看 Reflective Agent 自動整理的寫作洞見、失敗原因分析、最佳實踐。知識庫同時以 ChromaDB 向量形式儲存，供 Strategy Agent 在規劃時自動引用。
+
+---
+
+**Q: 生成文章的字數如何設定？**
+
+目前固定目標為 **1200 中文字**（`writing_agent.py` 與 `strategic_agent.py` 的 `target_word_count=1200`）。LLM Prompt 要求嚴格在此字數以內，允許 300 字緩衝（hard truncation 上限 1500 字）。
+
+若需調整，只需修改 `src/contentflow/agents/strategic_agent.py` 中的 `target_word_count=1200` 一個地方。建議範圍：
+- 競爭力強的長尾詞：1500–2000 字
+- 通用知識型文章：800–1200 字（現行預設）
+
+> `learning_agent.py` 的 SEO 效果分析依字數分組：短文（< 800 字）、中篇（800–1800 字）、長文（≥ 1800 字）。可透過 Admin → 知識庫查看各組的平均排名表現。
 
 ---
 
