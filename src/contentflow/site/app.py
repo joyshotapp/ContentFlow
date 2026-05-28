@@ -452,9 +452,10 @@ async def blog_post(slug: str, request: Request, db: DBDep):
         # 若反查 old_slugs（曾用過的 slug），符合則 301 永久轉址
         import json as _json_r
         from fastapi.responses import RedirectResponse
+        # 使用帶引號的 LIKE 避免 substring false-positive（如 slug='c' 誤中 'cervical-c'）
         candidate = (
             _published_q(db, site_profile)
-            .filter(Article.old_slugs.contains(slug))
+            .filter(Article.old_slugs.like(f'%"{slug}"%'))
             .first()
         )
         if candidate and candidate.slug:
@@ -683,8 +684,12 @@ async def sitemap(db: DBDep):
         cat_path = f"/category/{quote(atype, safe='')}"
         lines.append(f'  <url><loc>{xml_escape(base)}{xml_escape(cat_path)}</loc>'
                      f'<changefreq>weekly</changefreq><priority>0.7</priority></url>')
+    _seen_topic_paths: set[str] = set()
     for c in clusters:
         topic_path = _topic_cluster_path(c)
+        if topic_path in _seen_topic_paths:
+            continue
+        _seen_topic_paths.add(topic_path)
         lines.append(f'  <url><loc>{xml_escape(base)}{xml_escape(topic_path)}</loc>'
                      f'<changefreq>weekly</changefreq><priority>0.7</priority></url>')
     for a in articles:

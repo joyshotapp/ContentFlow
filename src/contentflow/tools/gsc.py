@@ -194,7 +194,8 @@ class GSCClient:
         from contentflow.db import SessionLocal
         from contentflow.models.database import GSCDailyMetric
 
-        day = metric_date or (date.today() - timedelta(days=1))
+        # GSC API 有約 2 天資料延遲，需查詢 3 天前才能確保有資料
+        day = metric_date or (date.today() - timedelta(days=3))
         start = end = day.isoformat()
         rows = await self.get_page_performance(site_url, start_date=start, end_date=end, row_limit=1000)
 

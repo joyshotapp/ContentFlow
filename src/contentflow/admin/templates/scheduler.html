@@ -44,10 +44,10 @@
             <div style="font-size:11px;color:#94a3b8;">上次執行</div>
             <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ latest.started_at.strftime('%Y/%m/%d %H:%M') }}</div>
           </div>
-          {% if latest.duration_s %}
+          {% if latest.duration_seconds %}
           <div>
             <div style="font-size:11px;color:#94a3b8;">耗時</div>
-            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ "%.1f"|format(latest.duration_s) }}s</div>
+            <div style="font-size:12.5px;font-weight:600;color:#0f172a;">{{ "%.1f"|format(latest.duration_seconds) }}s</div>
           </div>
           {% endif %}
           {% if latest.rows_synced is not none %}
@@ -109,7 +109,7 @@
             {{ log.started_at.strftime('%Y/%m/%d %H:%M:%S') if log.started_at else '—' }}
           </td>
           <td style="font-size:12.5px;color:#64748b;">
-            {% if log.duration_s %}{{ "%.1f"|format(log.duration_s) }}s{% else %}—{% endif %}
+            {% if log.duration_seconds %}{{ "%.1f"|format(log.duration_seconds) }}s{% else %}—{% endif %}
           </td>
           <td style="font-size:12.5px;color:#64748b;">
             {{ log.rows_synced if log.rows_synced is not none else '—' }}
